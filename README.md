@@ -6,4 +6,5 @@ TBA
 The directory structure and the naming format for storing the models that the scripts access should be as follows:
 
 ![models_folder_structure](https://github.com/user-attachments/assets/294de346-145e-4548-bc02-86569b8d8093)
+
 The list of models included will be expanded. 

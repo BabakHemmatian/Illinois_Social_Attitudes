@@ -3,7 +3,7 @@ This repository contains tools for the development and evaluation of the Illinoi
 
 Once the virtual environment including all the necessary packages has been created and the correct directory structure is established for the models (see below), you can use use command line arguments with cli.py to make use of the resources. Use --help to receive more information about the available options. Example:
 ```
-python cli.py -resource filter_keywords -group sexuality -years 2007-2009
+python cli.py --resource filter_keywords --group sexuality --years 2007-2009
 ```
 
 # Virtual Environment Creation

@@ -1,0 +1,10 @@
+# raw Reddit files #
+############
+*.zst
+
+# processed Reddit files #
+############
+*.csv
+
+# trained models #
+models/

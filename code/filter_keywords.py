@@ -161,6 +161,6 @@ if __name__ == "__main__":
     filter_keyword_parallel()
     print(f"Keyword filtering for the {args.group} social group for {args.years} was finished in {(time.time() - start_time) / 60:.2f} minutes")
 
-# TODO: Save errors to a file rather than just posting them to the screen. The filename should contain the function and the timestamp
-# TODO: Add a warning if a particular month is missing, either from the raw data, or from the output of the function.
-# TODO: Incorporate anonymization
+# TODO: Save errors to a file rather than just posting them to the screen. The filename should contain the resource, the file/line where the error is happening, the content of the error and the timestamp. Ex: error_filter_keywords_RC_2007_9_175103112025.txt
+# TODO: Inside the error file, there should be a list of lines where errors have been happening, and the error text that Python generated. Ex.: Inside the the error file above, there would be a line that says: row 1135, Type Error: Input must be a str
+# TODO: Add a warning if a particular month is missing, either from the raw data, or from the output of the function. If the command line argument says 2007-2008, you expect 24 input files, one for each month in 2007 and 2008, and you'd expect 24 output files.

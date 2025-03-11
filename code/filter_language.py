@@ -85,6 +85,7 @@ if __name__ == "__main__":
         filter_language_file(file)
     print(f"Language filtering for the {args.group} social group for {args.years} was finished in {(time.time() - start_time) / 60:.2f} minutes")
 
+# TODO: Debug
 # TODO: Save errors to a file rather than just posting them to the screen. The filename should contain the function and the timestamp
 # TODO: Add a warning if a particular month is missing from the output of the function.
 # TODO: Add overall statistics to the final report

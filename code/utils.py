@@ -2,6 +2,7 @@ import argparse
 import csv
 import random
 import math
+import os
 
 def parse_range(value):
     """Parses a single integer or a range (e.g., '2007' or '2008-2010') into a list of integers,
@@ -22,7 +23,7 @@ def parse_range(value):
             raise argparse.ArgumentTypeError(f"Invalid value '{value}': years must be ≤ 2023.")
 
         if start == end:
-            return int(value)
+            return [int(value)]
         else:
             return list(range(start, end + 1))
     except ValueError:
@@ -109,3 +110,15 @@ def f1_calculator(labels,predictions):
     F_1 = 2 * float(precision * recall) / float(precision + recall)
 
     return precision, recall, F_1
+
+def check_reqd_files(years=None,check_path=None):
+    file_list = []
+    for year in years:
+        for month in [f"{month_:02}" for month_ in range(1,13)]:
+            path_ = check_path+"\\RC_{}-{}.csv".format(year,month)
+            if os.path.exists(path_):
+                file_list.append(path_)
+            else:
+                raise Exception("Missing pre-filtered file for year {}, month {}, expected in: {}".format(year,month,path_))
+    return file_list
+    

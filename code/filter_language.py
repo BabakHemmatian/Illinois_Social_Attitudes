@@ -1,16 +1,16 @@
 # import functions and objects
 from cli import get_args,dir_path
-from utils import parse_range,headers
+from utils import parse_range,headers,check_reqd_files
 
 # import Python packages
-import fasttext # issue installing it
+import fasttext 
 import os
 import csv
 import time
 import sys
 
 # Increase the field size limit to handle larger fields
-csv.field_size_limit(sys.maxsize) 
+# csv.field_size_limit(2**63-1) 
 
 # Extract and transform CLI arguments 
 args = get_args()
@@ -27,14 +27,7 @@ def detect_language(text):
 
 # survey the keyword-filtered input files and raise an error if an expected file is missing
 keyword_filtered_path = os.path.join(dir_path.replace("code","data\\data_reddit_curated\\{}\\filtered_keywords".format(args.group)))
-file_list = []
-for year in years:
-    for month in range(1,13):
-        path_ = keyword_filtered_path+"\\RC_{}-{}.csv".format(year,month)
-        if os.path.exists(path_):
-            file_list.append(path_)
-        else:
-            raise Exception("Missing keyword-filtered file for year {}, month {}".format(year,month))
+file_list = check_reqd_files(years=years,check_path=keyword_filtered_path)
 
 # Prepare and survey the output path
 output_path = os.path.join(dir_path.replace("code","data\\data_reddit_curated\\{}\\filtered_language".format(args.group)))
@@ -63,8 +56,9 @@ def filter_language_file(file):
                     writer.writerow(headers)
                 else:
                     try:
-                        if detect_language(line[2]) == 'en':
-                            writer.writerow(line)
+                        text = line[2].strip().replace("\n"," ")
+                        if detect_language(text) == 'en':
+                            writer.writerow(text)
                             passed_counter += 1
 
                     except IndexError as e:
@@ -85,7 +79,6 @@ if __name__ == "__main__":
         filter_language_file(file)
     print(f"Language filtering for the {args.group} social group for {args.years} was finished in {(time.time() - start_time) / 60:.2f} minutes")
 
-# TODO: Debug
 # TODO: Save errors to a file rather than just posting them to the screen. The filename should contain the function and the timestamp
 # TODO: Add a warning if a particular month is missing from the output of the function.
 # TODO: Add overall statistics to the final report

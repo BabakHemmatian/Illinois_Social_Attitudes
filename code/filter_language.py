@@ -3,7 +3,7 @@ from cli import get_args,dir_path
 from utils import parse_range,headers,check_reqd_files
 
 # import Python packages
-import fasttext # should be installed using fasttext-wheel with pip on Windows
+import fasttext 
 import os
 import csv
 import time
@@ -56,9 +56,9 @@ def filter_language_file(file):
                     writer.writerow(headers)
                 else:
                     try:
-                        text = line[2].strip().replace("\n"," ")
-                        if detect_language(text) == 'en':
-                            writer.writerow(text)
+                        line[2] = line[2].strip().replace("\n"," ")
+                        if detect_language(line[2]) == 'en':
+                            writer.writerow(line)
                             passed_counter += 1
 
                     except IndexError as e:

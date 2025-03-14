@@ -3,7 +3,7 @@ from cli import get_args,dir_path
 from utils import parse_range,headers,check_reqd_files
 
 # import Python packages
-import fasttext 
+import fasttext # should be installed using fasttext-wheel with pip on Windows
 import os
 import csv
 import time

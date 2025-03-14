@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args,dir_path
-from utils import parse_range,headers
+from utils import parse_range,headers,check_reqd_files
 
 # import Python packages
 import os
@@ -9,13 +9,14 @@ import time
 import torch
 from transformers import RobertaTokenizerFast, RobertaForSequenceClassification
 import datetime
+import sys
 
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
 
 # set relevance filtering hyperparameters
-batch_size = 3200
+batch_size = 320
 
 # Use cude if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -38,7 +39,7 @@ def get_predictions(texts,max_length=512):
     ).to(device)
     
     with torch.no_grad():
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast('cuda'):
             outputs = model(**inputs)
             probs = torch.nn.functional.softmax(outputs.logits, dim=1)
             predictions = probs.argmax(dim=1).tolist()  # List of predictions
@@ -46,14 +47,7 @@ def get_predictions(texts,max_length=512):
 
 # survey the language-filtered input files and raise an error if an expected file is missing
 language_filtered_path = os.path.join(dir_path.replace("code","data\\data_reddit_curated\\{}\\filtered_language".format(args.group)))
-file_list = []
-for year in years:
-    for month in range(1,13):
-        path_ = language_filtered_path+"\\RC_{}-{}.csv".format(year,month)
-        if os.path.exists(path_):
-            file_list.append(path_)
-        else:
-            raise Exception("Missing language-filtered file for year {}, month {}".format(year,month))
+file_list = check_reqd_files(years=years,check_path=language_filtered_path)
 
 # Prepare and survey the output path
 output_path = os.path.join(dir_path.replace("code","data\\data_reddit_curated\\{}\\filtered_relevance".format(args.group)))
@@ -83,6 +77,7 @@ def filter_relevance_file(file):
 
         batch_texts = []
         batch_lines = []
+        relevant_count = 0
         total_lines = 0
         relevant_lines = []  # Collect relevant lines to write in bulk
 
@@ -104,6 +99,7 @@ def filter_relevance_file(file):
                             predictions = get_predictions(batch_texts)
                             for idx, pred in enumerate(predictions):
                                 if pred == 1:  # Relevant
+                                    relevant_count += 1
                                     relevant_lines.append(batch_lines[idx])
                             # Clear the batches
                             batch_texts.clear()
@@ -135,7 +131,7 @@ def filter_relevance_file(file):
 
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    print(f"Finished filtering {file} for relevance to the {args.group} social group in {elapsed_minutes:.2f} minutes. Relevant lines: {total_lines}")
+    print(f"Finished filtering {file} for relevance to the {args.group} social group in {elapsed_minutes:.2f} minutes. # lines assessed: {total_lines}, relevant lines: {relevant_count}")
 
     # Record the missing lines count in the missing records CSV file
     with open(missing_records_file, 'a', newline='') as missing_file:

@@ -11,7 +11,7 @@ TBA
 
 # Raw Data
 
-The raw Reddit data that the filter_keywords resource requires can be found and downloaded [here](https://academictorrents.com/details/ba051999301b109eab37d16f027b3f49ade2de13). The functions currently assumes Reddit Comments as the type of data, with the relevant .zst files for a given timeframe placed in data/data_reddit_raw/. The code currently supports years 2007-2023.
+The raw Reddit data that the filter_keywords resource requires can be found and downloaded [here](https://academictorrents.com/details/ba051999301b109eab37d16f027b3f49ade2de13). The functions currently assumes Reddit Comments as the type of data, with the relevant .zst files for a given timeframe placed in data/data_reddit_raw/reddit_comments/. The code currently supports years 2007-2023.
 
 # Pre-trained Models
 The directory structure and the naming format for storing the models that the scripts access should be as follows:

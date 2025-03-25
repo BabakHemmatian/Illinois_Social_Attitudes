@@ -40,7 +40,6 @@ processed_files = set(f for f in os.listdir(output_path) if f.endswith('.csv'))
 # Set up the report file (tab-separated format)
 output_report_filename = "Report_FilterKeywords.csv"
 report_file_path = os.path.join(output_path, output_report_filename)
-# 如果文件不存在则写入表头，否则直接追加
 if not os.path.exists(report_file_path):
     mode = 'w'
 else:

@@ -124,7 +124,7 @@ def filter_keyword_file(file):
         log_report(f"Error filtering by keywords in file {file}: {e}")
 
     elapsed_time = (time.time() - start_time) / 60
-    log_report(f"Filtered {file} by keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
+    log_report(f"Filtered {file} by for relevance to the {args.group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
     return total_lines, matched_lines
 
 # Wrapper function for processing a month's files

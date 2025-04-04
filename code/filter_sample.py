@@ -16,7 +16,7 @@ args = get_args()
 years = parse_range(args.years)
 
 # Increase the field size limit to handle larger fields
-csv.field_size_limit(sys.maxsize)
+csv.field_size_limit(2**31 - 1)
 
 ### sampling hyper-parameters
 num_annot = 2
@@ -31,10 +31,8 @@ language_filtered_path = os.path.join(
 # Organize files by year
 files_by_year = {}
 for year in years:
-    files_by_year[year] = []
-    for month in range(1, 13):
-        filename = "RC_{}-{:02d}.csv".format(year, month)
-        path_ = os.path.join(language_filtered_path, filename)
+    for month in range(1,13):
+        path_ = language_filtered_path+"\\RC_{}-{:02d}.csv".format(year,month)
         if os.path.exists(path_):
             files_by_year[year].append(path_)
         else:
@@ -273,10 +271,8 @@ if __name__ == "__main__":
     start_time = time.time()
     # Process each year with only its corresponding files
     for year in years:
-        if year in files_by_year:
-            filter_sample_year(year, files_by_year[year])
-        else:
-            log_report(f"No files found for year {year}.")
+        year_file_list = [f for f in file_list if f"RC_{year}-" in f]
+        filter_sample_year(year, year_file_list)
     filter_sample_write(all_samples)
     elapsed = (time.time() - start_time) / 60
     print(f"Reservoir sampling for the {args.group} social group from {args.years} was finished in {elapsed:.2f} minutes. Total samples per each of the {num_annot} annotators: {len(all_samples[0])}")

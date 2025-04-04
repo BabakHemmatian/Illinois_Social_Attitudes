@@ -14,7 +14,7 @@ args = get_args()
 years = parse_range(args.years)
 
 # Increase the field size limit to handle larger fields
-csv.field_size_limit(sys.maxsize)
+csv.field_size_limit(2**31 - 1)
 
 ### sampling hyper-parameters
 num_annot = 2
@@ -25,7 +25,7 @@ language_filtered_path = os.path.join(dir_path.replace("code","data\\data_reddit
 file_list = []
 for year in years:
     for month in range(1,13):
-        path_ = language_filtered_path+"\\RC_{}-{}.csv".format(year,month)
+        path_ = language_filtered_path+"\\RC_{}-{:02d}.csv".format(year,month)
         if os.path.exists(path_):
             file_list.append(path_)
         else:
@@ -201,7 +201,7 @@ def filter_sample_write(all_samples):
     # ========================================
     for annot in range(num_annot):
         sample_file_path = os.path.join(dir_path, f"filter_sample_{args.group}_{annot}.csv")
-        sample_key_file_path = os.path.join(dir_path, f"filter_sample_{args.group}_{annot}.csv")
+        sample_key_file_path = os.path.join(dir_path, f"filter_sample_key_{args.group}_{annot}.csv")
         
         with open(sample_file_path, "w", encoding='utf-8', newline='') as sample_file, \
             open(sample_key_file_path, "w", encoding='utf-8', newline='') as sample_file_key:
@@ -239,7 +239,8 @@ def filter_sample_write(all_samples):
 if __name__ == "__main__":
     start_time = time.time()
     for year in years:
-        filter_sample_year(year,file_list)
+        year_file_list = [f for f in file_list if f"RC_{year}-" in f]
+        filter_sample_year(year, year_file_list)
     filter_sample_write(all_samples)
     print(f"Reservoir sampling for the {args.group} social group from {args.years} was finished in {(time.time() - start_time) / 60:.2f} minutes. Total samples per each of the {num_annot} annotators: {len(all_samples[0])}")
 

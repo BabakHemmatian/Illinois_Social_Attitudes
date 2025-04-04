@@ -50,7 +50,7 @@ with open(report_file_path, mode, encoding='utf-8', newline='') as report_file:
         writer.writerow(["Timestamp", "Message"])
 
 def log_report(message):
-    timestamp = datetime.now().strftime('%-m/%-d/%Y %H:%M')
+    timestamp = datetime.now().strftime('%m/%d/%Y %H:%M')
     with open(report_file_path, 'a', encoding='utf-8', newline='') as report_file:
         writer = csv.writer(report_file, delimiter='\t')
         writer.writerow([timestamp, message])
@@ -165,7 +165,7 @@ def filter_keyword_parallel():
                 if str(year) in file and file.endswith(".zst") and file.split('.zst')[0] not in processed_files:
                     try:
                         # Assuming filename format includes month as "YYYY-MM" or "YYYY-MM-..."
-                        month = file.split('-')[1]
+                        month = file.split('-')[1].split('.zst')[0]
                     except IndexError:
                         continue
                     files_by_month.setdefault(month, []).append(file)
@@ -173,6 +173,8 @@ def filter_keyword_parallel():
             # Check for missing months in the raw data
             expected_months = [f"{m:02d}" for m in range(1, 13)]
             missing_months = [m for m in expected_months if m not in files_by_month]
+            print(files_by_month)
+            print(expected_months)
             if missing_months:
                 error_msg = f"Error: Missing files for months {missing_months} in year {year}"
                 log_report(error_msg)

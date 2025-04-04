@@ -1,6 +1,6 @@
 # import functions and objects
-from cli import get_args,dir_path
-from utils import parse_range,groups
+from cli import get_args, dir_path
+from utils import parse_range, groups
 
 # import Python packages
 import csv
@@ -8,6 +8,8 @@ import random
 import os
 import sys
 import time
+import datetime
+import re
 
 # Extract and transform CLI arguments 
 args = get_args()
@@ -20,16 +22,53 @@ csv.field_size_limit(2**31 - 1)
 num_annot = 2
 sample_size = 1500
 
-# survey the language-filtered input files and raise an error if an expected file is missing
-language_filtered_path = os.path.join(dir_path.replace("code","data\\data_reddit_curated\\{}\\filtered_language".format(args.group)))
-file_list = []
+# Survey the language-filtered input files and raise an error if an expected file is missing
+language_filtered_path = os.path.join(
+    dir_path.replace("code", "data"),
+    "data_reddit_curated", args.group, "filtered_language"
+)
+
+# Organize files by year
+files_by_year = {}
 for year in years:
     for month in range(1,13):
         path_ = language_filtered_path+"\\RC_{}-{:02d}.csv".format(year,month)
         if os.path.exists(path_):
-            file_list.append(path_)
+            files_by_year[year].append(path_)
         else:
-            raise Exception("Missing language-filtered file for year {}, month {}".format(year,month))
+            raise Exception("Missing language-filtered file for year {}, month {}".format(year, month))
+
+# -------------------- Report logging function --------------------
+# Report file path (placed in the project directory)
+report_file_path = os.path.join(dir_path, f"Report_FilterSample.csv")
+def log_report(message):
+    """
+    Append a log entry with the current timestamp and message (including file info) to the report file.
+    """
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(report_file_path, "a", encoding="utf-8", newline="") as rep_f:
+        writer = csv.writer(rep_f, delimiter="\t")
+        writer.writerow([timestamp, message])
+    print(f"{timestamp} - {message}")
+# ------------------------------------------------------------------
+
+# -------------------- Error logging function --------------------
+def log_error(function_name, file, line_number, line_content, error):
+    """
+    Save error details to a file. The filename follows the pattern:
+    error_filter_sample_<resource>_line<line>_<timestamp>.txt.
+    The error log includes file information.
+    """
+    error_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    resource_identifier = os.path.basename(file)
+    error_filename = f"error_filter_sample_{resource_identifier}_line{line_number}_{error_time}.txt"
+    # Place error logs in the same directory as the report file
+    error_filepath = os.path.join(dir_path, error_filename)
+    with open(error_filepath, "w", encoding="utf-8") as ef:
+        ef.write(f"Error in {function_name} at line {line_number} in file {file}: {error}\n")
+        ef.write(f"Line content: {line_content}\n")
+    log_report(f"Logged error in {error_filename} (file: {file})")
+# ------------------------------------------------------------------
 
 def get_unique_keywords(keyword_str, max_keywords=100):
     """
@@ -46,7 +85,6 @@ def get_unique_keywords(keyword_str, max_keywords=100):
     try:
         # Split by comma and clean each keyword
         keywords = keyword_str.replace('\t', ',').split(',')
-        
         # Use a set for uniqueness
         cleaned_keywords = set()
         for kw in keywords:
@@ -58,11 +96,10 @@ def get_unique_keywords(keyword_str, max_keywords=100):
                     cleaned_keywords.add(f"{parts[0].strip()}: {parts[1].strip()}")
             elif kw:
                 cleaned_keywords.add(kw)
-        
         unique_keywords = list(cleaned_keywords)[:max_keywords]
         return unique_keywords, len(unique_keywords)
     except Exception as e:
-        print(f"Error processing keywords: {e}")
+        log_report(f"Error processing keywords: {e}")
         return [], 0
 
 # Calculate how many samples to take per year, per category (top/bottom/random)
@@ -74,9 +111,13 @@ all_samples = {}
 for i in range(num_annot):
     all_samples[i] = []
 
+# Global set to track document ids across reservoirs (to prevent duplicates)
+seen_ids = set()
+
 # Process each year
-def filter_sample_year(year,file_list):
-    print(f"\nSampling documents potentially related to the {args.group} social group from year {year}...")
+def filter_sample_year(year, file_list_for_year):
+    log_report(f"Started sampling documents for year {year} in group {args.group}.")
+    print(f"\nSampling documents for the {args.group} social group from year {year}...")
 
     # Reservoirs (lists) for top, bottom, random
     top_reservoir = []
@@ -85,14 +126,15 @@ def filter_sample_year(year,file_list):
 
     total_docs = 0  # How many docs processed for this year
 
-    # Iterate through each file in the directory
-    for file in file_list:
+    # Local set to track document ids for this year
+    year_seen_ids = set()
+
+    # Iterate through each file for this year
+    for file in file_list_for_year:
         print(f"Sampling from {file}")
         try:
             with open(file, "r", encoding='utf-8-sig', errors='ignore') as input_file:
-
                 reader = csv.reader(x.replace('\0', '') for x in input_file)
-
                 for id_, line in enumerate(reader):
                     # Skip the header row
                     if id_ == 0:
@@ -100,10 +142,14 @@ def filter_sample_year(year,file_list):
                     try:
                         # Basic row validation: must have at least 3 columns for text
                         if line and len(line) > 2 and line[2].strip():
-
                             # Extract original_id from first column
                             original_id = line[0].strip()
-
+                            # Skip if this document has already been processed in this year
+                            if original_id in year_seen_ids:
+                                continue
+                            year_seen_ids.add(original_id)
+                            seen_ids.add(original_id)
+                            
                             text = line[2].strip().replace("\n", " ")
                             
                             # If there's a keywords column (index 7), parse it
@@ -118,12 +164,9 @@ def filter_sample_year(year,file_list):
                             #    TOP SAMPLES (max)
                             # ===========================
                             if len(top_reservoir) < samples_per_type_per_year:
-                                # Not yet filled the top reservoir
                                 top_reservoir.append((unique_count, text, keywords, file, original_id))
-                                # Keep it sorted in descending order of unique_count
                                 top_reservoir.sort(key=lambda x: x[0], reverse=True)
                             else:
-                                # If this doc has more unique keywords than the last in top_reservoir
                                 if unique_count > top_reservoir[-1][0]:
                                     top_reservoir[-1] = (unique_count, text, keywords, file, original_id)
                                     top_reservoir.sort(key=lambda x: x[0], reverse=True)
@@ -142,7 +185,6 @@ def filter_sample_year(year,file_list):
                             # ===========================
                             #    RANDOM SAMPLES
                             # ===========================
-                            # Using reservoir sampling
                             if len(random_reservoir) < samples_per_type_per_year:
                                 random_reservoir.append((unique_count, text, keywords, file, original_id))
                             else:
@@ -150,15 +192,15 @@ def filter_sample_year(year,file_list):
                                 if s < samples_per_type_per_year:
                                     random_reservoir[s] = (unique_count, text, keywords, file, original_id)
                         else:
-                            print(f"Skipping line {id_}: insufficient columns ({len(line)} found)")
+                            log_report(f"Skipping line {id_} in file {file}: insufficient columns ({len(line)} found)")
                     except Exception as e:
-                        print(f"Error processing line {id_} in {file}: {e}")
+                        log_error("filter_sample_year", file, id_ + 1, str(line), e)
                         continue
         except Exception as e:
-            print(f"Error processing file {file}: {e}")
+            log_error("filter_sample_year", file, "N/A", "File-level error", e)
             continue
 
-    print(f"{total_docs} documents processed for year {year}.")
+    log_report(f"{total_docs} documents processed for year {year} in group {args.group}.")
 
     # Combine the top, bottom, and random samples
     year_samples = top_reservoir + bottom_reservoir + random_reservoir
@@ -191,9 +233,7 @@ def filter_sample_year(year,file_list):
 
     # Append these samples to each annotator
     for annot in range(num_annot):
-        # all_samples[annot] is a list of dict
         all_samples[annot].extend(year_sample_data)
-
 
 def filter_sample_write(all_samples):
     # ========================================
@@ -204,16 +244,13 @@ def filter_sample_write(all_samples):
         sample_key_file_path = os.path.join(dir_path, f"filter_sample_key_{args.group}_{annot}.csv")
         
         with open(sample_file_path, "w", encoding='utf-8', newline='') as sample_file, \
-            open(sample_key_file_path, "w", encoding='utf-8', newline='') as sample_file_key:
+             open(sample_key_file_path, "w", encoding='utf-8', newline='') as sample_file_key:
             
             writer = csv.writer(sample_file)
             writer_key = csv.writer(sample_file_key)
             
             # Write headers
-            writer.writerow([
-                "random_id", "text"
-            ])
-            # Key file: random_id, file, original_id, keywords, sample_type
+            writer.writerow(["random_id", "text"])
             writer_key.writerow(["random_id", "file", "original_id", "keywords", "sample_type"])
             
             # Shuffle samples before writing so we don't group them year by year
@@ -221,13 +258,7 @@ def filter_sample_write(all_samples):
             
             # Write rows
             for data in all_samples[annot]:
-                writer.writerow([
-                    data['random_id'],
-                    data['text'],
-                    "",  # placeholders
-                    "",
-                    ""
-                ])
+                writer.writerow([data['random_id'], data['text'], "", "", ""])
                 writer_key.writerow([
                     data['random_id'],
                     data['file'],
@@ -238,11 +269,11 @@ def filter_sample_write(all_samples):
 
 if __name__ == "__main__":
     start_time = time.time()
+    # Process each year with only its corresponding files
     for year in years:
         year_file_list = [f for f in file_list if f"RC_{year}-" in f]
         filter_sample_year(year, year_file_list)
     filter_sample_write(all_samples)
-    print(f"Reservoir sampling for the {args.group} social group from {args.years} was finished in {(time.time() - start_time) / 60:.2f} minutes. Total samples per each of the {num_annot} annotators: {len(all_samples[0])}")
-
-# TODO: Save errors to a file rather than just posting them to the screen. The filename should contain the function and the timestamp
-# TODO: Use the document id to make sure that none of the documents also appear in more than one reservoir. 
+    elapsed = (time.time() - start_time) / 60
+    print(f"Reservoir sampling for the {args.group} social group from {args.years} was finished in {elapsed:.2f} minutes. Total samples per each of the {num_annot} annotators: {len(all_samples[0])}")
+    log_report(f"Reservoir sampling for the {args.group} social group from {args.years} finished in {elapsed:.2f} minutes. Total samples per annotator: {len(all_samples[0])}")

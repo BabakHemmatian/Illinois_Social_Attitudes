@@ -173,8 +173,6 @@ def filter_keyword_parallel():
             # Check for missing months in the raw data
             expected_months = [f"{m:02d}" for m in range(1, 13)]
             missing_months = [m for m in expected_months if m not in files_by_month]
-            print(files_by_month)
-            print(expected_months)
             if missing_months:
                 error_msg = f"Error: Missing files for months {missing_months} in year {year}"
                 log_report(error_msg)

@@ -49,15 +49,24 @@ with open(report_file_path, mode, encoding='utf-8', newline='') as report_file:
     if mode == 'w':
         writer.writerow(["Timestamp", "Message"])
 
+##########################################
+# Logging Functions
+##########################################
 def log_report(message):
+    """
+    Append a log entry with the current timestamp and message to the report file.
+    """
     timestamp = datetime.now().strftime('%-m/%-d/%Y %H:%M')
     with open(report_file_path, 'a', encoding='utf-8', newline='') as report_file:
         writer = csv.writer(report_file, delimiter='\t')
         writer.writerow([timestamp, message])
     print(f"{timestamp} - {message}")
 
-# Log errors to separate files; filename includes resource, row number, and timestamp.
 def log_error(file, line_number, line_content, error):
+    """
+    Save error details to a separate file. The filename includes the resource name,
+    the row number, and a timestamp. Also logs an entry to the report file.
+    """
     error_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     resource_identifier = file.split('.zst')[0]
     error_filename = f"error_filter_keywords_{resource_identifier}_{line_number}_{error_time}.txt"
@@ -66,7 +75,9 @@ def log_error(file, line_number, line_content, error):
          error_file.write(f"Row {line_number}: {str(error)}\nLine content: {line_content}\n")
     log_report(f"Logged error in {error_filename}")
 
+##########################################
 # Function for processing a single raw Reddit file
+##########################################
 def filter_keyword_file(file):
     file_path = os.path.join(raw_data, file)
     output_csv_file = os.path.join(output_path, f"{file.split('.zst')[0]}.csv")
@@ -127,7 +138,9 @@ def filter_keyword_file(file):
     log_report(f"Filtered {file} by keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
     return total_lines, matched_lines
 
-# Wrapper function for processing a month's files
+##########################################
+# Parallel processing for filtering keywords (per month)
+##########################################
 def filter_keyword_month(year, month, files):
     log_report(f"Started filtering files for {year}-{month}")
     start_time = time.time()
@@ -146,7 +159,6 @@ def filter_keyword_month(year, month, files):
     log_report(f"Completed filtering {year}-{month} in {elapsed_time:.2f} minutes")
     return total_lines, matched_lines
 
-# Process files in parallel and check for missing months/files
 def filter_keyword_parallel():
     total_lines = 0
     matched_lines = 0
@@ -192,15 +204,24 @@ def filter_keyword_parallel():
             year_processing_time = (time.time() - start_year_time) / 60
             log_report(f"Completed filtering year {year} in {year_processing_time:.2f} minutes")
 
-    # Check output CSV file count (subtracting the report file)
-    expected_file_count = len(years) * 12
-    actual_file_count = sum(1 for f in os.listdir(output_path) if f.endswith('.csv')) - 1
-    if actual_file_count != expected_file_count:
-        log_report(f"Warning: Expected {expected_file_count} output files, but generated {actual_file_count}.")
+    # After output has been generated, perform missing month check
+    for year in years:
+        expected_months = set(f"{m:02d}" for m in range(1, 13))
+        processed_months = set()
+        for file in os.listdir(output_path):
+            m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
+            if m:
+                processed_months.add(m.group(1))
+        missing = expected_months - processed_months
+        if missing:
+            log_report(f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
 
     log_report(f"Total lines processed: {total_lines}")
     log_report(f"Total matched lines: {matched_lines}")
 
+##########################################
+# Main execution
+##########################################
 if __name__ == "__main__":
     overall_start_time = time.time()
     try:

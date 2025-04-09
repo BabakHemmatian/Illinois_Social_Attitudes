@@ -3,22 +3,23 @@ from cli import get_args, dir_path
 from utils import parse_range, headers, groups
 
 # import Python packages
-import csv
-import random
 import os
-import sys
+import csv
 import time
-import datetime
-import re
 import torch
 from transformers import RobertaTokenizerFast, RobertaForSequenceClassification
+import datetime
+import sys
+import random
+import re
+
 
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
 
 # Set relevance filtering hyperparameters
-batch_size = 256
+batch_size = 320
 
 # Use CUDA if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

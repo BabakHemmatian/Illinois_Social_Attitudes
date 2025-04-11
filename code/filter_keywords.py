@@ -7,6 +7,7 @@ from concurrent.futures import ProcessPoolExecutor
 import zstandard
 import io
 import sys
+import ahocorasick
 
 # Import functions and objects from local modules
 from cli import get_args, dir_path, raw_data
@@ -24,7 +25,6 @@ marginalized_words = load_terms(os.path.join(keyword_path, f"{args.group}_{group
 privileged_words = load_terms(os.path.join(keyword_path, f"{args.group}_{groups[args.group][1]}.txt"))
 
 # Build an Aho-Corasick automaton for fast pattern matching of the keywords
-import ahocorasick
 automaton = ahocorasick.Automaton()
 for term in marginalized_words:
     automaton.add_word(term.lower(), (groups[args.group][0], term))
@@ -38,7 +38,7 @@ os.makedirs(output_path, exist_ok=True)
 processed_files = set(f for f in os.listdir(output_path) if f.endswith('.csv'))
 
 # Setup the report file (tab-separated format)
-output_report_filename = "Report_FilterKeywords.csv"
+output_report_filename = "Report_filter_keywords.csv"
 report_file_path = os.path.join(output_path, output_report_filename)
 if not os.path.exists(report_file_path):
     mode = 'w'
@@ -69,7 +69,7 @@ def log_error(file, line_number, line_content, error):
     """
     error_time = datetime.now().strftime('%Y%m%d_%H%M%S')
     resource_identifier = file.split('.zst')[0]
-    error_filename = f"error_filter_keywords_{resource_identifier}_{line_number}_{error_time}.txt"
+    error_filename = f"error_{resource_identifier}_{line_number}_{error_time}.txt"
     error_filepath = os.path.join(output_path, error_filename)
     with open(error_filepath, 'w', encoding='utf-8') as error_file:
          error_file.write(f"Row {line_number}: {str(error)}\nLine content: {line_content}\n")
@@ -208,6 +208,7 @@ def filter_keyword_parallel():
             year_processing_time = (time.time() - start_year_time) / 60
             log_report(f"Completed filtering year {year} in {year_processing_time:.2f} minutes")
 
+    # TODO: Make the warning message specific to the files in years-months, not counting any .csv output file.
     # Check the number of output CSV files, excluding the report file
     expected_file_count = len(years) * 12
     actual_file_count = sum(1 for f in os.listdir(output_path) if f.endswith('.csv') and f != output_report_filename)

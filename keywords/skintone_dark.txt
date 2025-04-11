@@ -53,9 +53,13 @@ dull"
 dullness
 duller
 dullish
+mudskin
+mud-skin
+mud skin
 muddy
-muddy-skinned
-muddyskinned
+muddy-skin
+muddyskin
+muddy skin
 yellow
 dirty
 dirt-skin

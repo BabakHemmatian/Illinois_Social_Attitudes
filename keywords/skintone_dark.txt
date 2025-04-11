@@ -1,14 +1,3 @@
-black 
-black.
-black,
-black-
-black?
-black:
-black!
-black;
-black"
-blackface
-black-face
 brown 
 brown.
 brown,
@@ -22,6 +11,8 @@ brown-face
 dark-skin
 dark skin
 darkskin
+darky
+darkey
  tan 
  tan.
  tan,
@@ -75,19 +66,8 @@ too-dark
 too dark
 toodark
 jaundice
-charcoal
- tar
-.tar
-,tar
--tar
-?tar
-:tar
-!tar
-;tar
-"tar
 sooty
 midnight
-coal
 over-cooked
 over cooked
 overcooked
@@ -124,7 +104,6 @@ swart
 tawny
 colored
 coloured
-African
 Affranchi
 cushi 
 cushi.
@@ -148,17 +127,6 @@ halfcaste
 kalia
 kalu
 kallu
-Monkey
- ape
-.ape
-,ape
--ape
-?ape
-:ape
-!ape
-;ape
-"ape
-chimp
 redskin
 red-skin
 red skin

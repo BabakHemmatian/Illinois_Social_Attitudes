@@ -1,9 +1,14 @@
-Black
-Black people
-Black folks
-Black folx
-Black person
-Black individual
+black 
+black.
+black,
+black-
+black?
+black:
+black!
+black;
+black"
+blackface
+black-face
 Nigger
 neeger
 neekeri
@@ -22,19 +27,46 @@ niggress
 nigette
 negro
 neger
-African American
-African-American
+African
 Abid
 Abeed
+Monkey
+ ape
+.ape
+,ape
+-ape
+?ape
+:ape
+!ape
+;ape
+"ape
+chimp
 gator bait
 Aunt Jemima
-Black Buck
-Black brute
 Bamboula
 Coon
-Tar.baby
+ tar
+.tar
+,tar
+-tar
+?tar
+:tar
+!tar
+;tar
+"tar
 Uncle Tom
-Ape
+coal
+ ape
+.ape
+,ape
+-ape
+?ape
+:ape
+!ape
+;ape
+"ape
+monkey
+chimp
 Jim Crow
 Kakasiah
 kakasia
@@ -51,6 +83,7 @@ Choc-ice
 Crow
 cotton picker
 Cotton-picker
+cottonpicker
 Czarnuch
 Groid
 Heukhyeong
@@ -59,7 +92,15 @@ jiggabo
 jigarooni
 jijjiboo
 zigabo
-jig
+jig 
+jig.
+jig,
+jig-
+jig?
+jig:
+jig!
+jig;
+jig"
 jigg
 jigger
 Jungle bunny

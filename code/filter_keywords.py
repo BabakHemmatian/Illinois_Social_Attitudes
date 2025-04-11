@@ -11,7 +11,7 @@ import ahocorasick
 
 # Import functions and objects from local modules
 from cli import get_args, dir_path, raw_data
-from utils import load_terms, groups, headers, parse_range
+from utils import load_terms, groups, headers, parse_range, log_report, log_error
 
 # Extract and transform CLI arguments
 args = get_args()
@@ -48,32 +48,6 @@ with open(report_file_path, mode, encoding='utf-8', newline='') as report_file:
     writer = csv.writer(report_file, delimiter='\t')
     if mode == 'w':
         writer.writerow(["Timestamp", "Message"])
-
-def log_report(message):
-    """
-    Log a message with a timestamp to the report file and print it.
-    Ensures output is flushed immediately.
-    """
-    # Use unified timestamp format %Y-%m-%d %H:%M:%S
-    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(report_file_path, 'a', encoding='utf-8', newline='') as report_file:
-        writer = csv.writer(report_file, delimiter='\t')
-        writer.writerow([timestamp, message])
-    print(f"{timestamp} - {message}")
-    sys.stdout.flush()
-
-def log_error(file, line_number, line_content, error):
-    """
-    Log errors to a separate file.
-    The filename includes the resource name, row number, and timestamp.
-    """
-    error_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-    resource_identifier = file.split('.zst')[0]
-    error_filename = f"error_{resource_identifier}_{line_number}_{error_time}.txt"
-    error_filepath = os.path.join(output_path, error_filename)
-    with open(error_filepath, 'w', encoding='utf-8') as error_file:
-         error_file.write(f"Row {line_number}: {str(error)}\nLine content: {line_content}\n")
-    log_report(f"Logged error in {error_filename}")
 
 def filter_keyword_file(file):
     """
@@ -127,7 +101,7 @@ def filter_keyword_file(file):
                             writer.writerows(buffer)
                             buffer.clear()
                 except Exception as e:
-                    log_error(file, total_lines, line, e)
+                    log_error("filter_keyword_file",file, total_lines, line, e)
             
             if buffer:
                 writer.writerows(buffer)

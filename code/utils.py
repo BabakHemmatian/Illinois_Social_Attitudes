@@ -121,4 +121,16 @@ def check_reqd_files(years=None,check_path=None):
             else:
                 raise Exception("Missing pre-filtered file for year {}, month {}, expected in: {}".format(year,month,path_))
     return file_list
-    
+
+def log_report(message):
+    """
+    Log a message with a timestamp to the report file and print it.
+    Ensures output is flushed immediately.
+    """
+    # Use unified timestamp format %Y-%m-%d %H:%M:%S
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    with open(report_file_path, 'a', encoding='utf-8', newline='') as report_file:
+        writer = csv.writer(report_file, delimiter='\t')
+        writer.writerow([timestamp, message])
+    print(f"{timestamp} - {message}")
+    sys.stdout.flush()

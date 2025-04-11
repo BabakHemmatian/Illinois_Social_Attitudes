@@ -134,3 +134,18 @@ def log_report(message):
         writer.writerow([timestamp, message])
     print(f"{timestamp} - {message}")
     sys.stdout.flush()
+
+def log_error(function_name, file, line_number, line_content, error):
+    """
+    Save error details to a file. The filename follows the pattern:
+    error_filter_language_<resource>_line<line>_<timestamp>.txt,
+    then log a message to the report file.
+    """
+    error_time = datetime.now().strftime('%Y%m%d_%H%M%S')
+    resource_identifier = os.path.basename(file)
+    error_filename = f"error_{resource_identifier}_{line_number}_{error_time}.txt"
+    error_filepath = os.path.join(output_path, error_filename)
+    with open(error_filepath, 'w', encoding='utf-8') as ef:
+         ef.write(f"Error in {function_name} at line {line_number}: {error}\n")
+         ef.write(f"Line content: {line_content}\n")
+    log_report(f"Logged error in {error_filename}")

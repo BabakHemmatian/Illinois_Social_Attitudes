@@ -32,7 +32,7 @@ def parse_range(value):
 # Helper function to load terms from a file
 def load_terms(file_path):
     with open(file_path, 'r', encoding='utf-8') as f:
-        return [line.lower().strip() for line in f if line.strip()]
+        return [line.lower().rstrip('\r\n') for line in f if line.strip()]
     
 # The list of social groups. Marginalized groups always listed first.
 groups = {"sexuality":['gay','straight'],'age':['old','young'],'weight':['fat','thin'],'ability':['disabled','abled'],'race':['black','white'],'skin_tone':['dark','light']}

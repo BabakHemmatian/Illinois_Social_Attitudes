@@ -110,7 +110,8 @@ def filter_keyword_file(file):
         log_report(f"Error filtering by keywords in file {file}: {e}")
 
     elapsed_time = (time.time() - start_time) / 60
-    log_report(f"Filtered {file} by keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, Matched lines: {matched_lines}")
+    log_report(f"Filtered {file} by for relevance to the {args.group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
+
     return total_lines, matched_lines
 
 def filter_keyword_month(year, month, files):
@@ -155,8 +156,9 @@ def filter_keyword_parallel():
             for file in sorted(os.listdir(raw_data)):
                 if str(year) in file and file.endswith(".zst") and file.split('.zst')[0] not in processed_files:
                     try:
-                        # Assume filename contains month information, e.g., "YYYY-MM" or "YYYY-MM-..."
-                        month = file.split('-')[1]
+
+                        # Assuming filename format includes month as "YYYY-MM" or "YYYY-MM-..."
+                        month = file.split('-')[1].split('.zst')[0]
                     except IndexError:
                         continue
                     files_by_month.setdefault(month, []).append(file)

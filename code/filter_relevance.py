@@ -9,8 +9,6 @@ import time
 import torch
 from transformers import RobertaTokenizerFast, RobertaForSequenceClassification
 import datetime
-import sys
-import random
 import re
 
 
@@ -45,7 +43,7 @@ def get_predictions(texts, max_length=512):
     ).to(device)
     
     with torch.no_grad():
-        with torch.cuda.amp.autocast():
+        with torch.amp.autocast(device):
             outputs = model(**inputs)
             probs = torch.nn.functional.softmax(outputs.logits, dim=1)
             predictions = probs.argmax(dim=1).tolist()
@@ -86,8 +84,7 @@ def filter_relevance_file(file):
             missing_writer = csv.writer(missing_file)
             missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
 
-    log_report(f"Started filtering {file} for relevance to the {args.group} social group.")
-    print(f"Filtering {file} for relevance to the {args.group} social group.")
+    log_report(report_file_path, f"Started filtering {file} for relevance to the {args.group} social group.")
     start_time = time.time()
     
     # Build output file path using the relative part from the input file.
@@ -125,7 +122,6 @@ def filter_relevance_file(file):
         if mode == "w":
             writer.writerow(new_headers)
         
-        batch_texts = []
         batch_lines = []
         total_lines = 0
         relevant_lines = []  # Rows to write in bulk
@@ -138,19 +134,16 @@ def filter_relevance_file(file):
 
             try:
                 if len(line) >= 3:
-                    text = line[2].strip().replace("\n", " ")
-                    batch_texts.append(text)
-                    batch_lines.append(line)
+                    batch_lines.append(line + [id_])
                     total_lines += 1
 
                     # Process in batches
-                    if len(batch_texts) == batch_size:
-                        predictions = get_predictions(batch_texts)
+                    if len(batch_lines) == batch_size:
+                        predictions = get_predictions([line[2].strip().replace("\n"," ") for line in batch_lines])
                         for idx, pred in enumerate(predictions):
-                            if pred == 1:  # Relevant
+                            if pred:  # Relevant
                                 # Append the source row number to the row data
-                                relevant_lines.append(batch_lines[idx] + [id_])
-                        batch_texts.clear()
+                                relevant_lines.append(batch_lines[idx])
                         batch_lines.clear()
                         
                         if relevant_lines:
@@ -164,11 +157,11 @@ def filter_relevance_file(file):
 
         # Process any remaining texts in the final batch
         try:
-            if batch_texts:
-                predictions = get_predictions(batch_texts)
+            if batch_lines:
+                predictions = get_predictions([line[2].strip().replace("\n"," ") for line in batch_lines])
                 for idx, pred in enumerate(predictions):
                     if pred == 1:
-                        relevant_lines.append(batch_lines[idx] + [id_])
+                        relevant_lines.append(batch_lines[idx])
                 if relevant_lines:
                     writer.writerows(relevant_lines)
                     relevant_lines.clear()
@@ -178,7 +171,7 @@ def filter_relevance_file(file):
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
     print(f"Finished filtering {file} in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
-    log_report(f"Finished filtering {file} in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_report(report_file_path, f"Finished filtering {file} in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
     # Record missing lines info
     with open(missing_records_file, 'a', newline='') as missing_file:
@@ -200,7 +193,7 @@ for file in file_list:
 
 overall_elapsed = (time.time() - start_time) / 60
 print(f"Relevance filtering for the {args.group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
-log_report(f"Relevance filtering for the {args.group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+log_report(report_file_path, f"Relevance filtering for the {args.group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
 
 ##########################################
 # ----- Check for missing monthly outputs -----
@@ -213,7 +206,7 @@ for year in years:
             processed_months.add(m.group(1))
     missing = expected_months - processed_months
     if missing:
-        log_report(f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
+        log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
 ##########################################
 
 ##########################################
@@ -226,5 +219,5 @@ final_report_file = os.path.join(output_path, "Final_Report_FilterRelevance.csv"
 with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
     writer = csv.writer(rf)
     writer.writerows(final_report)
-log_report(f"Final summary report saved to: {final_report_file}")
+log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
 ##########################################

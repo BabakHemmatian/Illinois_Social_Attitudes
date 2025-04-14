@@ -3,6 +3,7 @@ import csv
 import random
 import math
 import os
+import sys
 from datetime import datetime
 
 def parse_range(value):
@@ -131,7 +132,7 @@ def log_report(report_file_path=None, message=None):
     # Use unified timestamp format %Y-%m-%d %H:%M:%S
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(report_file_path, 'a', encoding='utf-8', newline='') as report_file:
-        writer = csv.writer(report_file, delimiter='\t')
+        writer = csv.writer(report_file)
         writer.writerow([timestamp, message])
     print(f"{timestamp} - {message}")
     sys.stdout.flush()

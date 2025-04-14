@@ -7,12 +7,11 @@ import fasttext
 import os
 import csv
 import time
-import sys
 import re
 from datetime import datetime  # For timestamping
 
 # Increase the field size limit to handle larger fields
-csv.field_size_limit(2**63-1)
+csv.field_size_limit(2**31 - 1)
 
 # Extract and transform CLI arguments 
 args = get_args()
@@ -49,7 +48,7 @@ report_file_path = os.path.join(output_path, "Report_filter_language.csv")
 # Function for language filtering a single file
 def filter_language_file(file):
     function_name = "filter_language_file"
-    log_report(f"Started language filtering for {file}")
+    log_report(report_file_path, f"Started language filtering for {file}")
     try:
         # Get the relative path after "keywords/"
         relative_path = file.split("keywords" + os.sep)[1]
@@ -87,7 +86,7 @@ def filter_language_file(file):
             elapsed = (time.time() - start_time) / 60
             msg = (f"Finished language filtering {file} in {elapsed:.2f} minutes. "
                    f"# of evaluations: {filtered_counter}, # of English posts: {passed_counter}, # of errors: {error_counter}")
-            log_report(msg)
+            log_report(report_file_path, msg)
             # Return counters for overall statistics
             return filtered_counter, passed_counter, error_counter
     except Exception as e:
@@ -109,18 +108,18 @@ if __name__ == "__main__":
             total_errors += error_counter
 
     overall_elapsed = (time.time() - overall_start_time) / 60
-    log_report(f"Language filtering for the {args.group} social group for {args.years} finished in {overall_elapsed:.2f} minutes")
+    log_report(report_file_path, f"Language filtering for the {args.group} social group for {args.years} finished in {overall_elapsed:.2f} minutes")
     
     # -------------------- Final summary report --------------------
     final_report = [
         ["Timestamp", "Social Group", "Years", "Total Evaluations", "Total Relevant Posts", "Total Missing Lines", "Elapsed Time (minutes)"],
         [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), args.group, args.years, total_filtered, total_passed, total_errors, f"{overall_elapsed:.2f}"]
     ]
-    final_report_file = os.path.join(output_path, "Final_Report_FilterRelevance.csv")
+    final_report_file = os.path.join(output_path, "Final_report_filter_language.csv")
     with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
         writer = csv.writer(rf)
         writer.writerows(final_report)
-    log_report(f"Final report saved to: {final_report_file}")
+    log_report(final_report_file, f"Final report saved to: {final_report_file}")
     # --------------------------------------------------------------
 
     # -------------------- Warning if a particular month is missing --------------------
@@ -140,6 +139,6 @@ if __name__ == "__main__":
         if year_str in processed_months:
             missing = expected_months - processed_months[year_str]
             if missing:
-                log_report(f"Warning: For year {year_str}, missing output files for months: {sorted(list(missing))}")
+                log_report(report_file_path, f"Warning: For year {year_str}, missing output files for months: {sorted(list(missing))}")
         else:
-            log_report(f"Warning: For year {year_str}, no output files found.")
+            log_report(report_file_path, f"Warning: For year {year_str}, no output files found.")

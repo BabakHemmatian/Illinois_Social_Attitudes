@@ -174,10 +174,11 @@ def filter_relevance_file(file):
     log_report(report_file_path, f"Finished filtering {file} in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
     # Record missing lines info
-    with open(missing_records_file, 'a', newline='') as missing_file:
-        missing_writer = csv.writer(missing_file)
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        missing_writer.writerow([file, missing_lines_count, timestamp])
+    if missing_lines_count:
+        with open(missing_records_file, 'a', newline='') as missing_file:
+            missing_writer = csv.writer(missing_file)
+            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            missing_writer.writerow([file, missing_lines_count, timestamp])
     
     return total_lines
 

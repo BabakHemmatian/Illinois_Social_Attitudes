@@ -11,7 +11,6 @@ from transformers import RobertaTokenizerFast, RobertaForSequenceClassification
 import datetime
 import re
 
-
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
@@ -21,7 +20,10 @@ batch_size = 320
 
 # Use CUDA if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Using device: {device}")
+
+# prepare the report file
+report_file_path = os.path.join(dir_path, f"Report_FilterRelevance.csv")
+log_report(report_file_path,f"Using device: {device}")
 
 # Load relevance model
 model_path = os.path.join(dir_path.replace("code", "models"),
@@ -43,7 +45,7 @@ def get_predictions(texts, max_length=512):
     ).to(device)
     
     with torch.no_grad():
-        with torch.amp.autocast(device):
+        with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
             outputs = model(**inputs)
             probs = torch.nn.functional.softmax(outputs.logits, dim=1)
             predictions = probs.argmax(dim=1).tolist()
@@ -70,7 +72,6 @@ for year in years:
 output_path = os.path.join(dir_path.replace("code", "data"),
                            "data_reddit_curated", args.group, "filtered_relevance")
 os.makedirs(output_path, exist_ok=True)
-report_file_path = os.path.join(dir_path, f"Report_FilterRelevance.csv")
 
 # For each language-filtered file, we add an extra column "source_row" to record the input file row number.
 # If the output file already exists, we check the last processed row number and resume from there.
@@ -150,7 +151,7 @@ def filter_relevance_file(file):
                             writer.writerows(relevant_lines)
                             relevant_lines.clear()
                 else:
-                    print(f"Skipping line {id_}: insufficient columns ({len(line)} found)")
+                    log_report(output_file_path,f"Skipping line {id_}: insufficient columns ({len(line)} found)")
                     missing_lines_count += 1
             except Exception as e:
                 raise Exception(f"Error filtering {file} for relevance to the {args.group} social group: {e}")
@@ -170,7 +171,6 @@ def filter_relevance_file(file):
 
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    print(f"Finished filtering {file} in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
     log_report(report_file_path, f"Finished filtering {file} in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
     # Record missing lines info
@@ -193,7 +193,6 @@ for file in file_list:
     overall_docs += filter_relevance_file(file)
 
 overall_elapsed = (time.time() - start_time) / 60
-print(f"Relevance filtering for the {args.group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
 log_report(report_file_path, f"Relevance filtering for the {args.group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
 
 ##########################################

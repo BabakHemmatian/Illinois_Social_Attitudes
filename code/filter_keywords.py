@@ -107,10 +107,10 @@ def filter_keyword_file(file):
                 writer.writerows(buffer)
 
     except Exception as e:
-        log_report(f"Error filtering by keywords in file {file}: {e}")
+        log_report(report_file_path, f"Error filtering by keywords in file {file}: {e}")
 
     elapsed_time = (time.time() - start_time) / 60
-    log_report(f"Filtered {file} by for relevance to the {args.group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
+    log_report(report_file_path, f"Filtered {file} by for relevance to the {args.group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
 
     return total_lines, matched_lines
 
@@ -118,7 +118,7 @@ def filter_keyword_month(year, month, files):
     """
     Process all files for a specific month.
     """
-    log_report(f"Started filtering files for {year}-{month}")
+    log_report(report_file_path, f"Started filtering files for {year}-{month}")
     start_time = time.time()
     total_lines = 0
     matched_lines = 0
@@ -129,10 +129,10 @@ def filter_keyword_month(year, month, files):
             total_lines += file_lines
             matched_lines += file_matched
         except Exception as e:
-            log_report(f"Error filtering by keywords in file {file}: {e}")
+            log_report(report_file_path, f"Error filtering by keywords in file {file}: {e}")
 
     elapsed_time = (time.time() - start_time) / 60
-    log_report(f"Completed filtering {year}-{month} in {elapsed_time:.2f} minutes")
+    log_report(report_file_path, f"Completed filtering {year}-{month} in {elapsed_time:.2f} minutes")
     return total_lines, matched_lines
 
 def filter_keyword_parallel():
@@ -143,13 +143,13 @@ def filter_keyword_parallel():
     total_lines = 0
     matched_lines = 0
     max_workers = min(6, os.cpu_count())
-    log_report(f"Using {max_workers} processes for parallel processing.")
+    log_report(report_file_path, f"Using {max_workers} processes for parallel processing.")
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         futures = []
 
         for year in years:
-            log_report(f"Processing year: {year}")
+            log_report(report_file_path, f"Processing year: {year}")
             start_year_time = time.time()
             files_by_month = {}
 
@@ -168,7 +168,7 @@ def filter_keyword_parallel():
             missing_months = [m for m in expected_months if m not in files_by_month]
             if missing_months:
                 warning_msg = f"Warning: Missing files for months {missing_months} in year {year}"
-                log_report(warning_msg)
+                log_report(report_file_path, warning_msg)
 
             for month, files in sorted(files_by_month.items()):
                 futures.append(executor.submit(filter_keyword_month, year, month, files))
@@ -179,26 +179,26 @@ def filter_keyword_parallel():
                     total_lines += month_lines
                     matched_lines += month_matched
                 except Exception as e:
-                    log_report(f"Error filtering by keywords: {e}")
+                    log_report(report_file_path, f"Error filtering by keywords: {e}")
 
             year_processing_time = (time.time() - start_year_time) / 60
-            log_report(f"Completed filtering year {year} in {year_processing_time:.2f} minutes")
+            log_report(report_file_path, f"Completed filtering year {year} in {year_processing_time:.2f} minutes")
 
     # TODO: Make the warning message specific to the files in years-months, not counting any .csv output file.
     # Check the number of output CSV files, excluding the report file
     expected_file_count = len(years) * 12
     actual_file_count = sum(1 for f in os.listdir(output_path) if f.endswith('.csv') and f != output_report_filename)
     if actual_file_count != expected_file_count:
-        log_report(f"Warning: Expected {expected_file_count} output files, but generated {actual_file_count}.")
+        log_report(report_file_path, f"Warning: Expected {expected_file_count} output files, but generated {actual_file_count}.")
 
-    log_report(f"Total lines processed: {total_lines}")
-    log_report(f"Total matched lines: {matched_lines}")
+    log_report(report_file_path, f"Total lines processed: {total_lines}")
+    log_report(report_file_path, f"Total matched lines: {matched_lines}")
 
 if __name__ == "__main__":
     overall_start_time = time.time()
     try:
         filter_keyword_parallel()
     except Exception as e:
-        log_report(f"Fatal error during processing: {e}")
+        log_report(report_file_path, f"Fatal error during processing: {e}")
     total_time = (time.time() - overall_start_time) / 60
-    log_report(f"Keyword filtering for {args.group} for {args.years} finished in {total_time:.2f} minutes")
+    log_report(report_file_path, f"Keyword filtering for {args.group} for {args.years} finished in {total_time:.2f} minutes")

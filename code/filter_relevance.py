@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, headers, groups
+from utils import parse_range, headers, groups, log_report, log_error
 
 # import Python packages
 import os
@@ -72,35 +72,8 @@ for year in years:
 output_path = os.path.join(dir_path.replace("code", "data"),
                            "data_reddit_curated", args.group, "filtered_relevance")
 os.makedirs(output_path, exist_ok=True)
-
-##########################################
-# Logging Functions
-##########################################
-# Report logging function: appends a timestamped message to the report file.
 report_file_path = os.path.join(dir_path, f"Report_FilterRelevance.csv")
-def log_report(message):
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(report_file_path, "a", encoding="utf-8", newline="") as rep_f:
-        writer = csv.writer(rep_f, delimiter="\t")
-        writer.writerow([timestamp, message])
-    print(f"{timestamp} - {message}")
 
-# Error logging function: writes detailed error info to a separate file and logs a summary.
-def log_error(function_name, file, line_number, line_content, error):
-    error_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    resource_identifier = os.path.basename(file)
-    error_filename = f"error_filter_relevance_{resource_identifier}_line{line_number}_{error_time}.txt"
-    # Place error log in the same directory as the report file (or choose another path)
-    error_filepath = os.path.join(dir_path, error_filename)
-    with open(error_filepath, "w", encoding="utf-8") as ef:
-        ef.write(f"Error in {function_name} at line {line_number} in file {file}: {error}\n")
-        ef.write(f"Line content: {line_content}\n")
-    log_report(f"Logged error in {error_filename} (file: {file})")
-##########################################
-
-##########################################
-# Resume Functionality in Relevance Filtering
-##########################################
 # For each language-filtered file, we add an extra column "source_row" to record the input file row number.
 # If the output file already exists, we check the last processed row number and resume from there.
 def filter_relevance_file(file):

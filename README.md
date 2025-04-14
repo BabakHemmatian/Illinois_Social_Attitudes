@@ -1,7 +1,7 @@
 # Illinois_Social_Attitudes
 This repository contains tools for the development and evaluation of the Illinois Social Attitudes Aggregate Corpus (ISAAC), a comprehensive dataset of Reddit discourse about social groups defined by race, skin tone, weight, sexuality, age and ability.
 
-Once the virtual environment including all the necessary packages has been created and the correct directory structure is established for the models (see below), you can use use command line arguments with cli.py to make use of the resources. Use --help to receive more information about the available options. Example:
+Once the virtual environment including all the necessary packages has been created and the correct directory structure is established for the models (see below), you can use command line arguments with cli.py in the scripts folder to make use of the resources. Use --help to receive more information about the available options. Example:
 ```
 python cli.py --resource filter_keywords --group sexuality --years 2007-2009
 ```

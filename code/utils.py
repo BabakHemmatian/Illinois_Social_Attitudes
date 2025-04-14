@@ -3,7 +3,7 @@ import csv
 import random
 import math
 import os
-import datetime
+from datetime import datetime
 
 def parse_range(value):
     """Parses a single integer or a range (e.g., '2007' or '2008-2010') into a list of integers,

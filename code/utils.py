@@ -123,7 +123,7 @@ def check_reqd_files(years=None,check_path=None):
                 raise Exception("Missing pre-filtered file for year {}, month {}, expected in: {}".format(year,month,path_))
     return file_list
 
-def log_report(message):
+def log_report(report_file_path=None, message):
     """
     Log a message with a timestamp to the report file and print it.
     Ensures output is flushed immediately.

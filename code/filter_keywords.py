@@ -1,9 +1,3 @@
-# import functions and objects
-from cli import get_args, dir_path, raw_data
-from utils import load_terms, groups, headers, parse_range
-
-# import python modules
-import ahocorasick
 import os
 import csv
 import json
@@ -12,19 +6,25 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor
 import zstandard
 import io
+import sys
+import ahocorasick
 
-# Extract and transform CLI arguments 
+# Import functions and objects from local modules
+from cli import get_args, dir_path, raw_data
+from utils import load_terms, groups, headers, parse_range, log_report, log_error
+
+# Extract and transform CLI arguments
 args = get_args()
 years = parse_range(args.years)
 if isinstance(years, int):
     years = [years]
 
-# Extract the social group keywords
+# Load social group keywords
 keyword_path = os.path.join(dir_path.replace("code", "keywords"))
-marginalized_words = load_terms(os.path.join(keyword_path, "{}_{}.txt".format(args.group, groups[args.group][0])))
-privileged_words = load_terms(os.path.join(keyword_path, "{}_{}.txt".format(args.group, groups[args.group][1])))
+marginalized_words = load_terms(os.path.join(keyword_path, f"{args.group}_{groups[args.group][0]}.txt"))
+privileged_words = load_terms(os.path.join(keyword_path, f"{args.group}_{groups[args.group][1]}.txt"))
 
-# Build an automaton for fast pattern matching of the extracted keywords
+# Build an Aho-Corasick automaton for fast pattern matching of the keywords
 automaton = ahocorasick.Automaton()
 for term in marginalized_words:
     automaton.add_word(term.lower(), (groups[args.group][0], term))
@@ -32,13 +32,13 @@ for term in privileged_words:
     automaton.add_word(term.lower(), (groups[args.group][1], term))
 automaton.make_automaton()
 
-# Prepare and survey the output path
+# Prepare and inspect the output path
 output_path = os.path.join(dir_path.replace("code", os.path.join("data", "data_reddit_curated", args.group, "filtered_keywords")))
 os.makedirs(output_path, exist_ok=True)
 processed_files = set(f for f in os.listdir(output_path) if f.endswith('.csv'))
 
-# Set up the report file (tab-separated format)
-output_report_filename = "Report_FilterKeywords.csv"
+# Setup the report file (tab-separated format)
+output_report_filename = "Report_filter_keywords.csv"
 report_file_path = os.path.join(output_path, output_report_filename)
 if not os.path.exists(report_file_path):
     mode = 'w'
@@ -49,25 +49,11 @@ with open(report_file_path, mode, encoding='utf-8', newline='') as report_file:
     if mode == 'w':
         writer.writerow(["Timestamp", "Message"])
 
-def log_report(message):
-    timestamp = datetime.now().strftime('%m/%d/%Y %H:%M')
-    with open(report_file_path, 'a', encoding='utf-8', newline='') as report_file:
-        writer = csv.writer(report_file, delimiter='\t')
-        writer.writerow([timestamp, message])
-    print(f"{timestamp} - {message}")
-
-# Log errors to separate files; filename includes resource, row number, and timestamp.
-def log_error(file, line_number, line_content, error):
-    error_time = datetime.now().strftime('%Y%m%d_%H%M%S')
-    resource_identifier = file.split('.zst')[0]
-    error_filename = f"error_filter_keywords_{resource_identifier}_{line_number}_{error_time}.txt"
-    error_filepath = os.path.join(output_path, error_filename)
-    with open(error_filepath, 'w', encoding='utf-8') as error_file:
-         error_file.write(f"Row {line_number}: {str(error)}\nLine content: {line_content}\n")
-    log_report(f"Logged error in {error_filename}")
-
-# Function for processing a single raw Reddit file
 def filter_keyword_file(file):
+    """
+    Process a single raw Reddit file by filtering for keyword matches.
+    Writes matching lines to an output CSV file.
+    """
     file_path = os.path.join(raw_data, file)
     output_csv_file = os.path.join(output_path, f"{file.split('.zst')[0]}.csv")
     
@@ -115,7 +101,7 @@ def filter_keyword_file(file):
                             writer.writerows(buffer)
                             buffer.clear()
                 except Exception as e:
-                    log_error(file, total_lines, line, e)
+                    log_error("filter_keyword_file",file, total_lines, line, e)
             
             if buffer:
                 writer.writerows(buffer)
@@ -125,10 +111,13 @@ def filter_keyword_file(file):
 
     elapsed_time = (time.time() - start_time) / 60
     log_report(f"Filtered {file} by for relevance to the {args.group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
+
     return total_lines, matched_lines
 
-# Wrapper function for processing a month's files
 def filter_keyword_month(year, month, files):
+    """
+    Process all files for a specific month.
+    """
     log_report(f"Started filtering files for {year}-{month}")
     start_time = time.time()
     total_lines = 0
@@ -146,8 +135,11 @@ def filter_keyword_month(year, month, files):
     log_report(f"Completed filtering {year}-{month} in {elapsed_time:.2f} minutes")
     return total_lines, matched_lines
 
-# Process files in parallel and check for missing months/files
 def filter_keyword_parallel():
+    """
+    Process files in parallel while checking for missing month files.
+    Log warnings for missing months before processing.
+    """
     total_lines = 0
     matched_lines = 0
     max_workers = min(6, os.cpu_count())
@@ -164,19 +156,19 @@ def filter_keyword_parallel():
             for file in sorted(os.listdir(raw_data)):
                 if str(year) in file and file.endswith(".zst") and file.split('.zst')[0] not in processed_files:
                     try:
+
                         # Assuming filename format includes month as "YYYY-MM" or "YYYY-MM-..."
                         month = file.split('-')[1].split('.zst')[0]
                     except IndexError:
                         continue
                     files_by_month.setdefault(month, []).append(file)
 
-            # Check for missing months in the raw data
+            # Log a warning if some months are missing for the current year
             expected_months = [f"{m:02d}" for m in range(1, 13)]
             missing_months = [m for m in expected_months if m not in files_by_month]
             if missing_months:
-                error_msg = f"Error: Missing files for months {missing_months} in year {year}"
-                log_report(error_msg)
-                raise Exception(error_msg)
+                warning_msg = f"Warning: Missing files for months {missing_months} in year {year}"
+                log_report(warning_msg)
 
             for month, files in sorted(files_by_month.items()):
                 futures.append(executor.submit(filter_keyword_month, year, month, files))
@@ -192,9 +184,10 @@ def filter_keyword_parallel():
             year_processing_time = (time.time() - start_year_time) / 60
             log_report(f"Completed filtering year {year} in {year_processing_time:.2f} minutes")
 
-    # Check output CSV file count (subtracting the report file)
+    # TODO: Make the warning message specific to the files in years-months, not counting any .csv output file.
+    # Check the number of output CSV files, excluding the report file
     expected_file_count = len(years) * 12
-    actual_file_count = sum(1 for f in os.listdir(output_path) if f.endswith('.csv')) - 1
+    actual_file_count = sum(1 for f in os.listdir(output_path) if f.endswith('.csv') and f != output_report_filename)
     if actual_file_count != expected_file_count:
         log_report(f"Warning: Expected {expected_file_count} output files, but generated {actual_file_count}.")
 

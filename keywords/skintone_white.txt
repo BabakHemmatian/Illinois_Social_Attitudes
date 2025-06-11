@@ -30,9 +30,7 @@ Ann!
 Ann;
 Ann"
 whitest
-light-skin
 lightskin
-light skin
 fair-skin
 fair skin
 fairskin
@@ -64,7 +62,15 @@ gin jockey
 frang khi nok
 Caucasian
 cracker
-light
+light 
+light-
+light.
+light,
+light-
+light?
+light!
+light;
+light"
 Aryan
  gora
 .gora
@@ -130,7 +136,15 @@ pastyness
 too-light
 toolight
 too light
-ghost
+ghost 
+ghosts
+ghost.
+ghost,
+ghost-
+ghost:
+ghost!
+ghost;
+ghost"
 milky
 bleach
 paper
@@ -138,8 +152,6 @@ mayo
 snow
 see-through
 albino
-egg
 egg-skin
-egg skin
 eggskin
 ghastly

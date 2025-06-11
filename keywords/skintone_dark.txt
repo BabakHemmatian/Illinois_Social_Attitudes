@@ -76,7 +76,6 @@ over-cooked
 over cooked
 overcooked
 bronzer
-spray-tanned
 fake-baked
 orange
 pumpkin
@@ -86,6 +85,14 @@ muddied
 mustalainen
 maxhup
 abo 
+abo.
+abo,
+abo-
+abo?
+abo:
+abo!
+abo;
+abo" 
 abo.
 abo,
 abo-

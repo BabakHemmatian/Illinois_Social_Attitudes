@@ -10,13 +10,14 @@ import torch
 from transformers import RobertaTokenizerFast, RobertaForSequenceClassification
 import datetime
 import re
+import sys
 
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
 
 # Set relevance filtering hyperparameters
-batch_size = 320
+batch_size = 10000
 
 # Use CUDA if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -27,11 +28,14 @@ log_report(report_file_path,f"Using device: {device}")
 
 # Load relevance model
 model_path = os.path.join(dir_path.replace("code", "models"),
-                          f"filter_relevance_{args.group}_roberta_large")
+                          f"filter_relevance_{args.group}")
 tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
 model = RobertaForSequenceClassification.from_pretrained(model_path).to(device)
-model.eval()  # Set model to evaluation mode
+if torch.cuda.device_count() > 1: # if more than one GPU is available
+    model = torch.nn.DataParallel(model) # parallelize
+model.eval() # set model to evaluation mode
 
+# Define function to infer labels for a batch of documents
 def get_predictions(texts, max_length=512):
     """
     Tokenize and encode a batch of texts, then return predicted labels.
@@ -51,13 +55,13 @@ def get_predictions(texts, max_length=512):
             predictions = probs.argmax(dim=1).tolist()
     return predictions
 
-# Survey the language-filtered input files and raise an error if an expected file is missing.
+# Survey the language-filtered input files 
 language_filtered_path = os.path.join(
     dir_path.replace("code", "data"),
     "data_reddit_curated", args.group, "filtered_language"
 )
 
-# Build file_list organized by year (global mode: each file is processed separately)
+# Build file_list organized by year and raise an error if an expected file is missing 
 file_list = []
 for year in years:
     for month in range(1, 13):
@@ -94,6 +98,9 @@ def filter_relevance_file(file):
     
     # New header includes extra column "source_row"
     new_headers = headers + ["source_row"]
+    
+    # it also includes a list of matched patterns
+    keywords_idx = new_headers.index("matched patterns")
 
     # Determine resume position if output file already exists.
     if os.path.exists(output_file_path):
@@ -126,7 +133,7 @@ def filter_relevance_file(file):
         batch_lines = []
         total_lines = 0
         relevant_lines = []  # Rows to write in bulk
-
+        
         for id_, line in enumerate(reader):
             if id_ == 0:
                 continue  # Skip header row of input
@@ -138,37 +145,53 @@ def filter_relevance_file(file):
                     batch_lines.append(line + [id_])
                     total_lines += 1
 
-                    # Process in batches
+                    # Process in batches once we have batch_size rows
                     if len(batch_lines) == batch_size:
-                        predictions = get_predictions([line[2].strip().replace("\n"," ") for line in batch_lines])
+                        # 1) run predictions on the batch
+                        texts = [l[2].strip().replace("\n"," ") for l in batch_lines]
+                        predictions = get_predictions(texts)
+
+                        # 2) collect relevant rows and collapse repeats
                         for idx, pred in enumerate(predictions):
                             if pred:  # Relevant
-                                # Append the source row number to the row data
-                                relevant_lines.append(batch_lines[idx])
-                        batch_lines.clear()
-                        
+                                row = batch_lines[idx]
+                                row[keywords_idx] = ",".join(set(row[keywords_idx].split(","))) # removes repeated keywords
+                                relevant_lines.append(row)
+
+                        # 3) write out and clear buffers
                         if relevant_lines:
                             writer.writerows(relevant_lines)
                             relevant_lines.clear()
+                        batch_lines.clear()
                 else:
-                    log_report(output_file_path,f"Skipping line {id_}: insufficient columns ({len(line)} found)")
+                    log_report(output_file_path,
+                        f"Skipping line {id_}: insufficient columns ({len(line)} found)")
                     missing_lines_count += 1
             except Exception as e:
-                raise Exception(f"Error filtering {file} for relevance to the {args.group} social group: {e}")
+                raise Exception(
+                    f"Error filtering {file} for relevance to the {args.group} social group: {e}"
+                )
 
         # Process any remaining texts in the final batch
         try:
             if batch_lines:
-                predictions = get_predictions([line[2].strip().replace("\n"," ") for line in batch_lines])
+                texts = [l[2].strip().replace("\n"," ") for l in batch_lines]
+                predictions = get_predictions(texts)
+
                 for idx, pred in enumerate(predictions):
                     if pred == 1:
-                        relevant_lines.append(batch_lines[idx])
+                        row = batch_lines[idx]
+                        row[keywords_idx] = ",".join(set(row[keywords_idx].split(","))) # removes repeated keywords
+                        relevant_lines.append(row)
+
                 if relevant_lines:
                     writer.writerows(relevant_lines)
                     relevant_lines.clear()
+                
         except Exception as e:
-            raise Exception(f"Error filtering {file} for relevance to the {args.group} social group: {e}")
-
+            raise Exception(
+                f"Error filtering {file} for relevance to the {args.group} social group: {e}"
+            )
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
     log_report(report_file_path, f"Finished filtering {file} in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")

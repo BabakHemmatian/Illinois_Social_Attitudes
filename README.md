@@ -1,22 +1,24 @@
 # Illinois Social Attitudes Aggregate Corpus (ISAAC)
 This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by race, skin tone, weight, sexuality, age and ability. 
 
-The resources allow filtering Reddit content by keywords and the use of English language. 
+The resources allow:
+- Filtering Reddit content by keywords and the use of English language. 
+- Applying pre-trained neural networks to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). 
+- Generate moralization and generalized language labels for the relevance-filtered extracted texts.
 
-Pre-trained neural networks allow the automatic pruning of irrelevant content related to the social groups mentioned above. 
-
-Further resources generate moralization and generalized language labels for the relevance-filtered datasets.
-
-**Note:** The scripts were developed and tested on Windows 11. Cross-platform compatibility is not guaranteed.
-
-**Note:** filter_relevance for skin tone, as well as label_sentiment and label_localization resources are in development. 
+**Note:**
+- The scripts were developed and tested on Windows 11. Cross-platform compatibility is not guaranteed.
+- ```filter_relevance``` for skin tone, as well as ```label_sentiment``` and ```label_localization``` resources are in development. 
 
 ## Citation
 If you use this repository in your work, please cite us as follows:
-```
-**APA: **
-Hemmatian, B., Hadjarab, S., Yu, R. (2025). Illinois_Social_Attitudes [Computer software]. GitHub. [https://github.com/BabakHemmatian/Illinois_Social_Attitudes](https://github.com/BabakHemmatian/Illinois_Social_Attitudes)
 
+### APA Format
+```
+Hemmatian, B., Hadjarab, S., Yu, R. (2025). Illinois_Social_Attitudes [Computer software]. GitHub. [https://github.com/BabakHemmatian/Illinois_Social_Attitudes](https://github.com/BabakHemmatian/Illinois_Social_Attitudes)
+```
+### BibTex Format
+```
 **BibTex: **
 @misc{Hemmatian2025,
   author       = {Hemmatian, Babak and Hadjarab, Sarah and Yu, Rui},
@@ -42,7 +44,7 @@ Follow the steps [here](https://docs.conda.io/projects/conda/en/latest/user-guid
 Once finished, navigate to ```Illinois_Social_attitudes``` on the command line and enter ```conda create --name ISAAC --file req.txt```. Answer 'y' to the question. When finished, run ```conda activate ISAAC```.
 
 ### Commands
-You can now use command line arguments with ```cli.py``` in the ```scripts``` folder to make use of the resources. Use --help to receive more information about the available options. Example:
+You can now use command line arguments with ```cli.py``` in the ```scripts``` folder to make use of the resources. Use ```--help``` to receive more information about the available options. Example:
 ```
 python cli.py --resource filter_keywords --group sexuality --years 2007-2009
 ```

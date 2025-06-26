@@ -48,7 +48,7 @@ You can now use command line arguments with ```cli.py``` in the ```scripts``` fo
 ```
 python cli.py --resource filter_keywords --group sexuality --years 2007-2009
 ```
-**Note:** "filter_relevance", "label_moralization" and "label_generalization" resources are LLM-based and would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment.
+**Note:** ```filter_relevance```, ```label_moralization``` and ```label_generalization``` resources are LLM-based and would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment.
 
 The scripts may be used without any changes to recreate the ISAAC corpus. To adapt them for developing new datasets, see the section below. 
 

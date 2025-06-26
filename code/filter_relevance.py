@@ -17,7 +17,7 @@ args = get_args()
 years = parse_range(args.years)
 
 # Set relevance filtering hyperparameters
-batch_size = 10000
+batch_size = 2500
 
 # Use CUDA if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

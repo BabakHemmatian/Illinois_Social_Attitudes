@@ -1,5 +1,5 @@
 # import functions and objects
-from cli import dir_path
+from cli import get_args,dir_path
 
 # import python packages
 from sklearn.metrics import cohen_kappa_score
@@ -8,7 +8,8 @@ import csv
 import os
 
 # NOTE: this file assumes two annotators.
-group = "weight" # manually enter
+args = get_args()
+group = args.group 
 
 ratings_path = os.path.join(dir_path.replace("code","data\\data_relevance_ratings\\"))
 
@@ -16,7 +17,7 @@ ratings = {0:{},1:{}}
 
 # extract and align the two annotators' ratings
 for rater in range(2):
-    with open(ratings_path+"relevance_sample_{}_{}_rated.csv".format(group,rater),"r", encoding='utf-8',errors='ignore') as f:
+    with open(ratings_path+"relevance_sample_{}_{}.csv".format(group,rater),"r", encoding='utf-8',errors='ignore') as f:
         reader = csv.reader(f)
         for idx,line in enumerate(reader):
             if idx != 0 and len(line) > 0:

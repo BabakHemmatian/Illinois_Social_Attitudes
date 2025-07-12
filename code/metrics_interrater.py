@@ -22,7 +22,10 @@ for rater in range(2):
         for idx,line in enumerate(reader):
             if idx != 0 and len(line) > 0:
                 try:
-                    ratings[rater][int(line[0].strip())] = int(line[2].strip())
+                    if (line[2].strip().lower() == 'x'):
+                        ratings[rater][int(line[0].strip())] = 0
+                    else:
+                        ratings[rater][int(line[0].strip())] = int(line[2].strip())
                 except:
                     raise Exception(f"Error processing annotator {rater}'s response on line {idx}, with the following contents: {line}")
 

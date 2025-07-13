@@ -8,3 +8,6 @@
 
 # trained models #
 models/
+
+# pycache #
+code/__pycache__

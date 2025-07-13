@@ -69,8 +69,11 @@ for rater in range(2):
             if idx != 0 and len(line) > 0:
                 if rater == 0:
                     texts[int(line[0].strip())] = line[1].strip()
-                ratings[rater][int(line[0].strip())] = int(line[2].strip())
-
+                if (line[2].strip().lower() == 'x'):
+                        ratings[rater][int(line[0].strip())] = 0
+                else:
+                    ratings[rater][int(line[0].strip())] = int(line[2].strip())
+                
 # resolve disagreements between annotators
 labels = {}
 for id_ in ratings[0]:

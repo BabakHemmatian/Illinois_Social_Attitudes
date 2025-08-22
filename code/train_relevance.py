@@ -37,8 +37,8 @@ penalty_weight = 1 # Only matters if custom_training is True. adjust as needed (
 ## choose the model to use
 
 # NOTE: RoBERTa from 2019 is a basic, but good choice for many general use cases
-# NOTE: roberta-base is a smaller model, roberta-large is a larger model with more parameters. RoBERTa-large was overfitting to training noise, so I used the smaller version.
-model_name = "roberta-large" # or "roberta-large" for a larger model
+# NOTE: roberta-base is a smaller model, roberta-large is a larger model with more parameters. 
+model_name = "roberta-large" 
 
 ## Sets path variables
 model_path = dir_path.replace("code","models\\filter_relevance_{}_{}_{}".format(group,model_name,trial))

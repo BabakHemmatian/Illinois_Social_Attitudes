@@ -23,7 +23,7 @@ group = args.group
 ### Run settings
 
 ## Set hyperparameters for training/testing
-trial = 0 # so that we can run multiple trials of the same model with different hyperparameters. Change to a higher number to run a new trial. Set to "final" with training=False for testing evaluating the final model.
+trial = 1 # so that we can run multiple trials of the same model with different hyperparameters. Change to a higher number to run a new trial. Set to "final" with training=False for testing evaluating the final model.
 training = True # If training a new model, set this variable to True. If reloading from disk, set it to False. 
 max_length = 512 # Number of tokens allowed in a single document. Tokens further than 512 are unlikely to change the category, so the classifier will not scan them.
 train_batch_size = 8 # Batch size for training. If you have a lot of RAM (or GPU RAM, if you are running the script on a GPU), you can increase it.
@@ -37,8 +37,8 @@ penalty_weight = 1 # Only matters if custom_training is True. adjust as needed (
 ## choose the model to use
 
 # NOTE: RoBERTa from 2019 is a basic, but good choice for many general use cases
-# NOTE: roberta-base is a smaller model, roberta-large is a larger model with more parameters. 
-model_name = "roberta-large" 
+# NOTE: roberta-base is a smaller model, roberta-large is a larger model with more parameters. RoBERTa-large was overfitting to training noise, so I used the smaller version.
+model_name = "roberta-large" # or "roberta-large" for a larger model
 
 ## Sets path variables
 model_path = dir_path.replace("code","models\\filter_relevance_{}_{}_{}".format(group,model_name,trial))
@@ -165,7 +165,7 @@ test_labels=torch.from_numpy(np.array(test_labels)).type(torch.LongTensor)
 
 ## Assign different weights to the labels so that rarer ones are nonetheless prioritized during training
 weights = list(compute_class_weight('balanced', classes=np.array(np.unique(train_labels)), y=np.array(train_labels)))
-# weights[1] = weights[1] * 1.1 # increase the weight of the "Relevant" class to more strongly account for its rarity
+weights[1] = weights[1] * .8 # increase or decrease the weight of the "Relevant" class to more strongly account for rarity or over-emphasis
 
 print(f"Class weights to account for imbalanced training data: {weights}")
 
@@ -331,7 +331,7 @@ with open("test_results_{}_{}.csv".format(model_name,trial),"w",encoding='utf-8'
 ## Evaluate performance on the test set
 
 #NOTE: Since the sklearn functions for precision, recall and f1 did not work properly, I wrote a short script in utils.py that calculates them from scratch
-results = f1_calculator([int(label) for label in test_labels],[int(pred) for pred in predictions])
+precision,recall,f1 = f1_calculator([int(label) for label in test_labels],[int(pred) for pred in predictions])
 
 # Save evaluation performance 
 with open("{}/test_results_{}_{}_{}.txt".format(model_path,group,model_name,trial),"a+",encoding='utf-8',errors='ignore') as f:
@@ -345,7 +345,9 @@ with open("{}/test_results_{}_{}_{}.txt".format(model_path,group,model_name,tria
     f.write("threshold: {}\n".format(threshold))
     f.write("Number of epochs: {}\n".format(epochs))
     f.write("Performance on the test set:\n")
-    f.write("Per Class: {}\n".format(results['per_class']))
-    f.write("Macro Average: {}\n".format(results['macro_avg']))
-    print("Per Class: {}".format(results['per_class']))
-    print("Macro Average: {}".format(results['macro_avg']))
+    f.write("Precision: {}\n".format(precision))
+    f.write("Recall: {}\n".format(recall))
+    f.write("F1: {}\n".format(f1))
+    print("Precision: {}\n".format(precision))
+    print("Recall: {}\n".format(recall))
+    print("F1: {}\n".format(f1))

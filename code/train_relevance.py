@@ -23,12 +23,12 @@ group = args.group
 ### Run settings
 
 ## Set hyperparameters for training/testing
-trial = 1 # so that we can run multiple trials of the same model with different hyperparameters. Change to a higher number to run a new trial. Set to "final" with training=False for testing evaluating the final model.
-training = True # If training a new model, set this variable to True. If reloading from disk, set it to False. 
+trial = 2 # so that we can run multiple trials of the same model with different hyperparameters. Change to a higher number to run a new trial. Set to "final" with training=False for testing evaluating the final model.
+training = False # If training a new model, set this variable to True. If reloading from disk, set it to False. 
 max_length = 512 # Number of tokens allowed in a single document. Tokens further than 512 are unlikely to change the category, so the classifier will not scan them.
 train_batch_size = 8 # Batch size for training. If you have a lot of RAM (or GPU RAM, if you are running the script on a GPU), you can increase it.
 thresholding = False # If True, the model will use a confidence threshold (set below) to determine the class of a document. If False, it will always return the most probable class.
-threshold_class = 0 # the class that needs a probability passing the threshold (set below) to be picked as the answer. Only matters if thresholding = True.
+threshold_class = 1 # the class that needs a probability passing the threshold (set below) to be picked as the answer. Only matters if thresholding = True.
 threshold = 0.6 # The confidence threshold for the rarest class. If the model's confidence in a class is below this value, it will not return that class. Only matters if thresholding=True and the value is greater than >.50 given the two main labels. 
 epochs = 1 # Number of times the model weights are adjusted by going through the entire training set during training.
 custom_training = False # If True, the model will use a custom training loop that penalizes certain types of mistakes more heavily. If False, it will use standard training.
@@ -38,7 +38,7 @@ penalty_weight = 1 # Only matters if custom_training is True. adjust as needed (
 
 # NOTE: RoBERTa from 2019 is a basic, but good choice for many general use cases
 # NOTE: roberta-base is a smaller model, roberta-large is a larger model with more parameters. RoBERTa-large was overfitting to training noise, so I used the smaller version.
-model_name = "roberta-large" # or "roberta-large" for a larger model
+model_name = "roberta-base" # or "roberta-large" for a larger model
 
 ## Sets path variables
 model_path = dir_path.replace("code","models\\filter_relevance_{}_{}_{}".format(group,model_name,trial))
@@ -165,7 +165,7 @@ test_labels=torch.from_numpy(np.array(test_labels)).type(torch.LongTensor)
 
 ## Assign different weights to the labels so that rarer ones are nonetheless prioritized during training
 weights = list(compute_class_weight('balanced', classes=np.array(np.unique(train_labels)), y=np.array(train_labels)))
-weights[1] = weights[1] * .8 # increase or decrease the weight of the "Relevant" class to more strongly account for rarity or over-emphasis
+weights[1] = weights[1] * .6 # increase or decrease the weight of the "Relevant" class to more strongly account for rarity or over-emphasis
 
 print(f"Class weights to account for imbalanced training data: {weights}")
 
@@ -335,7 +335,7 @@ precision,recall,f1 = f1_calculator([int(label) for label in test_labels],[int(p
 
 # Save evaluation performance 
 with open("{}/test_results_{}_{}_{}.txt".format(model_path,group,model_name,trial),"a+",encoding='utf-8',errors='ignore') as f:
-    f.write("***{}\n***".format(datetime.now()))
+    f.write("***{}***\n".format(datetime.now()))
     f.write("training batch size: {}\n".format(train_batch_size))
     f.write("class weights: {}\n".format(weights))
     f.write("custom training: {}\n".format(custom_training))

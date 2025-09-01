@@ -3,7 +3,6 @@ from cli import get_args, dir_path
 from utils import dataset_split,split_dataset_to_file,split_dataset_from_file,f1_calculator
 
 # Import needed python packages and functions
-import sys
 import torch
 from transformers.file_utils import is_torch_available
 from transformers import RobertaTokenizerFast, RobertaForSequenceClassification, Trainer, TrainingArguments
@@ -232,8 +231,8 @@ if not custom_training: # if simply aligning weights with rarity in training dat
             loss = loss_fct(logits.view(-1, self.model.config.num_labels), labels.view(-1))
             return (loss, outputs) if return_outputs else loss
 else: # if using a trainer that penalizes when model predicts 0 but label is 1
-    class WeightedTrainer(Trainer,penalty_weight=penalty_weight):
-        def compute_loss(self, model, inputs, num_items_in_batch=None, return_outputs=False):
+    class WeightedTrainer(Trainer):
+        def compute_loss(self, model, inputs, num_items_in_batch=None, return_outputs=False, penalty_weight=penalty_weight):
             labels = inputs.get("labels")
             outputs = model(**inputs)
             logits = outputs.get("logits")
@@ -248,7 +247,6 @@ else: # if using a trainer that penalizes when model predicts 0 but label is 1
             # Confusion penalty: penalize when model predicts 0 but label is 1
             confusion_mask_1_to_0 = (labels == 1) & (preds == 0)
 
-            penalty_weight = penalty_weight  # adjust as needed (e.g., 0.5, 1.0, 2.0)
             penalty = penalty_weight * confusion_mask_1_to_0.sum().float()
 
             # Final loss
@@ -308,10 +306,10 @@ def get_prediction(text, threshold_class=threshold_class, threshold=threshold, u
     probs = outputs[0].softmax(1)[0]  # (2,) for binary classification
 
     # Apply thresholding: only allow class 0 if confident enough
-    if use_thresholding and probs[threshold_class] > threshold:
+    if thresholding and probs[threshold_class] > threshold:
         return threshold_class
     else:
-        if use_thresholding:
+        if thresholding:
             # Mask out class 0 if it's not confident enough
             masked_probs = probs.clone()
             masked_probs[threshold_class] = -1
@@ -348,6 +346,6 @@ with open("{}/test_results_{}_{}_{}.txt".format(model_path,group,model_name,tria
     f.write("Precision: {}\n".format(precision))
     f.write("Recall: {}\n".format(recall))
     f.write("F1: {}\n".format(f1))
-    print("Precision: {}\n".format(precision))
-    print("Recall: {}\n".format(recall))
-    print("F1: {}\n".format(f1))
+    print("Precision: {}".format(precision))
+    print("Recall: {}".format(recall))
+    print("F1: {}".format(f1))

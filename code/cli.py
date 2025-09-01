@@ -19,6 +19,7 @@ def get_args(argv=None):
         'filter_relevance',
         'filter_sample'
         'label_moralization',
+        'label_sentiment',
         'label_generalization'
     ]
     
@@ -28,7 +29,7 @@ def get_args(argv=None):
         choices=[
             'filter_keywords', 'filter_language', 'filter_sample',
             'filter_relevance', 'metrics_interrater', 'label_moralization',
-            'label_generalization','train_relevance'
+            'label_generalization','label_sentiment','train_relevance'
         ],
         required=True,
         help="Indicate the type of processing needed. Labeling and metrics options require the output of filtering steps for the indicated years. Filtering should be done with consecutive commands in order: keywords, language, then relevance."

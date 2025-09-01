@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, headers, groups, log_report, log_error
+from utils import parse_range, headers, groups, log_report
 
 # import Python packages
 import os
@@ -10,11 +10,11 @@ import torch
 from transformers import RobertaTokenizerFast, RobertaForSequenceClassification
 import datetime
 import re
-import sys
 
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
+group = args.group
 
 # Set relevance filtering hyperparameters
 batch_size = 2500
@@ -23,12 +23,12 @@ batch_size = 2500
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # prepare the report file
-report_file_path = os.path.join(dir_path, f"Report_FilterRelevance.csv")
+report_file_path = os.path.join(dir_path, f"report_filter_relevance.csv")
 log_report(report_file_path,f"Using device: {device}")
 
 # Load relevance model
 model_path = os.path.join(dir_path.replace("code", "models"),
-                          f"filter_relevance_{args.group}")
+                          f"filter_relevance_{group}")
 tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
 model = RobertaForSequenceClassification.from_pretrained(model_path).to(device)
 if torch.cuda.device_count() > 1: # if more than one GPU is available
@@ -58,7 +58,7 @@ def get_predictions(texts, max_length=512):
 # Survey the language-filtered input files 
 language_filtered_path = os.path.join(
     dir_path.replace("code", "data"),
-    "data_reddit_curated", args.group, "filtered_language"
+    "data_reddit_curated", group, "filtered_language"
 )
 
 # Build file_list organized by year and raise an error if an expected file is missing 
@@ -70,11 +70,11 @@ for year in years:
         if os.path.exists(path_):
             file_list.append(path_)
         else:
-            raise Exception("Missing language-filtered file for year {}, month {}".format(year, month))
+            raise Exception("Missing language-filtered file for the {} social group from year {}, month {}".format(group, year, month))
 
 # Prepare and survey the output path for relevance filtering
 output_path = os.path.join(dir_path.replace("code", "data"),
-                           "data_reddit_curated", args.group, "filtered_relevance")
+                           "data_reddit_curated", group, "filtered_relevance")
 os.makedirs(output_path, exist_ok=True)
 
 # For each language-filtered file, we add an extra column "source_row" to record the input file row number.
@@ -89,7 +89,7 @@ def filter_relevance_file(file):
             missing_writer = csv.writer(missing_file)
             missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
 
-    log_report(report_file_path, f"Started filtering {file} for relevance to the {args.group} social group.")
+    log_report(report_file_path, f"Started filtering {file} for relevance to the {group} social group.")
     start_time = time.time()
     
     # Build output file path using the relative part from the input file.
@@ -169,7 +169,7 @@ def filter_relevance_file(file):
                     missing_lines_count += 1
             except Exception as e:
                 raise Exception(
-                    f"Error filtering {file} for relevance to the {args.group} social group: {e}"
+                    f"Error filtering {file} for relevance to the {group} social group: {e}"
                 )
 
         # Process any remaining texts in the final batch
@@ -190,7 +190,7 @@ def filter_relevance_file(file):
                 
         except Exception as e:
             raise Exception(
-                f"Error filtering {file} for relevance to the {args.group} social group: {e}"
+                f"Error filtering {file} for relevance to the {group} social group: {e}"
             )
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
@@ -216,7 +216,7 @@ for file in file_list:
     overall_docs += filter_relevance_file(file)
 
 overall_elapsed = (time.time() - start_time) / 60
-log_report(report_file_path, f"Relevance filtering for the {args.group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+log_report(report_file_path, f"Relevance filtering for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
 
 ##########################################
 # ----- Check for missing monthly outputs -----
@@ -236,7 +236,7 @@ for year in years:
 # ----- Aggregate overall statistics and save final summary report -----
 final_report = [
     ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
-    [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), args.group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
+    [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
 ]
 final_report_file = os.path.join(output_path, "Final_Report_FilterRelevance.csv")
 with open(final_report_file, "w", encoding="utf-8", newline="") as rf:

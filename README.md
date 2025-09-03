@@ -52,22 +52,33 @@ You can now use command line arguments with ```cli.py``` in the ```scripts``` fo
 ```
 python cli.py --resource filter_keywords --group sexuality --years 2007-2009
 ```
-This command will use the relevant keyword list in this repository to identify documents in the complete Pushshift dataset that are potentially related to sexuality and come from 2007-2009. 
+This example command will use the appropriate keyword lists in this repository to identify documents in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
+
+
 
 **Note:** ```filter_relevance```, ```label_moralization```, ```label_sentiment``` and ```label_generalization``` resources are LLM-based and would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment.
 
-The scripts may be used without any changes to recreate the ISAAC corpus. To adapt them for developing new datasets, see the section below. 
+**Note:** The scripts may be used without any changes to recreate the ISAAC corpus. For that purpose, the code base currently assumes the following order in the use of resources for a given social group and year range:
+
+1. ```filter_keywords```
+2. ```filter_language```
+3. ```filter_relevance```
+4. ```label_moralization```
+5. ```label_sentiment```
+6. ```label_generalization```
+
+If you plan instead to adapt the code for developing new datasets, see the section below. 
 
 ## Adaptations
 
 ### Adjusting Social Groups and Related Keywords
 The current list of social groups and their binary subgroups are found in ```scripts/utils.py```. 
 
-To search the entirety of Reddit for posts potentially relevant to your dimension of interest beyond those listed, change the entries of the ```utils.py``` list and the corresponding ```--group``` argument in ```cli.py```. Then, add correctly formatted and named text files to the ```keywords``` folder that contain words helpful for identifying potentially relevant content for your use case. See the existing files for examples to follow. This code base uses ```pyahocorasick``` for extremely fast recognition of dozens of keywords in billions of posts. This package allows only alphanumeric and punctuation characters. Choose your keyword format accordingly.
+To search the entirety of Reddit for posts potentially relevant to your dimension of interest beyond those listed, change the key-value pairs for the groups variable in ```utils.py``` and the choices for the corresponding ```--group``` argument in ```cli.py```. Then, add correctly formatted and named text files to the ```keywords``` folder that contain words helpful for identifying potentially relevant content for your use case. See the existing files for examples to follow. This code base uses ```pyahocorasick``` for extremely fast recognition of dozens of keywords in billions of posts. This package allows only alphanumeric and punctuation characters. Choose your keyword format accordingly. Note that the resource scripts can be easily adjusted to allow for different orders of resource use or the application of new classification models (see below). 
 
 ### Training New Relevance Classifiers
 The ```filter_sample``` resource can be used to extract stratified samples from keyword- and language-filtered documents to be annotated for the training of new relevance classifiers. The script assumes two annotators and by default generates 1500 documents per rater equally distributed across the indicated years. 
 
-Use the ```metrics_interrater``` resource with the correct ```--group``` argument. No ```years``` argument is needed for this resource.
+Use the ```metrics_interrater``` resource with the correct ```--group``` argument to evaluate interrater agreement. No ```years``` argument is needed for this resource.
 
-Once sufficient interrater agreement is reached, use the ```train_relevance``` resource to train new relevance filtering neural networks. Adjust the social ```group``` argument to your target. No ```years``` argument is needed.
+Once sufficient interrater agreement is reached, use the ```train_relevance``` resource to train new relevance filtering neural networks. Adjust the social ```group``` argument to your target and change the training hyperparameters as needed. No ```years``` argument is required for this resource.

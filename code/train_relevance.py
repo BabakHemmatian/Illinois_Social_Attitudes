@@ -26,7 +26,7 @@ trial = 2 # so that we can run multiple trials of the same model with different 
 training = False # If training a new model, set this variable to True. If reloading from disk, set it to False. 
 max_length = 512 # Number of tokens allowed in a single document. Tokens further than 512 are unlikely to change the category, so the classifier will not scan them.
 train_batch_size = 8 # Batch size for training. If you have a lot of RAM (or GPU RAM, if you are running the script on a GPU), you can increase it.
-thresholding = False # If True, the model will use a confidence threshold (set below) to determine the class of a document. If False, it will always return the most probable class.
+thresholding = True # If True, the model will use a confidence threshold (set below) to determine the class of a document. If False, it will always return the most probable class.
 threshold_class = 1 # the class that needs a probability passing the threshold (set below) to be picked as the answer. Only matters if thresholding = True.
 threshold = 0.6 # The confidence threshold for the rarest class. If the model's confidence in a class is below this value, it will not return that class. Only matters if thresholding=True and the value is greater than >.50 given the two main labels. 
 epochs = 1 # Number of times the model weights are adjusted by going through the entire training set during training.

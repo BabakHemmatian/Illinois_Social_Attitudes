@@ -291,7 +291,7 @@ else: # load a trained model from disk for evaluation if not training
 # defines a function that predicts the label for a given input text.
 # NOTE: Can apply a confidence threshold for picking a particular class.
 
-def get_prediction(text, threshold_class=threshold_class, threshold=threshold, use_thresholding=True): 
+def get_prediction(text, threshold_class=threshold_class, threshold=threshold, thresholding=thresholding): 
     # Tokenize
     inputs = tokenizer(
         text,

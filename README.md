@@ -54,8 +54,6 @@ python cli.py --resource filter_keywords --group sexuality --years 2007-2009
 ```
 This example command will use the appropriate keyword lists in this repository to identify documents in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
 
-
-
 **Note:** ```filter_relevance```, ```label_moralization```, ```label_sentiment``` and ```label_generalization``` resources are LLM-based and would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment.
 
 **Note:** The scripts may be used without any changes to recreate the ISAAC corpus. For that purpose, the code base currently assumes the following order in the use of resources for a given social group and year range:
@@ -66,6 +64,8 @@ This example command will use the appropriate keyword lists in this repository t
 4. ```label_moralization```
 5. ```label_sentiment```
 6. ```label_generalization```
+
+**Note:** If you are using ```label_sentiment``` for the first time, enter ```python -m spacy download en_core_web_sm``` in the command terminal and run ```stanza.download('en')``` after importing ```stanza``` in a Python interpreter. Only then use ```cli.py``` to call the resource. This downloads the English language models for the SpaCy and Stanza packages. 
 
 If you plan instead to adapt the code for developing new datasets, see the section below. 
 

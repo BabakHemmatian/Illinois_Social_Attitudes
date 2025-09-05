@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, headers, groups, log_report
+from utils import parse_range, headers, log_report
 
 # import Python packages
 import os
@@ -10,6 +10,7 @@ import torch
 from transformers import BertTokenizerFast, BertForSequenceClassification
 import datetime
 import re
+import sys
 
 # Extract and transform CLI arguments 
 args = get_args()
@@ -108,7 +109,7 @@ def label_moralization_file(file):
             rows = list(reader_existing)
             if len(rows) > 1:
                 try:
-                    last_processed = int(rows[-1][-1])
+                    last_processed = int(rows[-1][8])
                 except:
                     last_processed = 0
             else:
@@ -197,17 +198,19 @@ def label_moralization_file(file):
             missing_writer = csv.writer(missing_file)
             timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             missing_writer.writerow([file, missing_lines_count, timestamp])
-    
+
     return total_lines
 
 ##########################################
 # Main execution: process each file and aggregate stats
 ##########################################
 start_time = time.time()
+
 overall_docs = 0
 
 # Process each file from the file_list (global mode)
 for file in file_list:
+        
     overall_docs += label_moralization_file(file)
 
 overall_elapsed = (time.time() - start_time) / 60
@@ -233,7 +236,7 @@ final_report = [
     ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
     [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
 ]
-final_report_file = os.path.join(output_path, "final_report_label_relevance.csv")
+final_report_file = os.path.join(output_path, "final_report_label_moralization.csv")
 with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
     writer = csv.writer(rf)
     writer.writerows(final_report)

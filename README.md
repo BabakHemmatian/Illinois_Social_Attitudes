@@ -4,7 +4,7 @@ This repository contains tools for the development and evaluation of the **Illin
 The resources allow:
 - Filtering Reddit content by keywords and the use of English language. 
 - Applying pre-trained neural networks to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). 
-- Generating moralization, sentiment and generalized language labels for the relevance-filtered extracted texts.
+- Generating generalized language (e.g., genericity), moralization, sentiment and emotion labels for the relevance-filtered extracted texts.
 
 **Note:**
 - The scripts were developed and tested on Windows 11. Cross-platform compatibility is not guaranteed.
@@ -64,8 +64,9 @@ This example command will use the appropriate keyword lists in this repository t
 4. ```label_moralization```
 5. ```label_sentiment```
 6. ```label_generalization```
+7. ```label_emotion```
 
-**Note:** If you are using ```label_sentiment``` for the first time, enter ```python -m spacy download en_core_web_sm``` in the command terminal and run ```stanza.download('en')``` after importing ```stanza``` in a Python interpreter. Only then use ```cli.py``` to call the resource. This downloads the English language models for the SpaCy and Stanza packages. 
+**Note:** If you are using ```label_sentiment``` for the first time, perform the following steps before running the script: Enter ```python -m spacy download en_core_web_sm``` in the command terminal and run ```stanza.download('en')``` after importing ```stanza``` in a Python interpreter. Only then use ```cli.py``` to call the resource. 
 
 If you plan instead to adapt the code for developing new datasets, see the section below. 
 

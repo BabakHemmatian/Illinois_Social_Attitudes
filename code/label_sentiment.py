@@ -10,10 +10,6 @@ import numpy as np
 import time
 import datetime
 import re
-import sys
-
-# NOTE: if running for the first time, uncomment the next line to download stanza's English language model 
-# stanza.download('en')
 
 # note the tool use order in the readme
 
@@ -56,6 +52,8 @@ output_path = os.path.join(dir_path.replace("code", "data"),
                            "data_reddit_curated", group, "labeled_sentiment")
 os.makedirs(output_path, exist_ok=True)
 
+# TODO: Fix last_processed
+
 def label_sentiment_file(file):
     # Initialize missing lines count
     missing_lines_count = 0
@@ -82,7 +80,7 @@ def label_sentiment_file(file):
             rows = list(reader_existing)
             if len(rows) > 1:
                 try:
-                    last_processed = int(rows[-1][-1])
+                    last_processed = int(rows[-1][8])
                 except:
                     last_processed = 0
             else:

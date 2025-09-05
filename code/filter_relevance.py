@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, headers, groups, log_report
+from utils import parse_range, headers, log_report
 
 # import Python packages
 import os

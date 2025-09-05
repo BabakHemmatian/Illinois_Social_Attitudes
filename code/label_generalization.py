@@ -304,7 +304,7 @@ def label_generalization_file(file):
                                            "Sentiment_TextBlob_Polarity","Sentiment_TextBlob_Subjectivity",
                                            "individual labels","genericity: generic count","genericity: specific count",
                                            "eventivity: stative count","eventivity: dynamic count",
-                                           "boundedness: static count","boundedness: episodic count","habitual count","NA count"
+                                           "boundedness: static count","boundedness: episodic count","habitual count","NA count",
                                            "genericity:  proportion generic","genericity: proportion specific","eventivity: proportion stative","eventivity: proportion dynamic",
                                            "boundedness: proportion static","boundedness: proportion episodic","proportion habitual","proportion NA"]
             writer.writerow(new_headers)

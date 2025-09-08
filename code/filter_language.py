@@ -9,6 +9,7 @@ import csv
 import time
 import re
 from datetime import datetime  # For timestamping
+import traceback
 
 # Increase the field size limit to handle larger fields
 csv.field_size_limit(2**31 - 1)
@@ -90,7 +91,9 @@ def filter_language_file(file):
             # Return counters for overall statistics
             return filtered_counter, passed_counter, error_counter
     except Exception as e:
-        raise Exception(f"Error in the language filtering of {file}: {e}")
+        # Capture full traceback as string
+        tb_str = traceback.format_exc()
+        log_report(report_file_path, f"Fatal error during processing:\n{tb_str}")
 
 if __name__ == "__main__":
     overall_start_time = time.time()

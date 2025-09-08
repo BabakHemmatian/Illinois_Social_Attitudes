@@ -163,7 +163,7 @@ valid_labels=torch.from_numpy(np.array(valid_labels)).type(torch.LongTensor)
 test_labels=torch.from_numpy(np.array(test_labels)).type(torch.LongTensor)
 
 ## Assign different weights to the labels so that rarer ones are nonetheless prioritized during training
-weights = list(compute_class_weight('balanced', classes=np.array(np.unique(train_labels)), y=np.array(train_labels)))
+weights = list(compute_class_weight('balanced', classes=np.asarray(np.unique(train_labels)), y=np.asarray(train_labels)))
 weights[1] = weights[1] * .6 # increase or decrease the weight of the "Relevant" class to more strongly account for rarity or over-emphasis
 
 print(f"Class weights to account for imbalanced training data: {weights}")
@@ -190,7 +190,6 @@ class relevance_data(torch.utils.data.Dataset):
 # convert our tokenized data into a torch Dataset
 train_dataset = relevance_data(train_encodings, train_labels)
 valid_dataset = relevance_data(valid_encodings, valid_labels)
-test_dataset = relevance_data(test_encodings, test_labels)
 
 ### train or load the model
 
@@ -320,7 +319,7 @@ def get_prediction(text, threshold_class=threshold_class, threshold=threshold, t
 ## Get the labels for each of the test set documents and write the results of the test to disk
 
 predictions = [get_prediction(text) for text in test_texts]
-with open("test_results_{}_{}.csv".format(model_name,trial),"w",encoding='utf-8',errors='ignore',newline="") as f:
+with open("{}/test_results_{}_{}_{}.csv".format(model_path,group,model_name,trial),"w",encoding='utf-8',errors='ignore',newline="") as f:
     writer = csv.writer(f)
     writer.writerow(["text","true_label","predicted_label"])
     for text,true_label,predicted_label in zip(test_texts,test_labels,predictions):

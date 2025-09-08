@@ -6,7 +6,6 @@ from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor
 import zstandard
 import io
-import sys
 import ahocorasick
 
 # Import functions and objects from local modules

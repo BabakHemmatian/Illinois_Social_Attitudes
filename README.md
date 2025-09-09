@@ -46,11 +46,11 @@ Once finished, navigate to ```Illinois_Social_attitudes``` on the command line a
 After finishing the installation, run the following code in the terminal to download the needed SpaCy English language model: ```python -m spacy download en_core_web_sm```.
 
 ### Commands
-You can now use command line arguments with ```cli.py``` in the ```scripts``` folder to make use of the resources. Use ```--help``` to receive more information about the available options. 
+You can now use command line arguments to make use of the resources. Use ```--help``` to receive more information about the available options. 
 
 **Example:**
 ```
-python cli.py --resource filter_keywords --group sexuality --years 2007-2009
+python ./code/cli.py --resource filter_keywords --group sexuality --years 2007-2009
 ```
 This example command will use the appropriate keyword lists in this repository to identify documents in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
 

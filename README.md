@@ -8,7 +8,7 @@ The resources allow:
 
 **Note:**
 - The scripts were developed and tested on Windows 11. Cross-platform compatibility is not guaranteed.
-- The ```label_localization``` resource, identifying the country and the state were a user likely resides, is in development. 
+- The ```label_localization``` resource, identifying the country and the state where a user likely resides, is in development. 
 
 ## Citation
 If you use this repository in your work, please cite us as follows:

@@ -8,7 +8,7 @@ The resources allow:
 
 **Note:**
 - The scripts were developed and tested on Windows 11. Cross-platform compatibility is not guaranteed.
-- ```filter_relevance``` for skin tone, as well as ```label_localization``` resources are in development. 
+- The ```label_localization``` resource, identifying the country and the state were a user likely resides, is in development. 
 
 ## Citation
 If you use this repository in your work, please cite us as follows:
@@ -43,8 +43,6 @@ Follow the steps [here](https://docs.conda.io/projects/conda/en/latest/user-guid
 
 Once finished, navigate to ```Illinois_Social_attitudes``` on the command line and enter ```conda create --name ISAAC python=3.12 pip```. Answer 'y' to the question. When finished, run ```conda activate ISAAC```. Once the environment is activated, run the following command to install the necessary packages: ```pip install -r req.txt```. 
 
-After finishing the installation, run the following code in the terminal to download the needed SpaCy English language model: ```python -m spacy download en_core_web_sm```.
-
 ### Commands
 You can now use command line arguments to make use of the resources. Use ```--help``` to receive more information about the available options. 
 
@@ -52,9 +50,9 @@ You can now use command line arguments to make use of the resources. Use ```--he
 ```
 python ./code/cli.py --resource filter_keywords --group sexuality --years 2007-2009
 ```
-This example command will use the appropriate keyword lists in this repository to identify documents in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
+This example command will use the appropriate keyword lists from this repository to identify documents in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
 
-**Note:** ```filter_relevance```, ```label_moralization```, ```label_sentiment``` and ```label_generalization``` resources are LLM-based and would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment.
+**Note:** ```filter_relevance```, ```label_moralization```, ```label_sentiment```, ```label_generalization``` and ```label_emotion``` resources are LLM-based and would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment. 
 
 **Note:** The scripts may be used without any changes to recreate the ISAAC corpus. For that purpose, the code base currently assumes the following order in the use of resources for a given social group and year range:
 

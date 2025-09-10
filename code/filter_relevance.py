@@ -18,6 +18,13 @@ group = args.group
 
 # Set relevance filtering hyperparameters
 batch_size = 2500
+max_length = 512
+if group == "skin_tone":
+    thresholding = True # If True, the model will use a confidence threshold (set below) to determine the class of a document. If False, it will always return the most probable class.
+else:
+    thresholding = False # thresholding is only applied to the filter_relevance model for skin_tone
+threshold_class = 1 # the class that needs a probability passing the threshold (set below) to be picked as the answer. Only matters if thresholding = True.
+threshold = 0.6 # The confidence threshold for the rarest class. If the model's confidence in a class is below this value, it will not return that class. Only matters if thresholding=True and the value is greater than >.50 given the two main labels. 
 
 # Use CUDA if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -36,10 +43,12 @@ if torch.cuda.device_count() > 1: # if more than one GPU is available
 model.eval() # set model to evaluation mode
 
 # Define function to infer labels for a batch of documents
-def get_predictions(texts, max_length=512):
-    """
-    Tokenize and encode a batch of texts, then return predicted labels.
-    """
+def get_predictions(texts, threshold_class=threshold_class, threshold=threshold, thresholding=thresholding):
+    # Ensure texts is a list
+    if isinstance(texts, str):
+        texts = [texts]
+
+    # Tokenize batch
     inputs = tokenizer(
         texts,
         padding=True,
@@ -47,12 +56,23 @@ def get_predictions(texts, max_length=512):
         max_length=max_length,
         return_tensors="pt"
     ).to(device)
-    
-    with torch.no_grad():
-        with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
-            outputs = model(**inputs)
-            probs = torch.nn.functional.softmax(outputs.logits, dim=1)
-            predictions = probs.argmax(dim=1).tolist()
+
+    # Model inference
+    outputs = model(**inputs)
+    probs = outputs[0].softmax(1)  # shape: (batch_size, num_classes)
+
+    predictions = []
+    for prob in probs:
+        if thresholding and prob[threshold_class] > threshold:
+            predictions.append(threshold_class)
+        else:
+            if thresholding:
+                masked_probs = prob.clone()
+                masked_probs[threshold_class] = -1
+                predictions.append(masked_probs.argmax().item())
+            else:
+                predictions.append(prob.argmax().item())
+
     return predictions
 
 # Survey the language-filtered input files 

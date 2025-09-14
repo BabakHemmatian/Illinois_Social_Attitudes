@@ -1,14 +1,21 @@
 # Illinois Social Attitudes Aggregate Corpus (ISAAC)
-This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by race, skin tone, weight, sexuality, age and ability. 
+This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by the following distinctions:
+1. sexuality (gay-straight; 277,663,267 comments)
+2. race (Black-White; 184,684,200 comments)
+3. age (young-old; 399,008,279)
+4. ability (abled-disabled; 324,494,095)
+5. weight (fat-thin; 299,007,486)
+6. skin_tone (dark-light; in development)
+**Total Corpus Size: 1,484,857,327**
 
 The resources allow:
 - Filtering Reddit content by keywords and the use of English language. 
-- Applying pre-trained neural networks to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). 
+- Applying pre-trained neural networks to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). The already-filtered data can be found [here](https://drive.google.com/drive/u/0/folders/15luTEiHnt8BnnHjYmQnS__DSUt3lODjr).
 - Generating generalized language (e.g., genericity), moralization, sentiment and emotion labels for the relevance-filtered extracted texts.
 
 **Note:**
 - The scripts were developed and tested on Windows 11. Cross-platform compatibility is not guaranteed.
-- The ```label_localization``` resource, identifying the country and the state where a user likely resides, is in development. 
+- The ```label_localization``` resource, identifying the country and the state where a user likely resides, is in development.
 
 ## Citation
 If you use this repository in your work, please cite us as follows:

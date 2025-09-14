@@ -6,6 +6,7 @@ This repository contains tools for the development and evaluation of the **Illin
 4. ability (abled-disabled; 324,494,095)
 5. weight (fat-thin; 299,007,486)
 6. skin_tone (dark-light; in development)
+
 **Total Corpus Size: 1,484,857,327**
 
 The resources allow:

@@ -75,7 +75,7 @@ if __name__ == "__main__":
         os.system(f'sbatch --export=ALL,{slurm_vars} slurm.sh')
     else:
         # Construct CLI call conditionally
-        cmd = f'python {args.resource}.py -r {args.resource} -g {args.group}'
+        cmd = f'python ./code/{args.resource}.py -r {args.resource} -g {args.group}'
         if args.years:
             cmd += f' -y {args.years}'
         os.system(cmd)

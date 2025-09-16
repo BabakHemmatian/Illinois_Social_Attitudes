@@ -19,9 +19,9 @@ from copy import deepcopy
 args = get_args()
 years = parse_range(args.years)
 group = args.group
+batch_size = args.batchsize
 
 # Set moralization labeling hyperparameters
-batch_size = 1000
 max_length=512
 
 # Use CUDA if available

@@ -22,13 +22,11 @@ import re
 args = get_args()
 years = parse_range(args.years)
 group = args.group
+batch_size = args.batchsize
 
 # prepare the report file
 report_file_path = os.path.join(dir_path, f"report_label_sentiment.csv")
 log_report(report_file_path)
-
-# Set moralization labeling hyperparameters
-batch_size = 2500
 
 # Survey the relevance-filtered input files 
 moralization_labeled_path = os.path.join(

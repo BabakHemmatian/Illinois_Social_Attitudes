@@ -96,7 +96,8 @@ if __name__ == "__main__":
             slurm_vars += f",years={args.years}"
         if args.batchsize:
             slurm_vars += f",batchsize={args.batchsize}"
-        os.system(f'sbatch --export=ALL,{slurm_vars} slurm.sh')
+        slurm_script = os.path.join(dir_path, "slurm.sh")
+        os.system(f'sbatch --export=ALL,{slurm_vars} {slurm_script}')
     else:
         # Construct CLI call conditionally
         cmd = f'python ./code/{args.resource}.py -r {args.resource} -g {args.group}'
@@ -105,3 +106,4 @@ if __name__ == "__main__":
         if args.batchsize:
             cmd += f' -b {args.batchsize}'
         os.system(cmd)
+

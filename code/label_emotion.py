@@ -16,9 +16,7 @@ import sys
 args = get_args()
 years = parse_range(args.years)
 group = args.group
-
-# Set emotion labeling hyperparameters
-batch_size = 1000
+batch_size = args.batchsize
 
 # Use CUDA if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -29,7 +29,8 @@ def get_args(argv=None):
         'filter_relevance',
         'label_moralization',
         'label_generalization',
-        'label_emotion'
+        'label_emotion',
+        'label_sentiment'
     ]
     
     argparser.add_argument(
@@ -58,7 +59,7 @@ def get_args(argv=None):
     argparser.add_argument(
         '-b', '--batchsize',
         type=int,
-        help="Enter an integer for the neural network batch size. Required for filter_relevance, label_moralization, label_generalization, and label_emotion.",
+        help="Enter an integer for the neural network batch size. Required for filter_relevance and all the labeling resources.",
     )
     argparser.add_argument(
         '-s', '--slurm',

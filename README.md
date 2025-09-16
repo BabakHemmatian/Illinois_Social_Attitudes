@@ -60,7 +60,9 @@ python ./code/cli.py --resource filter_keywords --group sexuality --years 2007-2
 ```
 This example command will use the appropriate keyword lists from this repository to identify documents in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
 
-**Note:** ```filter_relevance```, ```label_moralization```, ```label_sentiment```, ```label_generalization``` and ```label_emotion``` resources are LLM-based and would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment. The default batch size is 2500. Depending on your available RAM and GPU RAM, you may want to adjust the batch size parameter when calling the resource.
+**Note:** ```filter_relevance```, ```label_moralization```, ```label_sentiment```, ```label_generalization``` and ```label_emotion``` resources are LLM-based and would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment. 
+
+**Note:** The neural resources mentioned above require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 1200 and 2500 were used during the development of ISAAC. 
 
 **Note:** The scripts may be used without any changes to recreate the ISAAC corpus. For that purpose, the code base currently assumes the following order in the use of resources for a given social group and year range:
 

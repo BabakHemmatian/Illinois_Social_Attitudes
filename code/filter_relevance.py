@@ -15,9 +15,9 @@ import re
 args = get_args()
 years = parse_range(args.years)
 group = args.group
+batch_size = args.batchsize
 
 # Set relevance filtering hyperparameters
-batch_size = 2500
 max_length = 512
 if group == "skin_tone":
     thresholding = True # If True, the model will use a confidence threshold (set below) to determine the class of a document. If False, it will always return the most probable class.

@@ -6,10 +6,8 @@ from utils import parse_range, groups
 import csv
 import random
 import os
-import sys
 import time
 import datetime
-import re
 
 # Extract and transform CLI arguments 
 args = get_args()

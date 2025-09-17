@@ -10,6 +10,7 @@ import numpy as np
 import time
 import datetime
 import re
+from pathlib import Path
 
 # note the tool use order in the readme
 
@@ -23,16 +24,23 @@ args = get_args()
 years = parse_range(args.years)
 group = args.group
 batch_size = args.batchsize
+if args.array is not None:
+    array = args.array
+
+# set path variables
+CODE_DIR = Path(__file__).resolve().parent         
+PROJECT_ROOT = CODE_DIR.parent                     
+MODELS_DIR = PROJECT_ROOT / "models"
+DATA_DIR = PROJECT_ROOT / "data"
+
+model_path = MODELS_DIR / "label_moralization"
+moralization_labeled_path = DATA_DIR / "data_reddit_curated" / group / "labeled_moralization"
+output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_sentiment"
+output_path.mkdir(parents=True, exist_ok=True)
 
 # prepare the report file
 report_file_path = os.path.join(dir_path, f"report_label_sentiment.csv")
 log_report(report_file_path)
-
-# Survey the relevance-filtered input files 
-moralization_labeled_path = os.path.join(
-    dir_path.replace("code", "data"),
-    "data_reddit_curated", group, "labeled_moralization"
-)
 
 # Build file_list organized by year and raise an error if an expected file is missing 
 file_list = []
@@ -45,13 +53,6 @@ for year in years:
         else:
             raise Exception("Missing moralization-labeled file for the {} social group from year {}, month {}".format(group, year, month))
 
-# Prepare and survey the output path for moralization labeling
-output_path = os.path.join(dir_path.replace("code", "data"),
-                           "data_reddit_curated", group, "labeled_sentiment")
-os.makedirs(output_path, exist_ok=True)
-
-# TODO: Fix last_processed
-
 def label_sentiment_file(file):
     # Initialize missing lines count
     missing_lines_count = 0
@@ -62,12 +63,13 @@ def label_sentiment_file(file):
             missing_writer = csv.writer(missing_file)
             missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
 
-    log_report(report_file_path, f"Started labeling {file} from the {group} social group for sentiment.")
+    log_report(report_file_path, f"Started labeling {Path(file).name} from the {group} social group for sentiment.")
     start_time = time.time()
     
     # Build output file path using the relative part from the input file.
-    relative_path = file.split("moralization")[1].lstrip(os.sep)
-    output_file_path = os.path.join(output_path, relative_path)
+    relative_path = Path(file).relative_to(moralization_labeled_path)
+    output_file_path = output_path / relative_path
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Determine resume position if output file already exists.
     if os.path.exists(output_file_path):
@@ -186,7 +188,7 @@ def label_sentiment_file(file):
 
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    log_report(report_file_path, f"Finished labeling sentiment for the {group} social group in {file} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_report(report_file_path, f"Finished labeling sentiment for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
     # Record missing lines info
     if missing_lines_count:
@@ -215,29 +217,37 @@ for file in file_list:
 overall_elapsed = (time.time() - start_time) / 60
 log_report(report_file_path, f"Sentiment labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
 
-##########################################
-# ----- Check for missing monthly outputs -----
-for year in years:
-    expected_months = set(f"{m:02d}" for m in range(1, 13))
-    processed_months = set()
-    for file in os.listdir(output_path):
-        m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
-        if m:
-            processed_months.add(m.group(1))
-    missing = expected_months - processed_months
-    if missing:
-        log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
-##########################################
+# Process each file from the file_list (global mode)
+if args.array is not None: # for batch processing
+    overall_docs += label_sentiment_file(file_list[array])
 
-##########################################
-# ----- Aggregate overall statistics and save final summary report -----
-final_report = [
-    ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
-    [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
-]
-final_report_file = os.path.join(output_path, "final_report_label_sentiment.csv")
-with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
-    writer = csv.writer(rf)
-    writer.writerows(final_report)
-log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
-##########################################
+else: # for sequential processing
+    for file in file_list:        
+        overall_docs += label_sentiment_file(file)
+
+    ##########################################
+    # ----- Check for missing monthly outputs -----
+    for year in years:
+        expected_months = set(f"{m:02d}" for m in range(1, 13))
+        processed_months = set()
+        for file in os.listdir(output_path):
+            m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
+            if m:
+                processed_months.add(m.group(1))
+        missing = expected_months - processed_months
+        if missing:
+            log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
+    ##########################################
+
+    ##########################################
+    # ----- Aggregate overall statistics and save final summary report -----
+    final_report = [
+        ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
+        [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
+    ]
+    final_report_file = os.path.join(output_path, "final_report_label_sentiment.csv")
+    with open(final_report_file, "a+", encoding="utf-8", newline="") as rf:
+        writer = csv.writer(rf)
+        writer.writerows(final_report)
+    log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
+    ##########################################

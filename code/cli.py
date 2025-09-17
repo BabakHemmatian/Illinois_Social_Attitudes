@@ -66,6 +66,11 @@ def get_args(argv=None):
         action="store_true",
         help="Submit a Slurm job. Best used for NN resources (filter_relevance, label_moralization, label_generalization). Should only be used on a Slurm computing cluster."
     )
+    argparser.add_argument(
+    "--array",
+    type=int,
+    help="Index from SLURM_ARRAY_TASK_ID; if set, process only that indexed file. If omitted, process all files."
+)
 
     args = argparser.parse_args(argv)
 
@@ -96,8 +101,7 @@ if __name__ == "__main__":
             slurm_vars += f",years={args.years}"
         if args.batchsize:
             slurm_vars += f",batchsize={args.batchsize}"
-        slurm_script = os.path.join(dir_path, "slurm.sh")
-        os.system(f'sbatch --export=ALL,{slurm_vars} {slurm_script}')
+        os.system(f'sbatch --export=ALL,{slurm_vars} ./code/slurm.sh')
     else:
         # Construct CLI call conditionally
         cmd = f'python ./code/{args.resource}.py -r {args.resource} -g {args.group}'
@@ -106,4 +110,3 @@ if __name__ == "__main__":
         if args.batchsize:
             cmd += f' -b {args.batchsize}'
         os.system(cmd)
-

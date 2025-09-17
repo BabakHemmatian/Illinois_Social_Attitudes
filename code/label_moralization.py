@@ -3,13 +3,14 @@ from cli import get_args, dir_path
 from utils import parse_range, headers, log_report
 
 # import Python packages
-import os
+import os, sys
 import csv
 import time
 import torch
 from transformers import BertTokenizerFast, BertForSequenceClassification
 import datetime
 import re
+from pathlib import Path
 
 # Extract and transform CLI arguments 
 args = get_args()
@@ -19,6 +20,17 @@ batch_size = args.batchsize
 if args.array is not None:
     array = args.array
 
+# set path variables
+CODE_DIR = Path(__file__).resolve().parent         
+PROJECT_ROOT = CODE_DIR.parent                     
+MODELS_DIR = PROJECT_ROOT / "models"
+DATA_DIR = PROJECT_ROOT / "data"
+
+model_path = MODELS_DIR / "label_moralization"
+relevance_filtered_path = DATA_DIR / "data_reddit_curated" / group / "filtered_relevance"
+output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_moralization"
+output_path.mkdir(parents=True, exist_ok=True)
+
 # Use CUDA if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -27,8 +39,6 @@ report_file_path = os.path.join(dir_path, f"report_label_moralization.csv")
 log_report(report_file_path,f"Using device: {device}")
 
 # Load moralization model
-model_path = os.path.join(dir_path.replace("code", "models"),
-                          f"label_moralization")
 tokenizer = BertTokenizerFast.from_pretrained(model_path)
 model = BertForSequenceClassification.from_pretrained(
     model_path,
@@ -59,12 +69,6 @@ def get_predictions(texts, max_length=512):
             predictions = probs.argmax(dim=1).tolist()
     return predictions
 
-# Survey the relevance-filtered input files 
-relevance_filtered_path = os.path.join(
-    dir_path.replace("code", "data"),
-    "data_reddit_curated", group, "filtered_relevance"
-)
-
 # Build file_list organized by year and raise an error if an expected file is missing 
 file_list = []
 for year in years:
@@ -75,11 +79,6 @@ for year in years:
             file_list.append(path_)
         else:
             raise Exception("Missing relevance-filtered file for the {} social group from year {}, month {}".format(group, year, month))
-
-# Prepare and survey the output path for moralization labeling
-output_path = os.path.join(dir_path.replace("code", "data"),
-                           "data_reddit_curated", group, "labeled_moralization")
-os.makedirs(output_path, exist_ok=True)
 
 # If the output file already exists, we check the last processed row number and resume from there.
 def label_moralization_file(file):
@@ -92,12 +91,13 @@ def label_moralization_file(file):
             missing_writer = csv.writer(missing_file)
             missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
 
-    log_report(report_file_path, f"Started labeling {file} from the {group} social group for moralization.")
+    log_report(report_file_path, f"Started labeling {Path(file).name} from the {group} social group for moralization.")
     start_time = time.time()
     
     # Build output file path using the relative part from the input file.
-    relative_path = file.split("relevance")[1].lstrip(os.sep)
-    output_file_path = os.path.join(output_path, relative_path)
+    relative_path = Path(file).relative_to(relevance_filtered_path)
+    output_file_path = output_path / relative_path
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Determine resume position if output file already exists.
     if os.path.exists(output_file_path):
@@ -116,7 +116,6 @@ def label_moralization_file(file):
     else:
         mode = "w"
         last_processed = 0
-
 
     with open(file, "r", encoding="utf-8-sig", errors="ignore") as input_file, \
          open(output_file_path, mode, encoding="utf-8-sig", errors="ignore", newline="") as output_file:
@@ -161,8 +160,7 @@ def label_moralization_file(file):
                             relevant_lines.clear()
                         batch_lines.clear()
                 else:
-                    log_report(output_file_path,
-                        f"Skipping line {id_}: insufficient columns ({len(line)} found)")
+                    log_report(report_file_path, f"Skipping line {id_}: insufficient columns ({len(line)} found)")
                     missing_lines_count += 1
             except Exception as e:
                 raise Exception(
@@ -189,7 +187,7 @@ def label_moralization_file(file):
             )
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    log_report(report_file_path, f"Finished labeling moralization for the {group} social group in {file.split("relevance\\")[1]} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_report(report_file_path, f"Finished labeling moralization for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
     # Record missing lines info
     if missing_lines_count:
@@ -208,10 +206,8 @@ start_time = time.time()
 overall_docs = 0
 
 # Process each file from the file_list (global mode)
-if array: # for batch processing
+if args.array is not None: # for batch processing
     overall_docs += label_moralization_file(file_list[array])
-
-    print("")
 
 else: # for sequential processing
     for file in file_list:        
@@ -241,7 +237,7 @@ else: # for sequential processing
         [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
     ]
     final_report_file = os.path.join(output_path, "final_report_label_moralization.csv")
-    with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
+    with open(final_report_file, "a+", encoding="utf-8", newline="") as rf:
         writer = csv.writer(rf)
         writer.writerows(final_report)
     log_report(report_file_path, f"Final summary report saved to: {final_report_file}")

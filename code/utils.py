@@ -173,3 +173,15 @@ def log_error(function_name, file, line_number, line_content, error):
          ef.write(f"Error in {function_name} at line {line_number}: {error}\n")
          ef.write(f"Line content: {line_content}\n")
     log_report(f"Logged error in {error_filename}")
+
+# calculates the array range for slurm based on 
+def array_span_from_years(years_str: str) -> int:
+    # years_str is validated already (e.g., "2016" or "2007-2008")
+    if "-" in years_str:
+        start, end = years_str.split("-", 1)
+        start_y, end_y = int(start), int(end)
+        if end_y < start_y:
+            start_y, end_y = end_y, start_y  # just in case
+        return (end_y - start_y + 1) * 12
+    else:
+        return 12

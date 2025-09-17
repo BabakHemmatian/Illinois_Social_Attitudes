@@ -30,10 +30,8 @@ if args.array is not None:
 # set path variables
 CODE_DIR = Path(__file__).resolve().parent         
 PROJECT_ROOT = CODE_DIR.parent                     
-MODELS_DIR = PROJECT_ROOT / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 
-model_path = MODELS_DIR / "label_moralization"
 moralization_labeled_path = DATA_DIR / "data_reddit_curated" / group / "labeled_moralization"
 output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_sentiment"
 output_path.mkdir(parents=True, exist_ok=True)

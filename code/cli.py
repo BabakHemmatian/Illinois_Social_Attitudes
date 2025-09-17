@@ -1,10 +1,12 @@
 import argparse
 import os
-from utils import groups, validate_years
+from utils import groups, validate_years, array_span_from_years
+from pathlib import Path
 
 # set path variables
-dir_path = os.path.dirname(os.path.realpath(__file__))
-raw_data = dir_path.replace("code", "data\\data_reddit_raw\\reddit_comments")
+dir_path = os.path.dirname(os.path.realpath(__file__))  # kept for backward-compat
+CODE_DIR = Path(__file__).resolve().parent              # absolute /code
+PROJECT_ROOT = CODE_DIR.parent                          # absolute project root
 
 # Gets the command line arguments and returns errors if a needed argument is missing or ill-formatted
 def get_args(argv=None):
@@ -95,16 +97,29 @@ if __name__ == "__main__":
     args = get_args()
 
     if args.slurm:
-        # Construct Slurm export variables conditionally
         slurm_vars = f"resource={args.resource},group={args.group}"
+        array_spec = None
+
         if args.years:
             slurm_vars += f",years={args.years}"
+            months = array_span_from_years(args.years)
+            array_spec = f"0-{months-1}"           # e.g., 2016 -> 0-11; 2007-2008 -> 0-23
+
         if args.batchsize:
             slurm_vars += f",batchsize={args.batchsize}"
-        os.system(f'sbatch --export=ALL,{slurm_vars} ./code/slurm.sh')
+
+        slurm_script = str(CODE_DIR / "slurm.sh")
+
+        concurrency_cap = 5 # number of simulaneous tasks
+        array_flag = f"--array={array_spec}%{concurrency_cap}" if array_spec else ""
+
+        cmd = f'sbatch {array_flag} --export=ALL,{slurm_vars} "{slurm_script}"'
+        print(f"[cli] submitting: {cmd}")
+        os.system(cmd)
     else:
-        # Construct CLI call conditionally
-        cmd = f'python ./code/{args.resource}.py -r {args.resource} -g {args.group}'
+        # Robust path to the resource script inside code/
+        resource_script = str(CODE_DIR / f"{args.resource}.py")
+        cmd = f'python "{resource_script}" -r {args.resource} -g {args.group}'
         if args.years:
             cmd += f' -y {args.years}'
         if args.batchsize:

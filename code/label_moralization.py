@@ -10,13 +10,14 @@ import torch
 from transformers import BertTokenizerFast, BertForSequenceClassification
 import datetime
 import re
-import sys
 
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
 group = args.group
 batch_size = args.batchsize
+if args.array is not None:
+    array = args.array
 
 # Use CUDA if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -188,7 +189,7 @@ def label_moralization_file(file):
             )
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    log_report(report_file_path, f"Finished labeling moralization for the {group} social group in {file} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_report(report_file_path, f"Finished labeling moralization for the {group} social group in {file.split("relevance\\")[1]} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
     # Record missing lines info
     if missing_lines_count:
@@ -207,36 +208,41 @@ start_time = time.time()
 overall_docs = 0
 
 # Process each file from the file_list (global mode)
-for file in file_list:
-        
-    overall_docs += label_moralization_file(file)
+if array: # for batch processing
+    overall_docs += label_moralization_file(file_list[array])
 
-overall_elapsed = (time.time() - start_time) / 60
-log_report(report_file_path, f"Moralization labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+    print("")
 
-##########################################
-# ----- Check for missing monthly outputs -----
-for year in years:
-    expected_months = set(f"{m:02d}" for m in range(1, 13))
-    processed_months = set()
-    for file in os.listdir(output_path):
-        m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
-        if m:
-            processed_months.add(m.group(1))
-    missing = expected_months - processed_months
-    if missing:
-        log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
-##########################################
+else: # for sequential processing
+    for file in file_list:        
+        overall_docs += label_moralization_file(file)
 
-##########################################
-# ----- Aggregate overall statistics and save final summary report -----
-final_report = [
-    ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
-    [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
-]
-final_report_file = os.path.join(output_path, "final_report_label_moralization.csv")
-with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
-    writer = csv.writer(rf)
-    writer.writerows(final_report)
-log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
-##########################################
+    ##########################################
+    # ----- Check for missing monthly outputs -----
+    for year in years:
+        expected_months = set(f"{m:02d}" for m in range(1, 13))
+        processed_months = set()
+        for file in os.listdir(output_path):
+            m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
+            if m:
+                processed_months.add(m.group(1))
+        missing = expected_months - processed_months
+        if missing:
+            log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
+    ##########################################
+
+    overall_elapsed = (time.time() - start_time) / 60
+    log_report(report_file_path, f"Moralization labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+
+    ##########################################
+    # ----- Aggregate overall statistics and save final summary report -----
+    final_report = [
+        ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
+        [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
+    ]
+    final_report_file = os.path.join(output_path, "final_report_label_moralization.csv")
+    with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
+        writer = csv.writer(rf)
+        writer.writerows(final_report)
+    log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
+    ##########################################

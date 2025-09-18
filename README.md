@@ -1,21 +1,32 @@
 # Illinois Social Attitudes Aggregate Corpus (ISAAC)
+
 This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by the following distinctions:
-1. sexuality (gay-straight; 277,663,267 comments)
+1. sexuality (gay-straight; 92,979,067 comments)
 2. race (Black-White; 184,684,200 comments)
 3. age (young-old; 330,825,613)
-4. ability (abled-disabled; 324,494,095)
-5. weight (fat-thin; 299,007,486)
+4. ability (abled-disabled; )
+5. weight (fat-thin; )
 6. skin_tone (dark-light; 67,038,276)
 
-**Total Corpus Size: 1,483,712,937**
+**Total Corpus Size: **
 
-The resources allow:
+Submissions and comments in ISAAC have all been labeled for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
+
+## Corpus Access
+
+You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). The data can be found [here](https://drive.google.com/drive/u/0/folders/15luTEiHnt8BnnHjYmQnS__DSUt3lODjr). 
+
+## The Current Repository
+
+This repository contains the scripts that allow you to rebuild ISAAC from scratch by:
 - Filtering Reddit content by keywords and the use of English language. 
-- Applying pre-trained neural networks to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). The already-filtered data can be found [here](https://drive.google.com/drive/u/0/folders/15luTEiHnt8BnnHjYmQnS__DSUt3lODjr).
+- Applying pre-trained neural networks to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). 
 - Generating generalized language (e.g., genericity), moralization, sentiment and emotion labels for the relevance-filtered extracted texts.
 
+The scripts were designed to be easily adapted for developing other Reddit corpora. See the **Adaptations** section below for more information.
+
 **Note:**
-- The scripts were developed and tested on Windows 11. Cross-platform compatibility is not guaranteed.
+- The scripts were developed on Windows 11, then tested on Ubuntu. However, cross-platform compatibility is not guaranteed.
 - The ```label_localization``` resource, identifying the country and the state where a user likely resides, is in development.
 
 ## Citation

@@ -29,8 +29,10 @@ Each row in ISAAC represents a Reddit submission or comment associated with its 
 24. *boundedness_episodic_count*: This column shows the number of "episodic" clauses. See column 23.
 25. *habitual_count*: Habituality reflects whether any events described by a clause are presented as repeating over time (e.g., I went to school there for years; habitual). Stative clauses are automatically considered non-habitual. Habituality makes an eventive clause more generalized. This column shows the number of "habitual" clauses.
 26. *NA_count*: The generalized language attributes described above are only defined for statements, not clauses that reflect imperatives, questions, or exclamations. This column shows the number of clauses in the text for which the four generalization attributes are undefined.
-   27-34. Similar to 19-26, but showing the proportion of clauses that are of a certain type, rather than the frequency.
-   35-54. *[model_no]_[emotion]*: A 0-1 score from the ```[model_no]``` AI model for how much the text represents the specified ```[emotion]```. More information about models 1-3 can be found here, here and here.
+
+    27-34. Similar to 19-26, but showing the proportion of clauses that are of a certain type, rather than the frequency.
+
+    35-54. *[model_no]_[emotion]*: A 0-1 score from the ```[model_no]``` AI model for how much the text represents the specified ```[emotion]```. More information about models 1-3 can be found here, here and here.
 
  <figure>
   <img src="Generalization_Labels.tif"

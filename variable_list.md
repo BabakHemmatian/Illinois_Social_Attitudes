@@ -40,6 +40,6 @@ Each row in ISAAC represents a Reddit submission or comment associated with its 
        alt="Clause-level Generalization labels"
        title="Table 1" />
   <figcaption>
-    **Table 1. **Clause labels for linguistic generalization (column 1) as a function of genericity, eventivity, boundedness and habituality.
+    **Table 1.** Clause labels for linguistic generalization (column 1) as a function of genericity, eventivity, boundedness and habituality.
   </figcaption>
 </figure>

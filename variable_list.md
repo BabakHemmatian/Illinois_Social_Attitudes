@@ -32,10 +32,10 @@ Each row in ISAAC represents a Reddit submission or comment associated with its 
 
 27-34. Similar to 19-26, but showing the proportion of clauses that are of a certain type, rather than the frequency.
 
-35-54. *[model_no]_[emotion]*: A 0-1 score from the ```[model_no]``` AI model for how much the text represents the specified ```[emotion]```. More information about models 1-3 can be found here, here and here.
+35-54. *[model_no]_[emotion]*: A 0-1 score from the ```[model_no]``` AI model for how much the text represents the specified ```[emotion]```. More information about models 1-3 can be found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base). 
 
  <figure>
-  <img src="Generalization_Labels.tif"
+  <img src="Generalization_Labels.jpg"
        alt="Clause-level Generalization labels"
        title="Table 1" />
   <figcaption>

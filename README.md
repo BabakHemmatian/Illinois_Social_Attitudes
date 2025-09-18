@@ -5,7 +5,7 @@ This repository contains tools for the development and evaluation of the **Illin
 2. race (Black-White; 184,684,200 comments)
 3. age (young-old; 330,825,613)
 4. ability (abled-disabled; )
-5. weight (fat-thin; )
+5. weight (fat-thin; 21,344,219)
 6. skin_tone (dark-light; 67,038,276)
 
 **Total Corpus Size: **

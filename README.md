@@ -8,8 +8,6 @@ This repository contains tools for the development and evaluation of the **Illin
 5. weight (fat-thin; 21,344,219)
 6. skin_tone (dark-light; 67,038,276)
 
-**Total Corpus Size: **
-
 Submissions and comments in ISAAC have all been labeled for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
 
 ## Corpus Access

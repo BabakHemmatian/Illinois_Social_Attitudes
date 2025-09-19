@@ -10,13 +10,26 @@ import torch
 import datetime
 import re
 from transformers import RobertaTokenizerFast, RobertaForSequenceClassification, DistilBertForSequenceClassification, DistilBertTokenizerFast
-import sys
+from pathlib import Path
 
+# Extract and transform CLI arguments 
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
 group = args.group
 batch_size = args.batchsize
+if args.array is not None:
+    array = args.array
+
+# set path variables
+CODE_DIR = Path(__file__).resolve().parent         
+PROJECT_ROOT = CODE_DIR.parent                     
+MODELS_DIR = PROJECT_ROOT / "models"
+DATA_DIR = PROJECT_ROOT / "data"
+
+generalization_labeled_path = DATA_DIR / "data_reddit_curated" / group / "labeled_sentiment"
+output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_emotion"
+output_path.mkdir(parents=True, exist_ok=True)
 
 # Use CUDA if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -26,24 +39,18 @@ report_file_path = os.path.join(dir_path, f"report_label_emotion.csv")
 log_report(report_file_path,f"Using device: {device}")
 
 # Load emotion models
-model1_path = os.path.join(dir_path.replace("code", "models"),
-                          f"label_emotion_1")
-model2_path = os.path.join(dir_path.replace("code", "models"),
-                          f"label_emotion_2")
-model3_path = os.path.join(dir_path.replace("code", "models"),
-                          f"label_emotion_3")
+model1_path = os.path.join(MODELS_DIR,
+                          "label_emotion_1")
+model2_path = os.path.join(MODELS_DIR,
+                          "label_emotion_2")
+model3_path = os.path.join(MODELS_DIR,
+                          "label_emotion_3")
 tokenizer1 = RobertaTokenizerFast.from_pretrained(model1_path)
 tokenizer2 = DistilBertTokenizerFast.from_pretrained(model2_path)
 # NOTE: Model 3 uses the same tokenizer as model 1.
-model1 = RobertaForSequenceClassification.from_pretrained(
-    model1_path,
-    use_safetensors=True).to(device)
-model2 = DistilBertForSequenceClassification.from_pretrained(
-    model2_path,
-    use_safetensors=True).to(device)
-model3 = RobertaForSequenceClassification.from_pretrained(
-    model3_path,
-    use_safetensors=True).to(device)
+model1 = RobertaForSequenceClassification.from_pretrained(model1_path,use_safetensors=True).to(device)
+model2 = DistilBertForSequenceClassification.from_pretrained(model2_path,use_safetensors=True).to(device)
+model3 = RobertaForSequenceClassification.from_pretrained(model3_path,use_safetensors=True).to(device)
 
 if torch.cuda.device_count() > 1: # if more than one GPU is available
     model1 = torch.nn.DataParallel(model1) # parallelize
@@ -76,11 +83,6 @@ def get_predictions(texts, tokenizer=None, model=None, max_length=512):
 
     return predictions, probs
 
-# Survey the generalization-labeled input files 
-generalization_labeled_path = os.path.join(
-    dir_path.replace("code", "data"),
-    "data_reddit_curated", group, "labeled_generalization"
-)
 
 # Build file_list organized by year and raise an error if an expected file is missing 
 file_list = []
@@ -93,11 +95,6 @@ for year in years:
         else:
             raise Exception("Missing generalization-labeled file for the {} social group from year {}, month {}".format(group, year, month))
 
-# Prepare and survey the output path for emotion labeling
-output_path = os.path.join(dir_path.replace("code", "data"),
-                           "data_reddit_curated", group, "labeled_emotion")
-os.makedirs(output_path, exist_ok=True)
-
 # If the output file already exists, we check the last processed row number and resume from there.
 def label_emotion_file(file):
     # Initialize missing lines count
@@ -109,12 +106,13 @@ def label_emotion_file(file):
             missing_writer = csv.writer(missing_file)
             missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
 
-    log_report(report_file_path, f"Started labeling {file} from the {group} social group for emotion.")
+    log_report(report_file_path, f"Started labeling {Path(file).name} from the {group} social group for emotion.")
     start_time = time.time()
     
     # Build output file path using the relative part from the input file.
-    relative_path = file.split("generalization")[1].lstrip(os.sep)
-    output_file_path = os.path.join(output_path, relative_path)
+    relative_path = Path(file).relative_to(generalization_labeled_path)
+    output_file_path = output_path / relative_path
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Determine resume position if output file already exists.
     if os.path.exists(output_file_path):
@@ -144,17 +142,17 @@ def label_emotion_file(file):
         # Write header if starting a new file
         if mode == "w":
             new_headers = headers + ["source_row","Moralization",
-                            "Sentiment_Stanza_pos","Sentiment_Stanza_neu","Sentiment_Stanza_neg",
-                            "Sentiment_Vader_compound",
-                            "Sentiment_TextBlob_Polarity","Sentiment_TextBlob_Subjectivity",
-                            "individual labels","genericity: generic count","genericity: specific count",
-                            "eventivity: stative count","eventivity: dynamic count",
-                            "boundedness: static count","boundedness: episodic count","habitual count","NA count",
-                            "genericity: proportion generic","genericity: proportion specific","eventivity: proportion stative","eventivity: proportion dynamic",
-                            "boundedness: proportion static","boundedness: proportion episodic","proportion habitual","proportion NA",
-                            "1_anger","1_disgust","1_fear","1_joy","1_neutral","1_sadness","1_surprise",
-                            "2_sadness","2_joy","2_love","2_anger","2_fear","2_surprise",
-                            "3_neutral","3_joy","3_surprise","3_anger","3_sadness","3_disgust","3_fear"]
+                                           "Sentiment_Stanza_pos","Sentiment_Stanza_neu","Sentiment_Stanza_neg",
+                                           "Sentiment_Vader_compound",
+                                           "Sentiment_TextBlob_Polarity","Sentiment_TextBlob_Subjectivity","clauses",
+                                           "generalization_clause_labels","genericity_generic_count","genericity_specific_count",
+                                           "eventivity_stative_count","eventivity_dynamic_count",
+                                           "boundedness_static_count","boundedness_episodic_count","habitual_count","NA_count",
+                                           "genericity_generic_proportion","genericity_specific_proportion","eventivity_stative_proportion","eventivity_dynamic_proportion",
+                                           "boundedness_static_proportion","boundedness_episodic_proportion","habitual_proportion","NA_proportion",
+                                           "1_anger","1_disgust","1_fear","1_joy","1_neutral","1_sadness","1_surprise",
+                                           "2_sadness","2_joy","2_love","2_anger","2_fear","2_surprise",
+                                           "3_neutral","3_joy","3_surprise","3_anger","3_sadness","3_disgust","3_fear"]
             writer.writerow(new_headers)
 
         batch_lines = []
@@ -237,7 +235,7 @@ def label_emotion_file(file):
                 
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    log_report(report_file_path, f"Finished labeling emotion for the {group} social group in {file} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_report(report_file_path, f"Finished labeling emotion for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
     # Record missing lines info
     if missing_lines_count:
@@ -255,37 +253,39 @@ start_time = time.time()
 
 overall_docs = 0
 
-# Process each file from the file_list (global mode)
-for file in file_list:
-        
-    overall_docs += label_emotion_file(file)
+if args.array is not None: # for batch processing
+    overall_docs += label_emotion_file(file_list[array])
 
-overall_elapsed = (time.time() - start_time) / 60
-log_report(report_file_path, f"Emotion labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+else: # for sequential processing
+    for file in file_list:        
+        overall_docs += label_emotion_file(file)
 
-##########################################
-# ----- Check for missing monthly outputs -----
-for year in years:
-    expected_months = set(f"{m:02d}" for m in range(1, 13))
-    processed_months = set()
-    for file in os.listdir(output_path):
-        m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
-        if m:
-            processed_months.add(m.group(1))
-    missing = expected_months - processed_months
-    if missing:
-        log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
-##########################################
+    ##########################################
+    # ----- Check for missing monthly outputs -----
+    for year in years:
+        expected_months = set(f"{m:02d}" for m in range(1, 13))
+        processed_months = set()
+        for file in os.listdir(output_path):
+            m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
+            if m:
+                processed_months.add(m.group(1))
+        missing = expected_months - processed_months
+        if missing:
+            log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
+    ##########################################
 
-##########################################
-# ----- Aggregate overall statistics and save final summary report -----
-final_report = [
-    ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
-    [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
-]
-final_report_file = os.path.join(output_path, "final_report_label_emotion.csv")
-with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
-    writer = csv.writer(rf)
-    writer.writerows(final_report)
-log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
-##########################################
+    overall_elapsed = (time.time() - start_time) / 60
+    log_report(report_file_path, f"Emotion labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+
+    ##########################################
+    # ----- Aggregate overall statistics and save final summary report -----
+    final_report = [
+        ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
+        [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
+    ]
+    final_report_file = os.path.join(output_path, "final_report_label_emotion.csv")
+    with open(final_report_file, "a+", encoding="utf-8", newline="") as rf:
+        writer = csv.writer(rf)
+        writer.writerows(final_report)
+    log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
+    ##########################################

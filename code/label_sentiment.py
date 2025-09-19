@@ -209,12 +209,6 @@ overall_docs = 0
 nlp = stanza.Pipeline(lang='en', processors='tokenize,sentiment')
 analyzer = SentimentIntensityAnalyzer()
 
-for file in file_list:
-    overall_docs += label_sentiment_file(file)
-
-overall_elapsed = (time.time() - start_time) / 60
-log_report(report_file_path, f"Sentiment labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
-
 # Process each file from the file_list (global mode)
 if args.array is not None: # for batch processing
     overall_docs += label_sentiment_file(file_list[array])
@@ -237,6 +231,9 @@ else: # for sequential processing
             log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
     ##########################################
 
+    overall_elapsed = (time.time() - start_time) / 60
+    log_report(report_file_path, f"Sentiment labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+
     ##########################################
     # ----- Aggregate overall statistics and save final summary report -----
     final_report = [
@@ -249,3 +246,5 @@ else: # for sequential processing
         writer.writerows(final_report)
     log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
     ##########################################
+
+    

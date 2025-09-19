@@ -14,12 +14,26 @@ import re
 import spacy
 import numpy as np
 from copy import deepcopy
+from pathlib import Path
 
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
 group = args.group
 batch_size = args.batchsize
+if args.array is not None:
+    array = args.array
+
+# set path variables
+CODE_DIR = Path(__file__).resolve().parent         
+PROJECT_ROOT = CODE_DIR.parent                     
+MODELS_DIR = PROJECT_ROOT / "models"
+DATA_DIR = PROJECT_ROOT / "data"
+
+model_path = MODELS_DIR / "label_generalization"
+sentiment_labeled_path = DATA_DIR / "data_reddit_curated" / group / "labeled_sentiment"
+output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_generalization"
+output_path.mkdir(parents=True, exist_ok=True)
 
 # Set moralization labeling hyperparameters
 max_length=512
@@ -30,10 +44,6 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # prepare the report file
 report_file_path = os.path.join(dir_path, f"report_label_generalization.csv")
 log_report(report_file_path,f"Using device: {device}")
-
-# Set the base model path
-model_path = os.path.join(dir_path.replace("code", "models"),
-                          f"label_generalization")
 
 # load the necessary models and move them to the device being used
 nlp = spacy.load("en_core_web_sm")
@@ -48,12 +58,6 @@ if torch.cuda.device_count() > 1: # if more than one GPU is available
 clause_model.eval() # set model to evaluation mode
 generalization_model.eval() # set model to evaluation mode
 
-# Survey the sentiment-labeled input files 
-sentiment_labeled_path = os.path.join(
-    dir_path.replace("code", "data"),
-    "data_reddit_curated", group, "labeled_sentiment"
-)
-
 # Build file_list organized by year and raise an error if an expected file is missing 
 file_list = []
 for year in years:
@@ -64,11 +68,6 @@ for year in years:
             file_list.append(path_)
         else:
             raise Exception("Missing sentiment-labeled file for the {} social group from year {}, month {}".format(group, year, month))
-
-# Prepare and survey the output path for moralization labeling
-output_path = os.path.join(dir_path.replace("code", "data"),
-                           "data_reddit_curated", group, "labeled_generalization")
-os.makedirs(output_path, exist_ok=True)
 
 # define the mapping between clause labels and each of the three composing features
 labels2attrs = {
@@ -264,12 +263,13 @@ def label_generalization_file(file):
             missing_writer = csv.writer(missing_file)
             missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
 
-    log_report(report_file_path, f"Started labeling {file} from the {group} social group for generalization.")
+    log_report(report_file_path, f"Started labeling {Path(file).name} from the {group} social group for generalization.")
     start_time = time.time()
     
     # Build output file path using the relative part from the input file.
-    relative_path = file.split("sentiment")[1].lstrip(os.sep)
-    output_file_path = os.path.join(output_path, relative_path)
+    relative_path = Path(file).relative_to(sentiment_labeled_path)
+    output_file_path = output_path / relative_path
+    output_file_path.parent.mkdir(parents=True, exist_ok=True)
     
     # Determine resume position if output file already exists.
     if os.path.exists(output_file_path):
@@ -301,12 +301,12 @@ def label_generalization_file(file):
             new_headers = headers + ["source_row","Moralization",
                                            "Sentiment_Stanza_pos","Sentiment_Stanza_neu","Sentiment_Stanza_neg",
                                            "Sentiment_Vader_compound",
-                                           "Sentiment_TextBlob_Polarity","Sentiment_TextBlob_Subjectivity",
-                                           "individual labels","genericity: generic count","genericity: specific count",
-                                           "eventivity: stative count","eventivity: dynamic count",
-                                           "boundedness: static count","boundedness: episodic count","habitual count","NA count",
-                                           "genericity:  proportion generic","genericity: proportion specific","eventivity: proportion stative","eventivity: proportion dynamic",
-                                           "boundedness: proportion static","boundedness: proportion episodic","proportion habitual","proportion NA"]
+                                           "Sentiment_TextBlob_Polarity","Sentiment_TextBlob_Subjectivity","clauses",
+                                           "generalization_clause_labels","genericity_generic_count","genericity_specific_count",
+                                           "eventivity_stative_count","eventivity_dynamic_count",
+                                           "boundedness_static_count","boundedness_episodic_count","habitual_count","NA_count",
+                                           "genericity_generic_proportion","genericity_specific_proportion","eventivity_stative_proportion","eventivity_dynamic_proportion",
+                                           "boundedness_static_proportion","boundedness_episodic_proportion","habitual_proportion","NA_proportion"]
             writer.writerow(new_headers)
         
         batch_lines = []
@@ -334,13 +334,16 @@ def label_generalization_file(file):
 
                         counts = {}
                         individual_labels = {}
+                        clauses = {}
                         props = {}
                         
                         # extracts and counts clause labels for each document in the batch
                         for id_,text in enumerate(result):
                             individual_labels[id_] = []
+                            clauses[id_] = []
                             counts[id_] = {"generic":0,"specific":0,"stative":0,"dynamic":0,"static":0,"episodic":0,"habitual":0,"NA genericity":0,"NA eventivity":0,"NA boundedness":0}
                             for clause in text:
+                                clauses[id_].append(clause[0])
                                 individual_labels[id_].append(clause[1])
                                 label = labels2attrs[clause[1]]
                                 for id__,feature in enumerate(label):
@@ -382,7 +385,8 @@ def label_generalization_file(file):
                         for id_ in counts.keys():
 
                             ind_labels = "\n".join(individual_labels[id_])
-                            row = batch_lines[id_] + [ind_labels,counts[id_]['generic'],counts[id_]['specific'],counts[id_]['stative'],counts[id_]['dynamic'],counts[id_]['static'],counts[id_]['episodic'],counts[id_]['habitual'],counts[id_]['NA boundedness']]+props[id_]
+                            ind_clause = "\n".join(clauses[id_])
+                            row = batch_lines[id_] + [ind_clause,ind_labels,counts[id_]['generic'],counts[id_]['specific'],counts[id_]['stative'],counts[id_]['dynamic'],counts[id_]['static'],counts[id_]['episodic'],counts[id_]['habitual'],counts[id_]['NA boundedness']]+props[id_]
             
                             relevant_lines.append(row)
 
@@ -397,7 +401,7 @@ def label_generalization_file(file):
                     missing_lines_count += 1
             except Exception as e:
                 raise Exception(
-                    f"Error labeling {file} from the {group} social group for generalization: {e}"
+                    f"Error labeling {Path(file).name} from the {group} social group for generalization: {e}"
                 )
         try: # process any left-over documents as the final batch
             if batch_lines:
@@ -409,13 +413,16 @@ def label_generalization_file(file):
 
                 counts = {}
                 individual_labels = {}
+                clauses = {}
                 props = {}
                 
                 # extracts and counts clause labels for each document in the batch
                 for id_,text in enumerate(result):
                     individual_labels[id_] = []
+                    clauses [id_] = []
                     counts[id_] = {"generic":0,"specific":0,"stative":0,"dynamic":0,"static":0,"episodic":0,"habitual":0,"NA genericity":0,"NA eventivity":0,"NA boundedness":0}
                     for clause in text:
+                        clauses[id_].append(clause[0])
                         individual_labels[id_].append(clause[1])
                         label = labels2attrs[clause[1]]
                         for id__,feature in enumerate(label):
@@ -456,9 +463,9 @@ def label_generalization_file(file):
                 # 2) collect the generalization labels
 
                 for id_ in counts.keys():
-
+                    ind_clause = "\n".join(individual_labels[id_])
                     ind_labels = "\n".join(individual_labels[id_])
-                    row = batch_lines[id_] + [ind_labels,counts[id_]['generic'],counts[id_]['specific'],counts[id_]['stative'],counts[id_]['dynamic'],counts[id_]['static'],counts[id_]['episodic'],counts[id_]['habitual'],counts[id_]['NA boundedness']]+props[id_]
+                    row = batch_lines[id_] + [ind_clause,ind_labels,counts[id_]['generic'],counts[id_]['specific'],counts[id_]['stative'],counts[id_]['dynamic'],counts[id_]['static'],counts[id_]['episodic'],counts[id_]['habitual'],counts[id_]['NA boundedness']]+props[id_]
             
                     relevant_lines.append(row)
 
@@ -470,12 +477,12 @@ def label_generalization_file(file):
         
         except Exception as e:
             raise Exception(
-                f"Error labeling {file} from the {group} social group for generalization: {e}"
+                f"Error labeling {Path(file).name} from the {group} social group for generalization: {e}"
             )
 
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    log_report(report_file_path, f"Finished labeling generalization for the {group} social group in {file} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_report(report_file_path, f"Finished labeling generalization for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
     # Record missing lines info
     if missing_lines_count:
@@ -492,36 +499,39 @@ def label_generalization_file(file):
 start_time = time.time()
 overall_docs = 0
 
-# Process each file from the file_list (global mode)
-for file in file_list:
-    overall_docs += label_generalization_file(file)
+if args.array is not None: # for batch processing
+    overall_docs += label_generalization_file(file_list[array])
 
-overall_elapsed = (time.time() - start_time) / 60
-log_report(report_file_path, f"Generalization labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+else: # for sequential processing
+    for file in file_list:        
+        overall_docs += label_generalization_file(file)
 
-##########################################
-# ----- Check for missing monthly outputs -----
-for year in years:
-    expected_months = set(f"{m:02d}" for m in range(1, 13))
-    processed_months = set()
-    for file in os.listdir(output_path):
-        m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
-        if m:
-            processed_months.add(m.group(1))
-    missing = expected_months - processed_months
-    if missing:
-        log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
-##########################################
+    ##########################################
+    # ----- Check for missing monthly outputs -----
+    for year in years:
+        expected_months = set(f"{m:02d}" for m in range(1, 13))
+        processed_months = set()
+        for file in os.listdir(output_path):
+            m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
+            if m:
+                processed_months.add(m.group(1))
+        missing = expected_months - processed_months
+        if missing:
+            log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
+    ##########################################
 
-##########################################
-# ----- Aggregate overall statistics and save final summary report -----
-final_report = [
-    ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
-    [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
-]
-final_report_file = os.path.join(output_path, "final_report_label_generalization.csv")
-with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
-    writer = csv.writer(rf)
-    writer.writerows(final_report)
-log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
-##########################################
+    overall_elapsed = (time.time() - start_time) / 60
+    log_report(report_file_path, f"Generalization labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+
+    ##########################################
+    # ----- Aggregate overall statistics and save final summary report -----
+    final_report = [
+        ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
+        [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
+    ]
+    final_report_file = os.path.join(output_path, "final_report_label_generalization.csv")
+    with open(final_report_file, "a+", encoding="utf-8", newline="") as rf:
+        writer = csv.writer(rf)
+        writer.writerows(final_report)
+    log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
+    ##########################################

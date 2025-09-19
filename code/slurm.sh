@@ -6,10 +6,10 @@
 #SBATCH -e labeling-batch-%j.err
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:2
-#SBATCH --time=4:00:00
+#SBATCH --time=8:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=5
-#SBATCH --mem=64000
+#SBATCH --mem=4000
 #SBATCH --export=ALL
 
 set -euo pipefail

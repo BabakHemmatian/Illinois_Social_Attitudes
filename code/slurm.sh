@@ -6,7 +6,7 @@
 #SBATCH -e labeling-batch-%j.err
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:2
-#SBATCH --time=8:00:00
+#SBATCH --time=4:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=5
 #SBATCH --mem=4000
@@ -21,7 +21,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 # sbatch --array=... --export=ALL,resource=...,group=...,years=...,batchsize=... slurm.sh
 
 requires_years=("filter_keywords" "filter_language" "filter_relevance" "filter_sample" "label_moralization" "label_sentiment" "label_generalization" "label_emotion")
-requires_batch=("filter_relevance" "label_moralization" "label_generalization" "label_emotion")
+requires_batch=("filter_relevance" "label_moralization" "label_generalization" "label_emotion" "label_sentiment")
 
 in_array() { local needle="$1"; shift; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }
 

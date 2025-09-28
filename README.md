@@ -4,9 +4,11 @@ This repository contains tools for the development and evaluation of the **Illin
 1. sexuality (gay-straight; 92,979,067 comments)
 2. race (Black-White; 184,684,200 comments)
 3. age (young-old; 330,825,613)
-4. ability (abled-disabled; )
+4. ability (abled-disabled; 23,515,610)
 5. weight (fat-thin; 21,344,219)
 6. skin_tone (dark-light; 67,038,276)
+
+**Total Corpus Size: 720,386,985 Posts**
 
 Submissions and comments in ISAAC have all been labeled for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
 

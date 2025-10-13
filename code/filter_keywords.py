@@ -7,6 +7,7 @@ from concurrent.futures import ProcessPoolExecutor
 import zstandard
 import io
 import ahocorasick
+from pathlib import Path
 
 # Import functions and objects from local modules
 from cli import get_args, dir_path, raw_data
@@ -49,10 +50,10 @@ with open(report_file_path, mode, encoding='utf-8', newline='') as report_file:
         writer.writerow(["Timestamp", "Message"])
 
 def filter_keyword_file(file):
-    """
-    Process a single raw Reddit file by filtering for keyword matches.
-    Writes matching lines to an output CSV file.
-    """
+
+    # Process a single raw Reddit file by filtering for keyword matches.
+    # Writes matching lines to an output CSV file.
+
     file_path = os.path.join(raw_data, file)
     output_csv_file = os.path.join(output_path, f"{file.split('.zst')[0]}.csv")
     
@@ -93,7 +94,7 @@ def filter_keyword_file(file):
                             datetime.fromtimestamp(int(contents.get("created_utc", 0))).strftime('%Y-%m-%d %H:%M:%S'),
                             contents.get("subreddit", ""),
                             contents.get("score", ""),
-                            ', '.join(matches)
+                            ', '.join(list(set(matches)))
                         ])
 
                         if len(buffer) >= buffer_size:
@@ -106,10 +107,10 @@ def filter_keyword_file(file):
                 writer.writerows(buffer)
 
     except Exception as e:
-        log_report(report_file_path, f"Error filtering by keywords in file {file}: {e}")
+        log_report(report_file_path, f"Error filtering by keywords in file {Path(file).name}: {e}")
 
     elapsed_time = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Filtered {file} by for relevance to the {args.group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
+    log_report(report_file_path, f"Filtered {Path(file).name} by for relevance to the {args.group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
 
     return total_lines, matched_lines
 
@@ -128,7 +129,7 @@ def filter_keyword_month(year, month, files):
             total_lines += file_lines
             matched_lines += file_matched
         except Exception as e:
-            log_report(report_file_path, f"Error filtering by keywords in file {file}: {e}")
+            log_report(report_file_path, f"Error filtering by keywords in file {Path(file).name}: {e}")
 
     elapsed_time = (time.time() - start_time) / 60
     log_report(report_file_path, f"Completed filtering {year}-{month} in {elapsed_time:.2f} minutes")

@@ -100,15 +100,8 @@ os.makedirs(output_path, exist_ok=True)
 # For each language-filtered file, we add an extra column "source_row" to record the input file row number.
 # If the output file already exists, we check the last processed row number and resume from there.
 def filter_relevance_file(file):
-    # Initialize missing lines count
-    missing_lines_count = 0
-    missing_records_file = os.path.join(output_path, 'missing_records.csv')
-    # Create missing records file with header if it does not exist.
-    if not os.path.exists(missing_records_file):
-        with open(missing_records_file, 'w', newline='') as missing_file:
-            missing_writer = csv.writer(missing_file)
-            missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
 
+    missing_lines_count = 0
     log_report(report_file_path, f"Started filtering {file} for relevance to the {group} social group.")
     start_time = time.time()
     
@@ -216,12 +209,14 @@ def filter_relevance_file(file):
     elapsed_minutes = (end_time - start_time) / 60
     log_report(report_file_path, f"Finished filtering {file} in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
-    # Record missing lines info
-    if missing_lines_count:
-        with open(missing_records_file, 'a', newline='') as missing_file:
-            missing_writer = csv.writer(missing_file)
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            missing_writer.writerow([file, missing_lines_count, timestamp])
+    if missing_lines_count > 0:
+        missing_records_file = os.path.join(output_path, 'missing_records.csv')
+        need_header = not os.path.exists(missing_records_file)
+        with open(missing_records_file, 'a', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            if need_header:
+                w.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
+            w.writerow([str(file), missing_lines_count, datetime.datetime.now().isoformat(timespec="seconds")])
     
     return total_lines
 

@@ -80,121 +80,115 @@ for year in years:
         else:
             raise Exception("Missing relevance-filtered file for the {} social group from year {}, month {}".format(group, year, month))
 
-# If the output file already exists, we check the last processed row number and resume from there.
 def label_moralization_file(file):
-    # Initialize missing lines count
-    missing_lines_count = 0
-    missing_records_file = os.path.join(output_path, 'missing_records.csv')
-    # Create missing records file with header if it does not exist.
-    if not os.path.exists(missing_records_file):
-        with open(missing_records_file, 'w', newline='') as missing_file:
-            missing_writer = csv.writer(missing_file)
-            missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
 
+    missing_lines_count = 0
     log_report(report_file_path, f"Started labeling {Path(file).name} from the {group} social group for moralization.")
     start_time = time.time()
-    
+
     # Build output file path using the relative part from the input file.
     relative_path = Path(file).relative_to(relevance_filtered_path)
     output_file_path = output_path / relative_path
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Determine resume position if output file already exists.
+
+    # If the output file already exists, we check the last processed row number and resume from there.
+    mode = "w"
+    last_processed = -1
     if os.path.exists(output_file_path):
-        mode = "a"  # Append
-        last_processed = 0
         with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore") as existing_file:
-            reader_existing = csv.reader(existing_file)
-            rows = list(reader_existing)
+            rows = list(csv.reader(existing_file))
             if len(rows) > 1:
+                header_out = rows[0]
                 try:
-                    last_processed = int(rows[-1][8])
-                except:
-                    last_processed = 0
-            else:
-                last_processed = 0
-    else:
-        mode = "w"
-        last_processed = 0
+                    src_idx_out = header_out.index("source_row")
+                    # find the last non-empty source_row from the bottom
+                    for r in reversed(rows[1:]):
+                        if len(r) > src_idx_out and r[src_idx_out].strip():
+                            last_processed = int(r[src_idx_out])
+                            break
+                    mode = "a"
+                except ValueError:
+                    # Output exists but header lacks source_row? Safer to overwrite.
+                    mode = "w"
+                    last_processed = -1
 
     with open(file, "r", encoding="utf-8-sig", errors="ignore") as input_file, \
          open(output_file_path, mode, encoding="utf-8-sig", errors="ignore", newline="") as output_file:
-        
+
         reader = csv.reader((line.replace('\x00', '') for line in input_file))
         writer = csv.writer(output_file)
-        
-        # Write header if starting a new file
-        if mode == "w":
-            new_headers = headers + ["source_row","Moralization"]
-            writer.writerow(new_headers)
-        
-        batch_lines = []
-        total_lines = 0
-        relevant_lines = []  # Rows to write in bulk
-        
-        for id_, line in enumerate(reader):
-            if id_ == 0:
-                continue  # Skip header row of input
-            if id_ <= last_processed:
-                continue  # Resume: skip already processed rows
 
-            try:
-                if len(line) >= 3:
-                    batch_lines.append(line)
-                    total_lines += 1
-
-                    # Process in batches once we have batch_size rows
-                    if len(batch_lines) == batch_size:
-                        # 1) run predictions on the batch
-                        texts = [l[2].strip().replace("\n"," ") for l in batch_lines]
-                        predictions = get_predictions(texts)
-
-                        # 2) collect the moralization labels
-                        for idx, pred in enumerate(predictions):
-                            row = batch_lines[idx] + ["Moralized" if pred else "Non-Moralized"]
-                            relevant_lines.append(row)
-
-                        # 3) write out and clear buffers
-                        if relevant_lines:
-                            writer.writerows(relevant_lines)
-                            relevant_lines.clear()
-                        batch_lines.clear()
-                else:
-                    log_report(report_file_path, f"Skipping line {id_}: insufficient columns ({len(line)} found)")
-                    missing_lines_count += 1
-            except Exception as e:
-                raise Exception(
-                    f"Error labeling {file} from the {group} social group for moralization: {e}"
-                )
-
-        # Process any remaining texts in the final batch
+        # Read input header and locate source_row column by name
         try:
-            if batch_lines:
+            in_header = next(reader)
+        except StopIteration:
+            return 0  # empty input
+
+        try:
+            src_idx_in = in_header.index("source_row")
+        except ValueError:
+            raise RuntimeError("Input file is missing required 'source_row' column.")
+
+        # If starting a new output, write header = input header + Moralization
+        if mode == "w":
+            new_headers = in_header + ["Moralization"]
+            writer.writerow(new_headers)
+
+        batch_lines = []
+        relevant_lines = []
+        total_lines = 0
+
+        for _, line in enumerate(reader):
+            # skip obvious bad rows
+            if len(line) < 3:
+                missing_lines_count += 1
+                continue
+
+            # Use the INPUT row's source_row to decide resume/skip
+            src_val = line[src_idx_in].strip()
+            src_num = int(src_val) if src_val.isdigit() else None
+            if src_num is not None and src_num <= last_processed:
+                continue
+
+            batch_lines.append(line)
+            total_lines += 1
+
+            # get labels for the full batch
+            if len(batch_lines) == batch_size:
                 texts = [l[2].strip().replace("\n"," ") for l in batch_lines]
                 predictions = get_predictions(texts)
-
                 for idx, pred in enumerate(predictions):
-                    row = batch_lines[idx] + ["Moralized" if pred else "Non-Moralized"]
-                    relevant_lines.append(row)
-
+                    row_out = batch_lines[idx] + ["Moralized" if pred else "Non-Moralized"]
+                    relevant_lines.append(row_out)
                 if relevant_lines:
                     writer.writerows(relevant_lines)
                     relevant_lines.clear()
-                
-        except Exception as e:
-            raise Exception(
-                f"Error filtering {file} from the {group} social group for moralization: {e}"
-            )
+                batch_lines.clear()
+
+        # Flush final batch
+        if batch_lines:
+            texts = [l[2].strip().replace("\n"," ") for l in batch_lines]
+            predictions = get_predictions(texts)
+            for idx, pred in enumerate(predictions):
+                row_out = batch_lines[idx] + ["Moralized" if pred else "Non-Moralized"]
+                relevant_lines.append(row_out)
+            if relevant_lines:
+                writer.writerows(relevant_lines)
+                relevant_lines.clear()
+
+    # generate processing report
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
     log_report(report_file_path, f"Finished labeling moralization for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
-    # Record missing lines info
     if missing_lines_count:
-        with open(missing_records_file, 'a', newline='') as missing_file:
-            missing_writer = csv.writer(missing_file)
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            missing_writer.writerow([file, missing_lines_count, timestamp])
+        missing_records_file = os.path.join(output_path, 'missing_records.csv')
+        need_header = not os.path.exists(missing_records_file)
+        with open(missing_records_file, 'a', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            if need_header:
+                w.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
+            w.writerow([str(file), missing_lines_count, datetime.datetime.now().isoformat(timespec="seconds")])
 
     return total_lines
 

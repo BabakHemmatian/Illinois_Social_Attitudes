@@ -254,243 +254,240 @@ def reconstruct_clauses(words, labels):
 
 # Generates and writes labels for an entire month's worth of documents. If the output file already exists, we check the last processed row number and resume from there.
 def label_generalization_file(file):
-    # Initialize missing lines count
-    missing_lines_count = 0
-    missing_records_file = os.path.join(output_path, 'missing_records.csv')
-    # Create missing records file with header if it does not exist.
-    if not os.path.exists(missing_records_file):
-        with open(missing_records_file, 'w', newline='') as missing_file:
-            missing_writer = csv.writer(missing_file)
-            missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
 
+    missing_lines_count = 0  
     log_report(report_file_path, f"Started labeling {Path(file).name} from the {group} social group for generalization.")
     start_time = time.time()
-    
+
     # Build output file path using the relative part from the input file.
     relative_path = Path(file).relative_to(sentiment_labeled_path)
     output_file_path = output_path / relative_path
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Determine resume position if output file already exists.
-    if os.path.exists(output_file_path):
-        mode = "a"  # Append
-        last_processed = 0
-        with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore") as existing_file:
-            reader_existing = csv.reader(existing_file)
-            rows = list(reader_existing)
-            if len(rows) > 1:
-                try:
-                    last_processed = int(rows[-1][-1])
-                except:
-                    last_processed = 0
-            else:
-                last_processed = 0
-    else:
-        mode = "w"
-        last_processed = 0
 
-    # open the input and output files in the correct modes
+    # Determine resume position by reading 'source_row' column
+    mode = "w"
+    last_processed = -1
+    if os.path.exists(output_file_path):
+        with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore") as existing_file:
+            out_rows = list(csv.reader(existing_file))
+            if len(out_rows) > 1:
+                out_header = out_rows[0]
+                try:
+                    src_idx_out = out_header.index("source_row")
+                    for r in reversed(out_rows[1:]):
+                        if len(r) > src_idx_out and r[src_idx_out].strip():
+                            last_processed = int(r[src_idx_out])
+                            break
+                    mode = "a"
+                except ValueError:
+                    # Output header missing source_row; safest is to rewrite from scratch.
+                    mode = "w"
+                    last_processed = -1
+
+    # Open input & output
     with open(file, "r", encoding="utf-8-sig", errors="ignore") as input_file, \
          open(output_file_path, mode, encoding="utf-8-sig", errors="ignore", newline="") as output_file:
-        
+
         reader = csv.reader((line.replace('\x00', '') for line in input_file))
         writer = csv.writer(output_file)
-        
-        # Write header if starting a new file
+
+        # Read input header and locate source_row column by name
+        try:
+            in_header = next(reader)
+        except StopIteration:
+            return 0  # empty input
+
+        try:
+            src_idx_in = in_header.index("source_row")
+        except ValueError:
+            raise RuntimeError("Input file is missing required 'source_row' column.")
+
+        # If starting a new output file, write header as: input header + generalization columns
         if mode == "w":
-            new_headers = headers + ["source_row","Moralization",
-                                           "Sentiment_Stanza_pos","Sentiment_Stanza_neu","Sentiment_Stanza_neg",
-                                           "Sentiment_Vader_compound",
-                                           "Sentiment_TextBlob_Polarity","Sentiment_TextBlob_Subjectivity","clauses",
-                                           "generalization_clause_labels","genericity_generic_count","genericity_specific_count",
-                                           "eventivity_stative_count","eventivity_dynamic_count",
-                                           "boundedness_static_count","boundedness_episodic_count","habitual_count","NA_count",
-                                           "genericity_generic_proportion","genericity_specific_proportion","eventivity_stative_proportion","eventivity_dynamic_proportion",
-                                           "boundedness_static_proportion","boundedness_episodic_proportion","habitual_proportion","NA_proportion"]
+            new_headers = in_header + [
+                "clauses",
+                "generalization_clause_labels",
+                "genericity_generic_count","genericity_specific_count",
+                "eventivity_stative_count","eventivity_dynamic_count",
+                "boundedness_static_count","boundedness_episodic_count","habitual_count","NA_count",
+                "genericity_generic_proportion","genericity_specific_proportion",
+                "eventivity_stative_proportion","eventivity_dynamic_proportion",
+                "boundedness_static_proportion","boundedness_episodic_proportion",
+                "habitual_proportion","NA_proportion"
+            ]
             writer.writerow(new_headers)
-        
+
         batch_lines = []
         total_lines = 0
-        relevant_lines = []  # Rows to write in bulk
-        
-        # go line by line through the input file to generate and write labels in batches
-        for id_, line in enumerate(reader):
-            if id_ == 0:
-                continue  # Skip header row of input
-            if id_ <= last_processed:
-                continue  # Resume: skip already processed rows
+        relevant_lines = []
 
-            try:
-                if len(line) >= 3:
-                    batch_lines.append(line)
-                    total_lines += 1
+        # Iterate rows
+        for row_idx, line in enumerate(reader):
+            # Skip bad rows
+            if len(line) < 3:
+                log_report(report_file_path, f"Skipping line {row_idx}: insufficient columns ({len(line)} found)")
+                missing_lines_count += 1
+                continue
 
-                    # Process in batches once we have batch_size rows
-                    if len(batch_lines) == batch_size:
+            # Resume: skip if already processed based on INPUT's source_row
+            src_val = line[src_idx_in].strip()
+            src_num = int(src_val) if src_val.isdigit() else None
+            if src_num is not None and src_num <= last_processed:
+                continue
 
-                        # 1) run predictions on the batch
-                        texts = [l[2].strip().replace("\n"," ") for l in batch_lines]
-                        _,result = run_pipeline(texts)
+            batch_lines.append(line)
+            total_lines += 1
 
-                        counts = {}
-                        individual_labels = {}
-                        clauses = {}
-                        props = {}
-                        
-                        # extracts and counts clause labels for each document in the batch
-                        for id_,text in enumerate(result):
-                            individual_labels[id_] = []
-                            clauses[id_] = []
-                            counts[id_] = {"generic":0,"specific":0,"stative":0,"dynamic":0,"static":0,"episodic":0,"habitual":0,"NA genericity":0,"NA eventivity":0,"NA boundedness":0}
-                            for clause in text:
-                                clauses[id_].append(clause[0])
-                                individual_labels[id_].append(clause[1])
-                                label = labels2attrs[clause[1]]
-                                for id__,feature in enumerate(label):
-                                    if "NA" not in feature:
-                                        counts[id_][feature] += 1
-                                    elif id__ == 0:
-                                        counts[id_]["NA genericity"] += 1
-                                    elif id__ == 1:
-                                        counts[id_]["NA eventivity"] += 1
-                                    else:
-                                        counts[id_]["NA boundedness"] += 1
-
-                            # extracts the proportions of different genericity, eventivity, boundedness, habituality and NA labels for a given document
-                            props[id_] = []
-                            gen_tot = counts[id_]['generic']+counts[id_]['specific']+counts[id_]['NA genericity']
-                            if gen_tot:
-                                props[id_] += [(counts[id_]['generic'])/gen_tot,
-                                counts[id_]['specific']/gen_tot]
-                            else:
-                                props[id_] += [0,0]
-                            eve_tot = counts[id_]['stative']+counts[id_]['dynamic']+counts[id_]['NA eventivity']
-                            if eve_tot:
-                                props[id_] += [counts[id_]['stative']/eve_tot,
-                                counts[id_]['dynamic']/eve_tot]
-                            else:
-                                props[id_] += [0,0]
-                            bou_tot = counts[id_]['static']+counts[id_]['episodic']+counts[id_]["habitual"]+counts[id_]['NA boundedness']
-                            if bou_tot:
-                                props[id_] += [
-                                counts[id_]['static']/bou_tot,
-                                counts[id_]['episodic']/bou_tot,
-                                counts[id_]['habitual']/bou_tot,
-                                counts[id_]['NA boundedness']/bou_tot]
-                            else:
-                                props[id_] += [0,0,0,0]
-
-                        # 2) collect the generalization labels
-
-                        for id_ in counts.keys():
-
-                            ind_labels = "\n".join(individual_labels[id_])
-                            ind_clause = "\n".join(clauses[id_])
-                            row = batch_lines[id_] + [ind_clause,ind_labels,counts[id_]['generic'],counts[id_]['specific'],counts[id_]['stative'],counts[id_]['dynamic'],counts[id_]['static'],counts[id_]['episodic'],counts[id_]['habitual'],counts[id_]['NA boundedness']]+props[id_]
-            
-                            relevant_lines.append(row)
-
-                        # 3) write out and clear buffers
-                        if relevant_lines:
-                            writer.writerows(relevant_lines)
-                            relevant_lines.clear()
-                        batch_lines.clear()
-                else:
-                    log_report(output_file_path,
-                        f"Skipping line {id_}: insufficient columns ({len(line)} found)")
-                    missing_lines_count += 1
-            except Exception as e:
-                raise Exception(
-                    f"Error labeling {Path(file).name} from the {group} social group for generalization: {e}"
-                )
-        try: # process any left-over documents as the final batch
-            if batch_lines:
-                
-                 # 1) run predictions on the batch
-                
-                texts = [l[2].strip().replace("\n"," ") for l in batch_lines]
-                _,result = run_pipeline(texts)
+            if len(batch_lines) == batch_size:
+                # 1) run predictions on the batch
+                texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
+                _, result = run_pipeline(texts)
 
                 counts = {}
                 individual_labels = {}
                 clauses = {}
                 props = {}
-                
-                # extracts and counts clause labels for each document in the batch
-                for id_,text in enumerate(result):
-                    individual_labels[id_] = []
-                    clauses [id_] = []
-                    counts[id_] = {"generic":0,"specific":0,"stative":0,"dynamic":0,"static":0,"episodic":0,"habitual":0,"NA genericity":0,"NA eventivity":0,"NA boundedness":0}
-                    for clause in text:
-                        clauses[id_].append(clause[0])
-                        individual_labels[id_].append(clause[1])
-                        label = labels2attrs[clause[1]]
-                        for id__,feature in enumerate(label):
+
+                # Extract and count labels per doc
+                for i_doc, text_result in enumerate(result):
+                    individual_labels[i_doc] = []
+                    clauses[i_doc] = []
+                    counts[i_doc] = {
+                        "generic":0,"specific":0,"stative":0,"dynamic":0,
+                        "static":0,"episodic":0,"habitual":0,
+                        "NA genericity":0,"NA eventivity":0,"NA boundedness":0
+                    }
+                    for clause in text_result:
+                        clauses[i_doc].append(clause[0])
+                        individual_labels[i_doc].append(clause[1])
+                        label_triplet = labels2attrs[clause[1]]
+                        for j, feature in enumerate(label_triplet):
                             if "NA" not in feature:
-                                counts[id_][feature] += 1
-                            elif id__ == 0:
-                                counts[id_]["NA genericity"] += 1
-                            elif id__ == 1:
-                                counts[id_]["NA eventivity"] += 1
+                                counts[i_doc][feature] += 1
+                            elif j == 0:
+                                counts[i_doc]["NA genericity"] += 1
+                            elif j == 1:
+                                counts[i_doc]["NA eventivity"] += 1
                             else:
-                                counts[id_]["NA boundedness"] += 1
-                    
-                    # extracts the proportions of different genericity, eventivity, boundedness, habituality and NA labels for a given document
-                    props[id_] = []
-                    gen_tot = counts[id_]['generic']+counts[id_]['specific']+counts[id_]['NA genericity']
-                    if gen_tot:
-                        props[id_] += [(counts[id_]['generic'])/gen_tot,
-                        counts[id_]['specific']/gen_tot]
-                    else:
-                        props[id_] += [0,0]
-                    eve_tot = counts[id_]['stative']+counts[id_]['dynamic']+counts[id_]['NA eventivity']
-                    if eve_tot:
-                        props[id_] += [counts[id_]['stative']/eve_tot,
-                        counts[id_]['dynamic']/eve_tot]
-                    else:
-                        props[id_] += [0,0]
-                    bou_tot = counts[id_]['static']+counts[id_]['episodic']+counts[id_]["habitual"]+counts[id_]['NA boundedness']
-                    if bou_tot:
-                        props[id_] += [
-                        counts[id_]['static']/bou_tot,
-                        counts[id_]['episodic']/bou_tot,
-                        counts[id_]['habitual']/bou_tot,
-                        counts[id_]['NA boundedness']/bou_tot]
-                    else:
-                        props[id_] += [0,0,0,0]
+                                counts[i_doc]["NA boundedness"] += 1
 
+                    # proportions
+                    props[i_doc] = []
+                    gen_tot = counts[i_doc]['generic'] + counts[i_doc]['specific'] + counts[i_doc]['NA genericity']
+                    props[i_doc] += [
+                        (counts[i_doc]['generic']/gen_tot) if gen_tot else 0.0,
+                        (counts[i_doc]['specific']/gen_tot) if gen_tot else 0.0,
+                    ]
+                    eve_tot = counts[i_doc]['stative'] + counts[i_doc]['dynamic'] + counts[i_doc]['NA eventivity']
+                    props[i_doc] += [
+                        (counts[i_doc]['stative']/eve_tot) if eve_tot else 0.0,
+                        (counts[i_doc]['dynamic']/eve_tot) if eve_tot else 0.0,
+                    ]
+                    bou_tot = (counts[i_doc]['static'] + counts[i_doc]['episodic'] +
+                               counts[i_doc]["habitual"] + counts[i_doc]['NA boundedness'])
+                    props[i_doc] += [
+                        (counts[i_doc]['static']/bou_tot) if bou_tot else 0.0,
+                        (counts[i_doc]['episodic']/bou_tot) if bou_tot else 0.0,
+                        (counts[i_doc]['habitual']/bou_tot) if bou_tot else 0.0,
+                        (counts[i_doc]['NA boundedness']/bou_tot) if bou_tot else 0.0,
+                    ]
 
-                # 2) collect the generalization labels
+                # 2) collect output rows
+                for i_doc in counts.keys():
+                    ind_clause = "\n".join(clauses[i_doc])
+                    ind_labels = "\n".join(individual_labels[i_doc])
+                    row_out = (batch_lines[i_doc] + [ind_clause, ind_labels,
+                              counts[i_doc]['generic'], counts[i_doc]['specific'],
+                              counts[i_doc]['stative'], counts[i_doc]['dynamic'],
+                              counts[i_doc]['static'], counts[i_doc]['episodic'],
+                              counts[i_doc]['habitual'], counts[i_doc]['NA boundedness']] + props[i_doc])
+                    relevant_lines.append(row_out)
 
-                for id_ in counts.keys():
-                    ind_clause = "\n".join(individual_labels[id_])
-                    ind_labels = "\n".join(individual_labels[id_])
-                    row = batch_lines[id_] + [ind_clause,ind_labels,counts[id_]['generic'],counts[id_]['specific'],counts[id_]['stative'],counts[id_]['dynamic'],counts[id_]['static'],counts[id_]['episodic'],counts[id_]['habitual'],counts[id_]['NA boundedness']]+props[id_]
-            
-                    relevant_lines.append(row)
-
-                # 3) write out and clear buffers
+                # 3) write and clear
                 if relevant_lines:
                     writer.writerows(relevant_lines)
                     relevant_lines.clear()
                 batch_lines.clear()
-        
-        except Exception as e:
-            raise Exception(
-                f"Error labeling {Path(file).name} from the {group} social group for generalization: {e}"
-            )
 
-    end_time = time.time()
-    elapsed_minutes = (end_time - start_time) / 60
+        # ---- Final flush ----
+        if batch_lines:
+            texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
+            _, result = run_pipeline(texts)
+
+            counts = {}
+            individual_labels = {}
+            clauses = {}
+            props = {}
+
+            for i_doc, text_result in enumerate(result):
+                individual_labels[i_doc] = []
+                clauses[i_doc] = []
+                counts[i_doc] = {
+                    "generic":0,"specific":0,"stative":0,"dynamic":0,
+                    "static":0,"episodic":0,"habitual":0,
+                    "NA genericity":0,"NA eventivity":0,"NA boundedness":0
+                }
+                for clause in text_result:
+                    clauses[i_doc].append(clause[0])
+                    individual_labels[i_doc].append(clause[1])
+                    label_triplet = labels2attrs[clause[1]]
+                    for j, feature in enumerate(label_triplet):
+                        if "NA" not in feature:
+                            counts[i_doc][feature] += 1
+                        elif j == 0:
+                            counts[i_doc]["NA genericity"] += 1
+                        elif j == 1:
+                            counts[i_doc]["NA eventivity"] += 1
+                        else:
+                            counts[i_doc]["NA boundedness"] += 1
+
+                # proportions
+                props[i_doc] = []
+                gen_tot = counts[i_doc]['generic'] + counts[i_doc]['specific'] + counts[i_doc]['NA genericity']
+                props[i_doc] += [
+                    (counts[i_doc]['generic']/gen_tot) if gen_tot else 0.0,
+                    (counts[i_doc]['specific']/gen_tot) if gen_tot else 0.0,
+                ]
+                eve_tot = counts[i_doc]['stative'] + counts[i_doc]['dynamic'] + counts[i_doc]['NA eventivity']
+                props[i_doc] += [
+                    (counts[i_doc]['stative']/eve_tot) if eve_tot else 0.0,
+                    (counts[i_doc]['dynamic']/eve_tot) if eve_tot else 0.0,
+                ]
+                bou_tot = (counts[i_doc]['static'] + counts[i_doc]['episodic'] +
+                           counts[i_doc]["habitual"] + counts[i_doc]['NA boundedness'])
+                props[i_doc] += [
+                    (counts[i_doc]['static']/bou_tot) if bou_tot else 0.0,
+                    (counts[i_doc]['episodic']/bou_tot) if bou_tot else 0.0,
+                    (counts[i_doc]['habitual']/bou_tot) if bou_tot else 0.0,
+                    (counts[i_doc]['NA boundedness']/bou_tot) if bou_tot else 0.0,
+                ]
+
+            for i_doc in counts.keys():
+                ind_clause = "\n".join(clauses[i_doc])   # FIX: was using individual_labels before
+                ind_labels = "\n".join(individual_labels[i_doc])
+                row_out = (batch_lines[i_doc] + [ind_clause, ind_labels,
+                          counts[i_doc]['generic'], counts[i_doc]['specific'],
+                          counts[i_doc]['stative'], counts[i_doc]['dynamic'],
+                          counts[i_doc]['static'], counts[i_doc]['episodic'],
+                          counts[i_doc]['habitual'], counts[i_doc]['NA boundedness']] + props[i_doc])
+                relevant_lines.append(row_out)
+
+            if relevant_lines:
+                writer.writerows(relevant_lines)
+
+    # generate processing report
+    elapsed_minutes = (time.time() - start_time) / 60
     log_report(report_file_path, f"Finished labeling generalization for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
-    # Record missing lines info
     if missing_lines_count:
-        with open(missing_records_file, 'a', newline='') as missing_file:
-            missing_writer = csv.writer(missing_file)
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            missing_writer.writerow([file, missing_lines_count, timestamp])
-    
+        missing_records_file = os.path.join(output_path, 'missing_records.csv')
+        need_header = not os.path.exists(missing_records_file)
+        with open(missing_records_file, 'a', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            if need_header:
+                w.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
+            w.writerow([str(file), missing_lines_count, datetime.datetime.now().isoformat(timespec="seconds")])
+
     return total_lines
 
 ##########################################

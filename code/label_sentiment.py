@@ -51,151 +51,173 @@ for year in years:
         else:
             raise Exception("Missing moralization-labeled file for the {} social group from year {}, month {}".format(group, year, month))
 
+# generates labels for an entire month's worth of documents. It resumes labeling if it comes across incomplete output.
 def label_sentiment_file(file):
-    # Initialize missing lines count
-    missing_lines_count = 0
-    missing_records_file = os.path.join(output_path, 'missing_records.csv')
-    # Create missing records file with header if it does not exist.
-    if not os.path.exists(missing_records_file):
-        with open(missing_records_file, 'w', newline='') as missing_file:
-            missing_writer = csv.writer(missing_file)
-            missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
 
+    missing_lines_count = 0  
     log_report(report_file_path, f"Started labeling {Path(file).name} from the {group} social group for sentiment.")
     start_time = time.time()
-    
-    # Build output file path using the relative part from the input file.
+
+    # Compute output path that mirrors input directory structure
     relative_path = Path(file).relative_to(moralization_labeled_path)
     output_file_path = output_path / relative_path
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Determine resume position if output file already exists.
-    if os.path.exists(output_file_path):
-        mode = "a"  # Append
-        last_processed = 0
-        with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore") as existing_file:
-            reader_existing = csv.reader(existing_file)
-            rows = list(reader_existing)
-            if len(rows) > 1:
-                try:
-                    last_processed = int(rows[-1][8])
-                except:
-                    last_processed = 0
-            else:
-                last_processed = 0
-    else:
-        mode = "w"
-        last_processed = 0
+    # determine resume position from any existing output
+    mode = "w"
+    last_processed = -1  # nothing processed yet
+    out_header = None
+    source_row_out_idx = None
 
-    with open(file, "r", encoding="utf-8-sig", errors="ignore") as input_file, \
-         open(output_file_path, mode, encoding="utf-8-sig", errors="ignore", newline="") as output_file:
-        
-        reader = csv.reader((line.replace('\x00', '') for line in input_file))
-        writer = csv.writer(output_file)
-        
-        # Write header if starting a new file
+    if os.path.exists(output_file_path):
+        # Read header + last data row to find the last processed source_row
+        with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore") as f_out:
+            out_rows = list(csv.reader(f_out))
+            if len(out_rows) > 1:
+                out_header = out_rows[0]
+                try:
+                    source_row_out_idx = out_header.index("source_row")
+                    # Walk backwards to find last non-empty source_row
+                    for r in reversed(out_rows[1:]):
+                        if len(r) > source_row_out_idx and r[source_row_out_idx].strip():
+                            last_processed = int(r[source_row_out_idx])
+                            break
+                    mode = "a"  # append 
+                except ValueError:
+                    # Output exists but somehow lacks 'source_row' in header; start fresh.
+                    mode = "w"
+                    last_processed = -1
+
+    # sentiment tools
+    try:
+        _ = nlp, analyzer  # type: ignore  # these are set later in your script
+    except NameError:
+        stanza.download('en', processors='tokenize,sentiment', verbose=False)
+        globals()["nlp"] = stanza.Pipeline(lang='en', processors='tokenize,sentiment')
+        from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
+        globals()["analyzer"] = SentimentIntensityAnalyzer()
+
+    # batching
+    try:
+        BATCH = int(batch_size)  # use your global if present
+    except Exception:
+        BATCH = 1200
+
+    # process input
+    total_lines_written = 0
+    with open(file, "r", encoding="utf-8-sig", errors="ignore", newline="") as f_in, \
+         open(output_file_path, mode, encoding="utf-8", newline="") as f_out:
+
+        reader = csv.reader(f_in)
+        writer = csv.writer(f_out)
+
+        # Read input header and find its 'source_row'
+        try:
+            in_header = next(reader)
+        except StopIteration:
+            # Empty input file
+            return 0
+
+        try:
+            source_row_in_idx = in_header.index("source_row")
+        except ValueError:
+            raise RuntimeError("Input file is missing required 'source_row' column.")
+
+        # If we're starting a brand-new output file, write headers
         if mode == "w":
-            new_headers = headers + ["source_row","Moralization",
-                                           "Sentiment_Stanza_pos","Sentiment_Stanza_neu","Sentiment_Stanza_neg",
-                                           "Sentiment_Vader_compound",
-                                           "Sentiment_TextBlob_Polarity","Sentiment_TextBlob_Subjectivity"]
+            new_headers = in_header + [
+                "Sentiment_Stanza_pos", "Sentiment_Stanza_neu", "Sentiment_Stanza_neg",
+                "Sentiment_Vader_compound",
+                "Sentiment_TextBlob_Polarity", "Sentiment_TextBlob_Subjectivity"
+            ]
             writer.writerow(new_headers)
 
-
+        # Prepare batch buffers
         batch_lines = []
-        total_lines = 0
-        relevant_lines = []  # Rows to write in bulk
-        
-        for id_, line in enumerate(reader):
-            if id_ == 0:
-                continue  # Skip header row of input
-            if id_ <= last_processed:
-                continue  # Resume: skip already processed rows
+        batch_input_rows = []  # keep the original input rows in parallel
 
-            try:
-                if len(line) >= 3:
-                    batch_lines.append(line)
-                    total_lines += 1
-
-                    # Process in batches once we have batch_size rows
-                    if len(batch_lines) == batch_size:
-
-                        # 1) collect the sentiment labels
-
-                        for line in batch_lines:
-                            
-                            # extract Stanza sentiment scores                        
-                            doc = nlp(line[2].strip().replace("\n"," "))
-                            stanza_counts = {"pos":0,"neu":0,"neg":0}
-                            stanza_labels = {0:"neg",1:"neu", 2:"pos"}
-                            vader_scores = []
-                            for sentence in doc.sentences:
-                                stanza_counts[stanza_labels[sentence.sentiment]] += 1
-                                vader_scores.append(analyzer.polarity_scores(sentence.text)["compound"])
-
-                            # extract the TextBlob sentiment scores
-                            doc = TextBlob(line[2].strip().replace("\n"," "))
-
-                            sent_line = line + [stanza_counts["pos"],stanza_counts["neu"],stanza_counts["neg"],np.mean(vader_scores),doc.sentiment.polarity,doc.sentiment.subjectivity]
-                            relevant_lines.append(sent_line)
-
-                        # 2) write out and clear buffers
-                        if relevant_lines:
-                            writer.writerows(relevant_lines)
-                            relevant_lines.clear()
-                        batch_lines.clear()
-                else:
-                    log_report(output_file_path,f"Skipping line {id_}: insufficient columns ({len(line)} found)")
-                    missing_lines_count += 1
-            except Exception as e:
-                raise Exception(
-                    f"Error labeling {file} from the {group} social group for sentiment: {e}"
-                )
-            
-        # Process any remaining texts in the final batch
-        try:
-            if batch_lines:
-                # 1) collect the sentiment labels
-
-                for line in batch_lines:
-                    
-                    # extract Stanza sentiment scores                        
-                    doc = nlp(line[2].strip().replace("\n"," "))
-                    stanza_counts = {"pos":0,"neu":0,"neg":0}
-                    stanza_labels = {0:"neg",1:"neu", 2:"pos"}
+        def flush_batch():
+            nonlocal total_lines_written
+            if not batch_lines:
+                return
+            # Collect sentiments for each line in the batch
+            out_rows = []
+            for line in batch_lines:
+                try:
+                    # Stanza sentence-level aggregation
+                    doc = nlp(line[2].strip().replace("\n", " "))
+                    stanza_counts = {"pos": 0, "neu": 0, "neg": 0}
+                    stanza_labels = {0: "neg", 1: "neu", 2: "pos"}
                     vader_scores = []
                     for sentence in doc.sentences:
                         stanza_counts[stanza_labels[sentence.sentiment]] += 1
                         vader_scores.append(analyzer.polarity_scores(sentence.text)["compound"])
 
-                    # extract the TextBlob sentiment scores
-                    doc = TextBlob(line[2].strip().replace("\n"," "))
+                    # TextBlob document-level
+                    tb = TextBlob(line[2].strip().replace("\n", " "))
 
-                    sent_line = line + [stanza_counts["pos"],stanza_counts["neu"],stanza_counts["neg"],np.mean(vader_scores),doc.sentiment.polarity,doc.sentiment.subjectivity]
-                    relevant_lines.append(sent_line)
+                    # Append only new columns; keep the original row intact
+                    out_row = line + [
+                        stanza_counts["pos"], stanza_counts["neu"], stanza_counts["neg"],
+                        (np.mean(vader_scores) if vader_scores else 0.0),
+                        tb.sentiment.polarity, tb.sentiment.subjectivity
+                    ]
+                    out_rows.append(out_row)
+                except Exception:
+                    # Count and skip any bad line, but keep going
+                    nonlocal missing_lines_count
+                    missing_lines_count += 1
 
-                # 2) write out and clear buffers
-                if relevant_lines:
-                    writer.writerows(relevant_lines)
-                    relevant_lines.clear()
-                batch_lines.clear()
-        except Exception as e:
-            raise Exception(
-                f"Error labeling {file} from the {group} social group for sentiment: {e}"
-            )
+            if out_rows:
+                writer.writerows(out_rows)
+                total_lines_written += len(out_rows)
 
+            # clear buffers
+            batch_lines.clear()
+            batch_input_rows.clear()
+
+        # Iterate the input, skip header 
+        for row in reader:
+            # Guard against short/blank lines (expect at least 3 columns given usage of row[2] for text)
+            if len(row) < 3:
+                missing_lines_count += 1
+                continue
+
+            # Use the input's source_row to decide skipping/resume
+            src_value = row[source_row_in_idx].strip()
+            if not src_value.isdigit():
+                # If malformed (e.g. empty), treat as missing and process anyway to avoid skipping the whole file accidentally.
+                src_num = None
+            else:
+                src_num = int(src_value)
+
+            if src_num is not None and src_num <= last_processed:
+                continue  # already processed in previous run
+
+            batch_lines.append(row)
+            batch_input_rows.append(row)
+
+            if len(batch_lines) >= BATCH:
+                flush_batch()
+
+        # Flush any remainder
+        flush_batch()
+
+    # generate processing report
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    log_report(report_file_path, f"Finished labeling sentiment for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_report(report_file_path, f"Finished labeling sentiment for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines_written}")
 
-    # Record missing lines info
-    if missing_lines_count:
-        with open(missing_records_file, 'a', newline='') as missing_file:
-            missing_writer = csv.writer(missing_file)
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            missing_writer.writerow([file, missing_lines_count, timestamp])
-    
-    return total_lines
+    if missing_lines_count > 0:
+        missing_records_file = os.path.join(output_path, 'missing_records.csv')
+        need_header = not os.path.exists(missing_records_file)
+        with open(missing_records_file, 'a', newline='', encoding='utf-8') as f:
+            w = csv.writer(f)
+            if need_header:
+                w.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
+            w.writerow([str(file), missing_lines_count, datetime.datetime.now().isoformat(timespec="seconds")])
+
+    return total_lines_written
 
 ##########################################
 # Main execution: process each file and aggregate stats

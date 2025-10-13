@@ -8,6 +8,7 @@ import random
 import os
 import time
 import datetime
+from pathlib import Path
 
 # Extract and transform CLI arguments 
 args = get_args()
@@ -129,7 +130,7 @@ def filter_sample_year(year, file_list_for_year):
 
     # Iterate through each file for this year
     for file in file_list_for_year:
-        print(f"Sampling from {file}")
+        print(f"Sampling from {Path(file).name}")
         try:
             with open(file, "r", encoding='utf-8-sig', errors='ignore') as input_file:
                 reader = csv.reader(x.replace('\0', '') for x in input_file)

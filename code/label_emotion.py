@@ -95,119 +95,94 @@ for year in years:
         else:
             raise Exception("Missing generalization-labeled file for the {} social group from year {}, month {}".format(group, year, month))
 
-# If the output file already exists, we check the last processed row number and resume from there.
+# generates labels for a month's worth of documents. Resumes labeling if it finds incomplete output files. 
 def label_emotion_file(file):
-    # Initialize missing lines count
+    
+    # setup & logging
     missing_lines_count = 0
-    missing_records_file = os.path.join(output_path, 'missing_records.csv')
-    # Create missing records file with header if it does not exist.
-    if not os.path.exists(missing_records_file):
-        with open(missing_records_file, 'w', newline='') as missing_file:
-            missing_writer = csv.writer(missing_file)
-            missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
-
     log_report(report_file_path, f"Started labeling {Path(file).name} from the {group} social group for emotion.")
     start_time = time.time()
-    
-    # Build output file path using the relative part from the input file.
+
+    # Mirror input directory structure for output path
     relative_path = Path(file).relative_to(generalization_labeled_path)
     output_file_path = output_path / relative_path
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
-    
-    # Determine resume position if output file already exists.
+
+    # Determine resume position by reading 'source_row' column by name
+    mode = "w"
+    last_processed = -1
     if os.path.exists(output_file_path):
-        mode = "a"  # Append
-        last_processed = 0
         with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore") as existing_file:
-            reader_existing = csv.reader(existing_file)
-            rows = list(reader_existing)
-            if len(rows) > 1:
+            out_rows = list(csv.reader(existing_file))
+            if len(out_rows) > 1:
+                out_header = out_rows[0]
                 try:
-                    last_processed = int(rows[-1][8])
-                except:
-                    last_processed = 0
-            else:
-                last_processed = 0
-    else:
-        mode = "w"
-        last_processed = 0
+                    src_idx_out = out_header.index("source_row")
+                    # find the last non-empty source_row from the bottom
+                    for r in reversed(out_rows[1:]):
+                        if len(r) > src_idx_out and r[src_idx_out].strip():
+                            last_processed = int(r[src_idx_out])
+                            break
+                    mode = "a"
+                except ValueError:
+                    # Output header missing source_row; safest is to rewrite from scratch.
+                    mode = "w"
+                    last_processed = -1
 
-
+    # Open input & output
     with open(file, "r", encoding="utf-8-sig", errors="ignore") as input_file, \
-         open(output_file_path, mode, encoding="utf-8-sig", errors="ignore", newline="") as output_file:
-        
+         open(output_file_path, mode, encoding="utf-8", errors="ignore", newline="") as output_file:
+
         reader = csv.reader((line.replace('\x00', '') for line in input_file))
         writer = csv.writer(output_file)
-        
-        # Write header if starting a new file
+
+        # Read input header (this is the output of label_generalization.py)
+        try:
+            in_header = next(reader)
+        except StopIteration:
+            return 0  # empty input
+
+        # Locate 'source_row' in the input header
+        try:
+            src_idx_in = in_header.index("source_row")
+        except ValueError:
+            raise RuntimeError("Input file is missing required 'source_row' column.")
+
+        # If starting a new output file, write headers
         if mode == "w":
-            new_headers = headers + ["source_row","Moralization",
-                                           "Sentiment_Stanza_pos","Sentiment_Stanza_neu","Sentiment_Stanza_neg",
-                                           "Sentiment_Vader_compound",
-                                           "Sentiment_TextBlob_Polarity","Sentiment_TextBlob_Subjectivity","clauses",
-                                           "generalization_clause_labels","genericity_generic_count","genericity_specific_count",
-                                           "eventivity_stative_count","eventivity_dynamic_count",
-                                           "boundedness_static_count","boundedness_episodic_count","habitual_count","NA_count",
-                                           "genericity_generic_proportion","genericity_specific_proportion","eventivity_stative_proportion","eventivity_dynamic_proportion",
-                                           "boundedness_static_proportion","boundedness_episodic_proportion","habitual_proportion","NA_proportion",
-                                           "1_anger","1_disgust","1_fear","1_joy","1_neutral","1_sadness","1_surprise",
-                                           "2_sadness","2_joy","2_love","2_anger","2_fear","2_surprise",
-                                           "3_neutral","3_joy","3_surprise","3_anger","3_sadness","3_disgust","3_fear"]
+            emotion_headers = [
+                "1_anger","1_disgust","1_fear","1_joy","1_neutral","1_sadness","1_surprise",
+                "2_sadness","2_joy","2_love","2_anger","2_fear","2_surprise",
+                "3_neutral","3_joy","3_surprise","3_anger","3_sadness","3_disgust","3_fear"
+            ]
+            new_headers = in_header + emotion_headers
             writer.writerow(new_headers)
 
         batch_lines = []
+        relevant_lines = []
         total_lines = 0
-        relevant_lines = []  # Rows to write in bulk
-        
-        for id_, line in enumerate(reader):
-            if id_ == 0:
-                continue  # Skip header row of input
-            if id_ <= last_processed:
-                continue  # Resume: skip already processed rows
 
-            try:
-                if len(line) >= 3:
-                    batch_lines.append(line)
-                    total_lines += 1
+        # Iterate rows
+        for row_idx, line in enumerate(reader, start=1):  # start=1 since we consumed header
+            # Skip bad rows (need at least 3 cols because we read text from line[2])
+            if len(line) < 3:
+                log_report(report_file_path, f"Skipping line {row_idx}: insufficient columns ({len(line)} found)")
+                missing_lines_count += 1
+                continue
 
-                    # Process in batches once we have batch_size rows
-                    if len(batch_lines) == batch_size:
-                        texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
+            # Resume: skip if already processed based on input's source_row
+            src_val = line[src_idx_in].strip()
+            src_num = int(src_val) if src_val.isdigit() else None
+            if src_num is not None and src_num <= last_processed:
+                continue
 
-                        for i in range(3):
-                            if i == 0:
-                                _, probs = get_predictions(texts, tokenizer=tokenizer1, model=model1)
-                            elif i == 1:
-                                _, probs = get_predictions(texts, tokenizer=tokenizer2, model=model2)
-                            else:
-                                _, probs = get_predictions(texts, tokenizer=tokenizer1, model=model3)
+            batch_lines.append(line)
+            total_lines += 1
 
-                            # update in place
-                            for idx in range(len(batch_lines)):
-                                batch_lines[idx] = batch_lines[idx] + probs[idx]
-
-                        # now add all updated rows to relevant_lines
-                        relevant_lines.extend(batch_lines)
-
-                        if relevant_lines:
-                            writer.writerows(relevant_lines)
-                            relevant_lines.clear()
-                        batch_lines.clear()
-                else:
-                    log_report(output_file_path,
-                        f"Skipping line {id_}: insufficient columns ({len(line)} found)")
-                    missing_lines_count += 1
-            except Exception as e:
-                raise Exception(
-                    f"Error labeling {file} from the {group} social group for emotion: {e}"
-                )
-
-        # Process any remaining texts in the final batch
-        try:
-            if batch_lines:
-
+            if len(batch_lines) == batch_size:
                 texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
 
+                # Accumulate probabilities from the three models
                 for i in range(3):
                     if i == 0:
                         _, probs = get_predictions(texts, tokenizer=tokenizer1, model=model1)
@@ -216,33 +191,49 @@ def label_emotion_file(file):
                     else:
                         _, probs = get_predictions(texts, tokenizer=tokenizer1, model=model3)
 
-                    # update in place
+                    # Append probabilities to each row in-place
                     for idx in range(len(batch_lines)):
                         batch_lines[idx] = batch_lines[idx] + probs[idx]
 
-                # now add all updated rows to relevant_lines
                 relevant_lines.extend(batch_lines)
-
                 if relevant_lines:
                     writer.writerows(relevant_lines)
                     relevant_lines.clear()
                 batch_lines.clear()
-        
-        except Exception as e:
-            raise Exception(
-                f"Error labeling {file} from the {group} social group for emotion: {e}"
-        )
-                
-    end_time = time.time()
-    elapsed_minutes = (end_time - start_time) / 60
+
+        # Final flush
+        if batch_lines:
+            texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
+
+            for i in range(3):
+                if i == 0:
+                    _, probs = get_predictions(texts, tokenizer=tokenizer1, model=model1)
+                elif i == 1:
+                    _, probs = get_predictions(texts, tokenizer=tokenizer2, model=model2)
+                else:
+                    _, probs = get_predictions(texts, tokenizer=tokenizer1, model=model3)
+
+                for idx in range(len(batch_lines)):
+                    batch_lines[idx] = batch_lines[idx] + probs[idx]
+
+            relevant_lines.extend(batch_lines)
+            if relevant_lines:
+                writer.writerows(relevant_lines)
+
+    # generate processing report
+    elapsed_minutes = (time.time() - start_time) / 60
     log_report(report_file_path, f"Finished labeling emotion for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
-    # Record missing lines info
-    if missing_lines_count:
-        with open(missing_records_file, 'a', newline='') as missing_file:
+    # Create missing_records.csv only if there were missing lines
+    if missing_lines_count > 0:
+        missing_records_file = os.path.join(output_path, 'missing_records.csv')
+        need_header = not os.path.exists(missing_records_file)
+        with open(missing_records_file, 'a', newline='', encoding='utf-8') as missing_file:
             missing_writer = csv.writer(missing_file)
-            timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            missing_writer.writerow([file, missing_lines_count, timestamp])
+            if need_header:
+                missing_writer.writerow(['Filename', 'MissingLinesCount', 'Timestamp'])
+            timestamp = datetime.datetime.now().isoformat(timespec="seconds")
+            missing_writer.writerow([str(file), missing_lines_count, timestamp])
 
     return total_lines
 

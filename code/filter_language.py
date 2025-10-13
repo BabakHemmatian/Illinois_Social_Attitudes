@@ -10,6 +10,7 @@ import time
 import re
 from datetime import datetime  # For timestamping
 import traceback
+from pathlib import Path
 
 # Increase the field size limit to handle larger fields
 csv.field_size_limit(2**31 - 1)
@@ -48,15 +49,17 @@ report_file_path = os.path.join(output_path, "Report_filter_language.csv")
 
 # Function for language filtering a single file
 def filter_language_file(file):
+
     function_name = "filter_language_file"
-    log_report(report_file_path, f"Started language filtering for {file}")
+    log_report(report_file_path, f"Started language filtering for {Path(file).name}")
+    
     try:
         # Get the relative path after "keywords/"
         relative_path = file.split("keywords" + os.sep)[1]
         # Build the full output file path in a platform-safe way
         output_file_path = os.path.join(output_path, relative_path)
 
-        with open(file, "r", encoding='utf-8', errors='ignore') as input_file, \
+        with open(file, "r", encoding='utf-8-sig', errors='ignore') as input_file, \
              open(output_file_path, "w", encoding='utf-8', errors='ignore', newline='') as output_file:
             start_time = time.time()
 
@@ -85,7 +88,7 @@ def filter_language_file(file):
                     filtered_counter += 1
 
             elapsed = (time.time() - start_time) / 60
-            msg = (f"Finished language filtering {file} in {elapsed:.2f} minutes. "
+            msg = (f"Finished language filtering {Path(file).name} in {elapsed:.2f} minutes. "
                    f"# of evaluations: {filtered_counter}, # of English posts: {passed_counter}, # of errors: {error_counter}")
             log_report(report_file_path, msg)
             # Return counters for overall statistics

@@ -19,6 +19,7 @@ def get_args(argv=None):
         'filter_keywords',
         'filter_language',
         'filter_relevance',
+        'filter_keywords_adv',
         'filter_sample',
         'label_moralization',
         'label_sentiment',
@@ -40,7 +41,7 @@ def get_args(argv=None):
         type=str,
         choices=[
             'filter_keywords', 'filter_language', 'filter_sample',
-            'filter_relevance', 'metrics_interrater', 'label_moralization',
+            'filter_relevance', 'filter_keywords_adv','metrics_interrater', 'label_moralization',
             'label_generalization', 'label_sentiment', 'train_relevance', 'label_emotion'
         ],
         required=True,

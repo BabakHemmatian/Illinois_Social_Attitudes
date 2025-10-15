@@ -11,6 +11,9 @@ from transformers import RobertaTokenizerFast, RobertaForSequenceClassification
 import datetime
 import re
 
+# Increase the field size limit to handle larger fields
+csv.field_size_limit(2**31 - 1)
+
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)

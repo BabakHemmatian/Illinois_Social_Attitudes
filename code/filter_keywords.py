@@ -16,24 +16,25 @@ from utils import load_terms, groups, headers, parse_range, log_report, log_erro
 # Extract and transform CLI arguments
 args = get_args()
 years = parse_range(args.years)
+group = args.group
 if isinstance(years, int):
     years = [years]
 
 # Load social group keywords
 keyword_path = os.path.join(dir_path.replace("code", "keywords"))
-marginalized_words = load_terms(os.path.join(keyword_path, f"{args.group}_{groups[args.group][0]}.txt"))
-privileged_words = load_terms(os.path.join(keyword_path, f"{args.group}_{groups[args.group][1]}.txt"))
+marginalized_words = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][0]}.txt"))
+privileged_words = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][1]}.txt"))
 
 # Build an Aho-Corasick automaton for fast pattern matching of the keywords
 automaton = ahocorasick.Automaton()
 for term in marginalized_words:
-    automaton.add_word(term.lower(), (groups[args.group][0], term))
+    automaton.add_word(term.lower(), (groups[group][0], term))
 for term in privileged_words:
-    automaton.add_word(term.lower(), (groups[args.group][1], term))
+    automaton.add_word(term.lower(), (groups[group][1], term))
 automaton.make_automaton()
 
 # Prepare and inspect the output path
-output_path = os.path.join(dir_path.replace("code", os.path.join("data", "data_reddit_curated", args.group, "filtered_keywords")))
+output_path = os.path.join(dir_path.replace("code", os.path.join("data", "data_reddit_curated", group, "filtered_keywords")))
 os.makedirs(output_path, exist_ok=True)
 processed_files = set(f for f in os.listdir(output_path) if f.endswith('.csv'))
 
@@ -110,7 +111,7 @@ def filter_keyword_file(file):
         log_report(report_file_path, f"Error filtering by keywords in file {Path(file).name}: {e}")
 
     elapsed_time = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Filtered {Path(file).name} by for relevance to the {args.group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
+    log_report(report_file_path, f"Filtered {Path(file).name} by for relevance to the {group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
 
     return total_lines, matched_lines
 
@@ -135,11 +136,10 @@ def filter_keyword_month(year, month, files):
     log_report(report_file_path, f"Completed filtering {year}-{month} in {elapsed_time:.2f} minutes")
     return total_lines, matched_lines
 
+# Process files in parallel while checking for missing month files.
+# Log warnings for missing months before processing.
 def filter_keyword_parallel():
-    """
-    Process files in parallel while checking for missing month files.
-    Log warnings for missing months before processing.
-    """
+    
     total_lines = 0
     matched_lines = 0
     max_workers = min(6, os.cpu_count())
@@ -201,4 +201,4 @@ if __name__ == "__main__":
     except Exception as e:
         log_report(report_file_path, f"Fatal error during processing: {e}")
     total_time = (time.time() - overall_start_time) / 60
-    log_report(report_file_path, f"Keyword filtering for {args.group} for {args.years} finished in {total_time:.2f} minutes")
+    log_report(report_file_path, f"Keyword filtering for {group} for {args.years} finished in {total_time:.2f} minutes")

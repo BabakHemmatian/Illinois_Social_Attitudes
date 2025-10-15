@@ -1,0 +1,103 @@
+(?<!men[-\s]in[-\s])black(?!\s+(?:octavian|Friday|sea|box|tie|metal|coffee|out|space|label|list|watch|prior|bear|hair|pink|lines|belt|room|en|cherry|witch|cat|dog|heads|colou?r|cloth|smudge|stain|spot|[-\s]and[-\s]white))\b
+blacks\b
+black[-\s]*face
+Nigger
+neeger
+blacks\b
+black[-\s]*face
+Nigger
+neeger
+neekeri
+niger
+nig
+\bnigs?\b
+nigor
+nigra
+nigre
+nigar
+niggur
+nigga
+niggah
+niggar
+nigguh
+niggress
+nigette
+negro
+neger
+\bAfrican\b(?!\s+(?:Union|Cup|continent|wildlife|elephant|lion))
+Abid
+Abeed
+Monkey
+\bape\b
+\bapes\b
+\bape[-\s]*like
+\bchimp\b(?!\s*(?:anzee|research|sanctuary))
+gator bait
+Aunt Jemima
+Bamboula
+\bCoon\b
+\btar\b(?!\s+(?:pit|road|sand|ball))
+Uncle Tom
+\bcoal\b(?!\s+(?:mine|plant|power|exports?))
+Jim Crow
+Kakasiah
+kakasia
+Barzangi
+Murzyn
+Rastus
+Sambo
+Schvartze
+Banaan
+Bluegum
+Bootlip
+Buckwheat
+Choc-ice
+\bCrow\b(?!\s+(?:Nation|Agency|Creek|County))
+cotton picker
+Cotton-picker
+cottonpicker
+Czarnuch
+Groid
+Heukhyeong
+Jigaboo
+jiggabo
+jigarooni
+jijjiboo
+zigabo
+jig\b
+jigg
+\bjigger\b(?!\s*(?:measure|tool|bar))
+Jungle bunny
+Kuronbō
+kuronbo
+Kkamdungi
+Mau-Mau
+MauMau
+Mau Mau
+Mayate
+mayatero
+Moon cricket
+Mulignan
+mulignon
+moolinyan
+Niglet
+negrito
+Nig-nog
+Nignog
+Nig nog
+Quashie
+Sheboon
+\bShine\b
+\bshines\b
+smoked Irish
+Sooty
+Spade
+Spook
+Thicklips
+Toad
+Uppity
+Darky
+darkey
+darkie
+Spearchucker
+Teapot

@@ -1,0 +1,41 @@
+﻿\bdisabled\b
+Disability
+differently abled
+\bImpaired
+Subnormal
+\bincapable(?!\s+of)\b
+Defective
+\bLame\b
+\blamer
+Cripple
+Handicap
+Paretic
+\bblind(?!er\b|ly\b|ing\b|age\b|side\b|fold\b|\s+(?:guardian|with)\b)
+Deaf
+visually-impaired
+Paraly[sz]e
+Diabet
+Cerebral Palsy
+\bCP\b
+\babnormal(?!\s+(?:amount|circumstances|way)|ly|cy|i[sz]e)
+Epilep
+Cancer
+Carcin
+plegic
+Dwarf
+Little Person
+Midget
+Munchkin
+Mute
+Mutant
+Vegetable
+\bvegetative[-\s]?state\b
+Gimp
+Stump
+Amput
+Spaz
+Spastic
+Special needs
+Special ed
+\bSPED\b
+Hunchback

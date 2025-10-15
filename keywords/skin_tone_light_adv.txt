@@ -1,0 +1,82 @@
+roundeye
+redlegs
+pink pig
+peckerwood
+palagi
+(?i)\b(?<!walter[-\s])(?<!dana[-\s])(?<!angela[-\s])(?<!black[-\s]and[-\s])white(?!\s+(?:side|space|label|list|discos|little|day|edge|shark|tank|text|ceramic|case|walker|belt|album|witch|sprinkle|cat|dog|car|sox|house|flecks|heads|ones|colou?r|cloth|dragon|gold|smudge|stain|spot|lying|lie|teeth))\b
+(?i)\bwhite[-\s]?(?:face|ness|wash)\b
+whitey
+whitely
+whiter
+(?i)\bKaren\b(?!\s+[A-Z][a-z]+)
+\bMiss Ann\b
+whitest
+(?i)\b(?:light|fair)[-\s]*skin(?:ned)?\b
+(?i)\bpale(?:r|st)?\b
+(?i)\bpale[-\s]?ness\b
+ofay
+mzungu
+Londos?\b
+kojaengi
+haole
+honky
+honkey
+honkie
+gweilo
+gwailo
+kwai lo
+gwers?\b
+gubs?\b
+gin jockey
+frang khi nok
+Caucasian
+cracker
+(?i)\b(?<!of[-\s])(?<!to[-\s])(?<!lime[-\s])(?<!lime)light(?!\s+(?:side|year|coral|fade|bulb|rail|weight|house|switch|beer|reading|novel|touch|mode|theme))\b
+Aryan
+\bgora
+Buckra
+bakra
+bule
+carcamano
+twinkie
+wasi'chu
+wasichu
+wasi chu
+goro
+paler
+palest
+paleness
+pale-ness
+radiant(?!\s+(?:look))\b
+glowing
+sun[-\s/]*kissed
+golden
+warm-toned
+warm toned
+rich
+deep
+even[-\s/]*toned
+luminous
+porcelain
+(?i)\bashy(?:-?ness)?\b
+ashen(?!\s+(?:warrior))\b
+\bsallow
+ruddy
+washed[-\s/]out
+ghostly
+ghost[-\s/]*skinned
+chalky
+chalk[-\s/]*skin
+pasty
+(?i)\bpast[iy]ness\b
+too[-\s/]*light
+ghosts?\b
+milky
+(?i)\b(?<!chlorine[-\s])bleach(?!ers?)\b
+(?i)\b(?<!research[-\s])paper\b(?!\s*(?:cut|clip|trail|tiger))
+mayo
+snow\b
+(?i)\bsee[-\s/]*through\b
+albino
+\begg\b(?=\s+(?:skin|complexion))
+ghastly(?!\s+(?:state))\b

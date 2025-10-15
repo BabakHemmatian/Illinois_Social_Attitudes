@@ -27,7 +27,7 @@ MODELS_DIR = PROJECT_ROOT / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 
 model_path = MODELS_DIR / "label_moralization"
-relevance_filtered_path = DATA_DIR / "data_reddit_curated" / group / "filtered_relevance"
+keywords_adv_filtered_path = DATA_DIR / "data_reddit_curated" / group / "filtered_keyword_adv"
 output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_moralization"
 output_path.mkdir(parents=True, exist_ok=True)
 
@@ -74,7 +74,7 @@ file_list = []
 for year in years:
     for month in range(1, 13):
         filename = "RC_{}-{:02d}.csv".format(year, month)
-        path_ = os.path.join(relevance_filtered_path, filename)
+        path_ = os.path.join(keywords_adv_filtered_path, filename)
         if os.path.exists(path_):
             file_list.append(path_)
         else:
@@ -87,7 +87,7 @@ def label_moralization_file(file):
     start_time = time.time()
 
     # Build output file path using the relative part from the input file.
-    relative_path = Path(file).relative_to(relevance_filtered_path)
+    relative_path = Path(file).relative_to(keywords_adv_filtered_path)
     output_file_path = output_path / relative_path
     output_file_path.parent.mkdir(parents=True, exist_ok=True)
 

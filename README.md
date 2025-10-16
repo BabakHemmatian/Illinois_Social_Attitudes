@@ -1,6 +1,6 @@
 # Illinois Social Attitudes Aggregate Corpus (ISAAC)
 
-This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
+This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
 
 **total corpus size: 554,464,184 posts**
 
@@ -9,7 +9,15 @@ This repository contains tools for the development and evaluation of the **Illin
 
 ## Corpus Access
 
-You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). The relevance-filtered data can be found [here](https://drive.google.com/drive/u/0/folders/15luTEiHnt8BnnHjYmQnS__DSUt3lODjr). We are currently in the process of adding the social-psychological variables to the uploaded version of the corpus, but users can find plug-and-play scripts in this repository for extracting them themselves. 
+A coding-free website for convenient access to the full corpus or samples of it will soon go live at [https://isaac.psychology.illinois.edu/](https://isaac.psychology.illinois.edu/). Until then, you can find the monthly relevance-filtered files for each social distinction using direct download links formatted as follows:
+
+```https://rfyavjpuqoepfkxhtzie.supabase.co/storage/v1/object/public/refiltered-files/[social distinction]/RC_[4-digit year]-[2-digit month].csv```, where social distinction can be ```sexuality```,```age```,```ability```, ```weight```, ```race``` or ```skin_tone```, and the year value between ```2007``` and ```2023```.
+
+**Example**: ```https://rfyavjpuqoepfkxhtzie.supabase.co/storage/v1/object/public/refiltered-files/ability/RC_2007-01.csv``` will start download for the ability-related posts from the January of 2007.
+
+## Corpus Interpretation
+
+You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). We are currently in the process of adding social-psychological labels to the uploaded version of the corpus, but users can find plug-and-play scripts in this repository for extracting them themselves. 
 
 ## The Current Repository
 

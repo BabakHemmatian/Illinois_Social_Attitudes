@@ -1,20 +1,20 @@
 # Illinois Social Attitudes Aggregate Corpus (ISAAC)
 
-This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by sexuality, race, age, ability, weight and skin-tone (**total size: 720,386,985**). Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
+This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone (**total size: 554,464,184 posts**). Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
 
-![Number of documents per social distinction. sexuality (gay-straight; 92,979,067 comments); race (Black-White; 184,684,200 comments); age (young-old; 330,825,613); ability (abled-disabled; 23,515,610); weight (fat-thin; 21,344,219); skin_tone (dark-light; 67,038,276)](./freq_figure.png)
+![Number of documents per social distinction. sexuality (gay-straight; 62,256,049 comments); race (Black-White; 135,912,999 comments); age (young-old; 250,834,691); ability (abled-disabled; 20,342,248); weight (fat-thin; 17,193,412); skin_tone (dark-light; 62,256,049)](./freq_figure.png)
 ![Number of documents over time for all distinctions](./line_overlay_distinctions.png)
 
 ## Corpus Access
 
-You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). The data can be found [here](https://drive.google.com/drive/u/0/folders/15luTEiHnt8BnnHjYmQnS__DSUt3lODjr). 
+You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). The relevance-filtered data can be found [here](https://drive.google.com/drive/u/0/folders/15luTEiHnt8BnnHjYmQnS__DSUt3lODjr). We are currently in the process of adding the social-psychological variables to the uploaded version of the corpus, but users can find plug-and-play scripts in this repository for extracting them themselves. 
 
 ## The Current Repository
 
 This repository contains the scripts that allow you to rebuild ISAAC from scratch by:
 - Filtering Reddit content by keywords and the use of English language. 
-- Applying pre-trained neural networks to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). 
-- Generating generalized language (e.g., genericity), moralization, sentiment and emotion labels for the relevance-filtered extracted texts.
+- Applying pre-trained neural networks and complex pattern matching to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). 
+- Generating generalized language (e.g., genericity), moralization, sentiment and emotion labels for the pruned corpus.
 
 The scripts were designed to be easily adapted for developing other Reddit corpora. See the **Adaptations** section below for more information.
 
@@ -64,21 +64,20 @@ python ./code/cli.py --resource filter_keywords --group sexuality --years 2007-2
 ```
 This example command will use the appropriate keyword lists from this repository to identify documents in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
 
-**Note:** ```filter_relevance```, ```label_moralization```, ```label_sentiment```, ```label_generalization``` and ```label_emotion``` resources are LLM-based and would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment. You can speed up processing even further by using batch processing in a computing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. 
-
-**Note:** The neural resources mentioned above require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 1200 and 2500 were used during the development of ISAAC. 
-
 **Note:** The scripts may be used without any changes to recreate the ISAAC corpus. For that purpose, the code base currently assumes the following order in the use of resources for a given social group and year range:
 
-1. ```filter_keywords```
-2. ```filter_language```
-3. ```filter_relevance```
-4. ```label_moralization```
-5. ```label_sentiment```
-6. ```label_generalization```
-7. ```label_emotion```
+1. ```filter_keywords```: Uses an extremely fast algorithm to parse trillions of Reddit posts for large sets of keywords that suggest potential relevance to ISAAC's key social distinctions. 
+2. ```filter_language```: Uses a pre-trained language detection model from FastText to filter out non-English posts. 
+3. ```filter_relevance```: Uses a set of custom transformer-based neural networks to filter out irrelevant content picked up by the keyword method. 
+4. ```filter_keywords_adv```: Uses highly-optimized complex pattern matching to remove irrelevant content not filtered by steps (1) and (3). 
+5. _```label_moralization```_: Generates binary labels for whether a post's content is moralized using a custom neural network trained on [this](https://arxiv.org/pdf/2208.05545) dataset.
+6. _```label_sentiment```_: Generates a range of sentiment labels for a post based on [Stanza](https://stanfordnlp.github.io/stanza/sentiment.html), [TextBlob](https://textblob.readthedocs.io/en/dev/quickstart.html) and [Vader](https://github.com/cjhutto/vaderSentiment) models. The combination of multiple models supports reliable inference.
+7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. 
+8. _```label_emotion```_: Generates a range of emotion labels for a post based on the neural network models found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
 
-**Note:** If you are using ```label_sentiment``` for the first time, perform the following steps before running the script: Enter ```python -m spacy download en_core_web_sm``` in the command terminal and run ```stanza.download('en')``` after importing ```stanza``` in a Python interpreter. Only then use ```cli.py``` to call the resource. 
+**Note:** _italicized_ resources are LLM-based and require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 1200 and 2500 were used during the development of ISAAC. 
+
+**Note**: LLM-based resources would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment. You can speed up processing even further by using batch processing in a computing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. 
 
 If you plan instead to adapt the code for developing new datasets, see the section below. 
 
@@ -92,6 +91,10 @@ To search the entirety of Reddit for posts potentially relevant to your dimensio
 ### Training New Relevance Classifiers
 The ```filter_sample``` resource can be used to extract stratified samples from keyword- and language-filtered documents to be annotated for the training of new relevance classifiers. The script assumes two annotators and by default generates 1500 documents per rater equally distributed across the indicated years. 
 
-Use the ```metrics_interrater``` resource with the correct ```--group``` argument to evaluate interrater agreement. No ```years``` argument is needed for this resource.
+Use the ```metrics_interrater``` resource with the correct ```--group``` argument to evaluate interrater agreement. No ```years``` argument is needed for this resource. Once sufficient interrater agreement is reached, use the ```train_relevance``` resource to train new relevance filtering neural networks. Adjust the social ```group``` argument to your target and change the training hyperparameters as needed. No ```years``` argument is required for this resource.
 
-Once sufficient interrater agreement is reached, use the ```train_relevance``` resource to train new relevance filtering neural networks. Adjust the social ```group``` argument to your target and change the training hyperparameters as needed. No ```years``` argument is required for this resource.
+### Complex Pattern Matching
+If there are still many irrelevant posts in your dataset, you might want to consider using complex regular expression patterns to filter them out. You can see examples of the sets created for ISAAC in the keywords folder, distinguished with ```_adv``` for "advanced" in the file names. Replace these sets with regular expressions that fit your use case and employ the ```filter_keywords_adv``` to use the patterns for rapidly filtering your dataset based on a parallelized version of the highly-optimized hyperscan engine. 
+
+### Label Generation
+If the social-psychological labels provided alongside ISAAC work well for your use case, you can apply ```label``` resources to generate them for your new corpus. 

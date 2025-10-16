@@ -2,7 +2,7 @@
 
 This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone (**total size: 554,464,184 posts**). Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
 
-![Number of documents per social distinction. sexuality (gay-straight; 62,256,049 comments); race (Black-White; 135,912,999 comments); age (young-old; 250,834,691); ability (abled-disabled; 20,342,248); weight (fat-thin; 17,193,412); skin_tone (dark-light; 62,256,049)](./freq_figure.png)
+![Number of documents per social distinction. sexuality (gay-straight; 62,256,049 comments); race (Black-White; 135,912,999 comments); age (young-old; 250,834,691); ability (abled-disabled; 20,342,248); weight (fat-thin; 17,193,412); skin_tone (dark-light; 62,256,049)](./freq_aggregate.png)
 ![Number of documents over time for all distinctions](./line_overlay_distinctions.png)
 
 ## Corpus Access

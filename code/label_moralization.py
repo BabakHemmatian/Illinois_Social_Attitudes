@@ -27,7 +27,7 @@ MODELS_DIR = PROJECT_ROOT / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 
 model_path = MODELS_DIR / "label_moralization"
-keywords_adv_filtered_path = DATA_DIR / "data_reddit_curated" / group / "filtered_keyword_adv"
+keywords_adv_filtered_path = DATA_DIR / "data_reddit_curated" / group / "filtered_keywords_adv"
 output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_moralization"
 output_path.mkdir(parents=True, exist_ok=True)
 

@@ -17,6 +17,8 @@ csv.field_size_limit(2**31 - 1)
 
 # Extract and transform CLI arguments 
 args = get_args()
+type_ = "reddit_" + args.type
+group = args.group
 years = parse_range(args.years)
 
 # Load the fastText language identification model
@@ -32,14 +34,14 @@ def detect_language(text):
 # Survey the keyword-filtered input files and raise an error if an expected file is missing
 keyword_filtered_path = os.path.join(
     dir_path.replace("code", "data"),
-    "data_reddit_curated", args.group, "filtered_keywords"
+    "data_reddit_curated", group,type_, "filtered_keywords"
 )
 file_list = check_reqd_files(years=years, check_path=keyword_filtered_path)
 
 # Prepare and survey the output path
 output_path = os.path.join(
     dir_path.replace("code", "data"),
-    "data_reddit_curated", args.group, "filtered_language"
+    "data_reddit_curated", group, type_, "filtered_language"
 )
 os.makedirs(output_path, exist_ok=True)
 

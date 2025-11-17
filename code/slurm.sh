@@ -1,12 +1,12 @@
 #!/bin/bash
 #SBATCH -J Labeling_Batched
-#SBATCH --mail-user=bhemmatian2@unl.edu
+#SBATCH --mail-user=bhemmatian2@nebraska.edu
 #SBATCH --mail-type=END,FAIL
 #SBATCH -o labeling-batch-%j.out
 #SBATCH -e labeling-batch-%j.err
 #SBATCH --partition=gpu
-#SBATCH --gres=gpu:2
-#SBATCH --time=4:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --time=24:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=5
 #SBATCH --mem=4000
@@ -17,8 +17,8 @@ set -euo pipefail
 export PYTHONUNBUFFERED=TRUE
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-# resource, group, years, batchsize are expected from:
-# sbatch --array=... --export=ALL,resource=...,group=...,years=...,batchsize=... slurm.sh
+# resource, group, years, batchsize, type are expected from:
+# sbatch --array=... --export=ALL,resource=...,group=...,years=...,batchsize=...,type=... slurm.sh
 
 requires_years=("filter_keywords" "filter_language" "filter_relevance" "filter_sample" "label_moralization" "label_sentiment" "label_generalization" "label_emotion")
 requires_batch=("filter_relevance" "label_moralization" "label_generalization" "label_emotion" "label_sentiment")
@@ -26,7 +26,7 @@ requires_batch=("filter_relevance" "label_moralization" "label_generalization" "
 in_array() { local needle="$1"; shift; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }
 
 # Base args
-ARGS=( "./code/${resource}.py" "-r" "${resource}" "-g" "${group}" )
+ARGS=( "./code/${resource}.py" "-r" "${resource}" "-g" "${group}" "-t" "${type}" )
 
 # Only pass --array if Slurm provided it
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
@@ -53,6 +53,11 @@ if in_array "${resource}" "${requires_batch[@]}"; then
     exit 2
   fi
   ARGS+=( "-b" "${batchsize}" )
+fi
+
+# Pass files-per-job if set
+if [[ -n "${files_per_job:-}" ]]; then
+  ARGS+=( "--files-per-job" "${files_per_job}" )
 fi
 
 echo "Running: python ${ARGS[*]}"

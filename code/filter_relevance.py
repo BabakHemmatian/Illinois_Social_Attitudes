@@ -18,6 +18,7 @@ csv.field_size_limit(2**31 - 1)
 args = get_args()
 years = parse_range(args.years)
 group = args.group
+type_ = "reddit_" + args.type
 batch_size = args.batchsize
 
 # Set relevance filtering hyperparameters
@@ -46,6 +47,7 @@ if torch.cuda.device_count() > 1: # if more than one GPU is available
 model.eval() # set model to evaluation mode
 
 # Define function to infer labels for a batch of documents
+@torch.no_grad()
 def get_predictions(texts, threshold_class=threshold_class, threshold=threshold, thresholding=thresholding):
     # Ensure texts is a list
     if isinstance(texts, str):
@@ -81,7 +83,7 @@ def get_predictions(texts, threshold_class=threshold_class, threshold=threshold,
 # Survey the language-filtered input files 
 language_filtered_path = os.path.join(
     dir_path.replace("code", "data"),
-    "data_reddit_curated", group, "filtered_language"
+    "data_reddit_curated", group, type_, "filtered_language"
 )
 
 # Build file_list organized by year and raise an error if an expected file is missing 
@@ -95,9 +97,31 @@ for year in years:
         else:
             raise Exception("Missing language-filtered file for the {} social group from year {}, month {}".format(group, year, month))
 
+# the following portion allows each slurm process to process multiple files if files_per_job is set in the command line arguments.
+array_index   = getattr(args, "array", None)
+files_per_job = getattr(args, "files_per_job", 1)
+
+if array_index is not None:
+    total_files = len(file_list)
+    start = array_index * files_per_job
+    end   = min(start + files_per_job, total_files)
+
+    if start >= total_files:
+        print(
+            f"No files to process for array index {array_index} "
+            f"(start={start}, total_files={total_files}). Exiting."
+        )
+        exit(0)
+
+    file_list = file_list[start:end]
+    print(
+        f"Array index {array_index}: processing files "
+        f"{start}..{end-1} (of {total_files})"
+    )
+
 # Prepare and survey the output path for relevance filtering
 output_path = os.path.join(dir_path.replace("code", "data"),
-                           "data_reddit_curated", group, "filtered_relevance")
+                           "data_reddit_curated", group, type_, "filtered_relevance")
 os.makedirs(output_path, exist_ok=True)
 
 # For each language-filtered file, we add an extra column "source_row" to record the input file row number.

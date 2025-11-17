@@ -10,11 +10,12 @@ import ahocorasick
 from pathlib import Path
 
 # Import functions and objects from local modules
-from cli import get_args, dir_path, raw_data
+from cli import get_args, dir_path
 from utils import load_terms, groups, headers, parse_range, log_report, log_error
 
 # Extract and transform CLI arguments
 args = get_args()
+type_ = "reddit_" + args.type
 years = parse_range(args.years)
 group = args.group
 if isinstance(years, int):
@@ -25,6 +26,9 @@ keyword_path = os.path.join(dir_path.replace("code", "keywords"))
 marginalized_words = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][0]}.txt"))
 privileged_words = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][1]}.txt"))
 
+# find the raw data folder
+DATA_DIR = os.path.join(Path(__file__).resolve().parent.parent,"data","data_reddit_raw",type_)
+
 # Build an Aho-Corasick automaton for fast pattern matching of the keywords
 automaton = ahocorasick.Automaton()
 for term in marginalized_words:
@@ -34,7 +38,7 @@ for term in privileged_words:
 automaton.make_automaton()
 
 # Prepare and inspect the output path
-output_path = os.path.join(dir_path.replace("code", os.path.join("data", "data_reddit_curated", group, "filtered_keywords")))
+output_path = os.path.join(dir_path.replace("code", os.path.join("data", "data_reddit_curated", group,type_,"filtered_keywords")))
 os.makedirs(output_path, exist_ok=True)
 processed_files = set(f for f in os.listdir(output_path) if f.endswith('.csv'))
 
@@ -55,7 +59,7 @@ def filter_keyword_file(file):
     # Process a single raw Reddit file by filtering for keyword matches.
     # Writes matching lines to an output CSV file.
 
-    file_path = os.path.join(raw_data, file)
+    file_path = os.path.join(DATA_DIR, file)
     output_csv_file = os.path.join(output_path, f"{file.split('.zst')[0]}.csv")
     
     buffer = []
@@ -153,7 +157,7 @@ def filter_keyword_parallel():
             start_year_time = time.time()
             files_by_month = {}
 
-            for file in sorted(os.listdir(raw_data)):
+            for file in sorted(os.listdir(DATA_DIR)):
                 if str(year) in file and file.endswith(".zst") and file.split('.zst')[0] not in processed_files:
                     try:
 

@@ -13,6 +13,8 @@ from pathlib import Path
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
+type_ = "reddit_" + args.type
+group = args.group
 
 # Increase the field size limit to handle larger fields
 csv.field_size_limit(2**31 - 1)
@@ -24,7 +26,7 @@ sample_size = 1500
 # Survey the language-filtered input files and raise an error if an expected file is missing
 language_filtered_path = os.path.join(
     dir_path.replace("code", "data"),
-    "data_reddit_curated", args.group, "filtered_language"
+    "data_reddit_curated", group, type_, "filtered_language"
 )
 
 # Organize files by year
@@ -239,8 +241,8 @@ def filter_sample_write(all_samples):
     # After processing all years, write output
     # ========================================
     for annot in range(num_annot):
-        sample_file_path = os.path.join(dir_path, f"filter_sample_{args.group}_{annot}.csv")
-        sample_key_file_path = os.path.join(dir_path, f"filter_sample_key_{args.group}_{annot}.csv")
+        sample_file_path = os.path.join(dir_path, f"filter_sample_{type_}_{group}_{annot}.csv")
+        sample_key_file_path = os.path.join(dir_path, f"filter_sample_{type_}_{group}_{annot}_key.csv")
         
         with open(sample_file_path, "w", encoding='utf-8', newline='') as sample_file, \
              open(sample_key_file_path, "w", encoding='utf-8', newline='') as sample_file_key:
@@ -270,9 +272,9 @@ if __name__ == "__main__":
     start_time = time.time()
     # Process each year with only its corresponding files
     for year in years:
-        year_file_list = [f for f in file_list if f"RC_{year}-" in f]
-        filter_sample_year(year, year_file_list)
+        file_list = files_by_year[year]
+        filter_sample_year(year, file_list)
     filter_sample_write(all_samples)
     elapsed = (time.time() - start_time) / 60
-    print(f"Reservoir sampling for the {args.group} social group from {args.years} was finished in {elapsed:.2f} minutes. Total samples per each of the {num_annot} annotators: {len(all_samples[0])}")
-    log_report(f"Reservoir sampling for the {args.group} social group from {args.years} finished in {elapsed:.2f} minutes. Total samples per annotator: {len(all_samples[0])}")
+    print(f"Reservoir sampling for the {group} social group from {years} was finished in {elapsed:.2f} minutes. Total samples per each of the {num_annot} annotators: {len(all_samples[0])}")
+    log_report(f"Reservoir sampling for the {group} social group from {args.years} finished in {elapsed:.2f} minutes. Total samples per annotator: {len(all_samples[0])}")

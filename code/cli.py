@@ -2,6 +2,7 @@ import argparse
 import os
 from utils import groups, validate_years, array_span_from_years
 from pathlib import Path
+from math import ceil
 
 # set path variables
 dir_path = os.path.dirname(os.path.realpath(__file__))  # kept for backward-compat
@@ -37,6 +38,17 @@ def get_args(argv=None):
     ]
     
     argparser.add_argument(
+        '-t', '--type',
+        type=str,
+        choices=[
+            'submissions',
+            'comments'
+            ],
+        required=True,
+        help="Indicate the type of Reddit post (submission or comment) you want processed."
+    )
+
+    argparser.add_argument(
         '-r', '--resource',
         type=str,
         choices=[
@@ -70,6 +82,12 @@ def get_args(argv=None):
         help="Submit a Slurm job. Best used for NN resources (filter_relevance, label_moralization, label_generalization). Should only be used on a Slurm computing cluster."
     )
     argparser.add_argument(
+        "--files-per-job",
+        type=int,
+        default=1,
+        help="Number of monthly files each Slurm array task should process."
+    )
+    argparser.add_argument(
     "--array",
     type=int,
     help="Index from SLURM_ARRAY_TASK_ID; if set, process only that indexed file. If omitted, process all files."
@@ -98,20 +116,31 @@ if __name__ == "__main__":
     args = get_args()
 
     if args.slurm:
-        slurm_vars = f"resource={args.resource},group={args.group}"
+        # Include type as one of the exported SLURM vars
+        slurm_vars = (
+            f"resource={args.resource},"
+            f"group={args.group},"
+            f"type={args.type}"
+        )
+
         array_spec = None
 
         if args.years:
             slurm_vars += f",years={args.years}"
-            months = array_span_from_years(args.years)
-            array_spec = f"0-{months-1}"           # e.g., 2016 -> 0-11; 2007-2008 -> 0-23
+            months = array_span_from_years(args.years)  # total month-files
+            files_per_job = args.files_per_job
+            num_jobs = ceil(months / files_per_job)
+            array_spec = f"0-{num_jobs-1}"
 
         if args.batchsize:
             slurm_vars += f",batchsize={args.batchsize}"
 
+        if args.files_per_job:
+            slurm_vars += f",files_per_job={args.files_per_job}"
+
         slurm_script = str(CODE_DIR / "slurm.sh")
 
-        concurrency_cap = 5 # number of simulaneous tasks
+        concurrency_cap = 5  # number of simultaneous tasks
         array_flag = f"--array={array_spec}%{concurrency_cap}" if array_spec else ""
 
         cmd = f'sbatch {array_flag} --export=ALL,{slurm_vars} "{slurm_script}"'
@@ -120,7 +149,7 @@ if __name__ == "__main__":
     else:
         # Robust path to the resource script inside code/
         resource_script = str(CODE_DIR / f"{args.resource}.py")
-        cmd = f'python "{resource_script}" -r {args.resource} -g {args.group}'
+        cmd = f'python "{resource_script}" -t {args.type} -r {args.resource} -g {args.group}'
         if args.years:
             cmd += f' -y {args.years}'
         if args.batchsize:

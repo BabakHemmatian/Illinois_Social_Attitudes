@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, headers, groups, log_report
+from utils import parse_range, log_report
 import os
 import csv
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -23,6 +23,7 @@ from pathlib import Path
 args = get_args()
 years = parse_range(args.years)
 group = args.group
+type_ = args.type
 batch_size = args.batchsize
 if args.array is not None:
     array = args.array
@@ -32,8 +33,8 @@ CODE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CODE_DIR.parent                     
 DATA_DIR = PROJECT_ROOT / "data"
 
-moralization_labeled_path = DATA_DIR / "data_reddit_curated" / group / "labeled_moralization"
-output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_sentiment"
+moralization_labeled_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_moralization"
+output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_sentiment"
 output_path.mkdir(parents=True, exist_ok=True)
 
 # prepare the report file

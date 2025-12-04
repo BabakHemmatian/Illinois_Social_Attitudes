@@ -10,6 +10,7 @@ import torch
 from transformers import RobertaTokenizerFast, RobertaForSequenceClassification
 import datetime
 import re
+from pathlib import Path
 
 # Increase the field size limit to handle larger fields
 csv.field_size_limit(2**31 - 1)
@@ -18,7 +19,7 @@ csv.field_size_limit(2**31 - 1)
 args = get_args()
 years = parse_range(args.years)
 group = args.group
-type_ = "reddit_" + args.type
+type_ = args.type
 batch_size = args.batchsize
 
 # Set relevance filtering hyperparameters
@@ -129,7 +130,7 @@ os.makedirs(output_path, exist_ok=True)
 def filter_relevance_file(file):
 
     missing_lines_count = 0
-    log_report(report_file_path, f"Started filtering {file} for relevance to the {group} social group.")
+    log_report(report_file_path, f"Started filtering {Path(file).name} for relevance to the {group} social group.")
     start_time = time.time()
     
     # Build output file path using the relative part from the input file.
@@ -234,7 +235,7 @@ def filter_relevance_file(file):
             )
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    log_report(report_file_path, f"Finished filtering {file} in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_report(report_file_path, f"Finished filtering {Path(file).name} in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
 
     if missing_lines_count > 0:
         missing_records_file = os.path.join(output_path, 'missing_records.csv')

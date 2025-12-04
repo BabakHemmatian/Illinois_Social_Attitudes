@@ -5,27 +5,34 @@ from cli import get_args,dir_path
 from sklearn.metrics import cohen_kappa_score
 from scipy.stats import pearsonr
 import csv
-import os
+from pathlib import Path
 
-# NOTE: this file assumes two annotators.
+num_annot = 2 # number of annotators
+# NOTE: This script currently only supports two annotators
+
 args = get_args()
-group = args.group 
+group = args.group
+type_ = args.type
 
-ratings_path = os.path.join(dir_path.replace("code","data\\data_relevance_ratings\\"))
+# set path variables
+CODE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CODE_DIR.parent
+DATA_DIR = PROJECT_ROOT / "data"
 
-ratings = {0:{},1:{}}
+# where to find the rated relevance samples
+ratings_path = DATA_DIR / "data_relevance_ratings" / type_ 
 
-# extract and align the two annotators' ratings
-for rater in range(2):
+# start a dictionary for storing each annoator's ratings
+ratings = {i:{} for i in range(num_annot)}
+
+# extract and align the annotators' ratings
+for rater in range(num_annot):
     with open(ratings_path+"relevance_sample_{}_{}.csv".format(group,rater),"r", encoding='utf-8',errors='ignore') as f:
         reader = csv.reader(f)
         for idx,line in enumerate(reader):
             if idx != 0 and len(line) > 0:
                 try:
-                    if (line[2].strip().lower() == 'x'):
-                        ratings[rater][int(line[0].strip())] = 0
-                    else:
-                        ratings[rater][int(line[0].strip())] = int(line[2].strip())
+                    ratings[rater][int(line[0].strip())] = int(line[2].strip())
                 except:
                     raise Exception(f"Error processing annotator {rater}'s response on line {idx}, with the following contents: {line}")
 

@@ -15,7 +15,7 @@ from utils import load_terms, groups, headers, parse_range, log_report, log_erro
 
 # Extract and transform CLI arguments
 args = get_args()
-type_ = "reddit_" + args.type
+type_ = args.type
 years = parse_range(args.years)
 group = args.group
 if isinstance(years, int):
@@ -70,7 +70,7 @@ def filter_keyword_file(file):
 
     try:
         with open(file_path, 'rb') as fh, \
-             open(output_csv_file, 'w', newline='', encoding='utf-8') as csv_file:
+            open(output_csv_file, 'w', newline='', encoding='utf-8') as csv_file:
             
             writer = csv.writer(csv_file)
             writer.writerow(headers)
@@ -79,22 +79,33 @@ def filter_keyword_file(file):
             stream_reader = dctx.stream_reader(fh, read_across_frames=True)
             text_stream = io.TextIOWrapper(stream_reader, encoding='utf-8')
 
+            
             for line in text_stream:
                 total_lines += 1
                 try:
                     contents = json.loads(line)
-                    comment_text = contents.get('body', '').strip().lower()
+                    if type_ == "comments":
+                        match_text = contents.get('body', '').strip().lower()
+                    elif type_ == "submissions":
+                        sub_title = contents.get('title','').strip().lower()
+                        sub_body = contents.get('selftext','').strip().lower()
+                        match_text = sub_title + "\n" + sub_body
 
                     matches = []
-                    for end_index, (category, term) in automaton.iter(comment_text):
+                    for _, (category, term) in automaton.iter(match_text):
                         matches.append(f"{category}: {term}")
 
                     if matches:
                         matched_lines += 1
+
+                        if type_ == "comments":
+                            parent_id = contents.get("parent_id","")
+                        else:
+                            parent_id = ""
                         buffer.append([
                             contents.get("id", ""),
-                            contents.get("parent_id", ""),
-                            comment_text,
+                            parent_id,
+                            match_text,
                             contents.get("author", ""),
                             datetime.fromtimestamp(int(contents.get("created_utc", 0))).strftime('%Y-%m-%d %H:%M:%S'),
                             contents.get("subreddit", ""),
@@ -105,14 +116,18 @@ def filter_keyword_file(file):
                         if len(buffer) >= buffer_size:
                             writer.writerows(buffer)
                             buffer.clear()
+
                 except Exception as e:
                     log_error("filter_keyword_file",file, total_lines, line, e)
-            
+
+                
+
             if buffer:
                 writer.writerows(buffer)
 
     except Exception as e:
         log_report(report_file_path, f"Error filtering by keywords in file {Path(file).name}: {e}")
+
 
     elapsed_time = (time.time() - start_time) / 60
     log_report(report_file_path, f"Filtered {Path(file).name} by for relevance to the {group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")

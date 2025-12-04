@@ -1,15 +1,16 @@
 # Illinois Social Attitudes Aggregate Corpus (ISAAC)
 
-This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
+This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
 
-**total corpus size: 554,464,184 posts**
+**Corpus size (comments): 554,464,184 posts**
+**Corpus size (submissions): TBA**
 
-![Number of documents per social distinction. sexuality (gay-straight; 62,256,049 comments); race (Black-White; 135,912,999 comments); age (young-old; 250,834,691); ability (abled-disabled; 20,342,248); weight (fat-thin; 17,193,412); skin_tone (dark-light; 62,256,049)](./freq_aggregate.png)
+![Number of comments per social distinction. sexuality (gay-straight; 62,256,049 comments); race (Black-White; 135,912,999 comments); age (young-old; 250,834,691); ability (abled-disabled; 20,342,248); weight (fat-thin; 17,193,412); skin_tone (dark-light; 62,256,049)](./freq_aggregate.png)
 ![Number of documents over time for all distinctions](./line_overlay_distinctions.png)
 
 ## Corpus Access
 
-A coding-free website for convenient access to the full corpus or samples of it will soon go live at [https://isaac.psychology.illinois.edu/](https://isaac.psychology.illinois.edu/). Until then, you can find the monthly relevance-filtered files for each social distinction using direct download links formatted as follows:
+A coding-free website for convenient access to the full corpus or samples of it will soon go live at [https://isaac.psychology.illinois.edu/](https://isaac.psychology.illinois.edu/). Until then, you can find the monthly comment files for each social distinction using direct download links formatted as follows:
 
 ```https://rfyavjpuqoepfkxhtzie.supabase.co/storage/v1/object/public/refiltered-files/[social distinction]/RC_[4-digit year]-[2-digit month].csv```, where social distinction can be ```sexuality```,```age```,```ability```, ```weight```, ```race``` or ```skin_tone```, and the year value between ```2007``` and ```2023```.
 
@@ -70,9 +71,9 @@ You can now use command line arguments to make use of the resources. Use ```--he
 
 **Example:**
 ```
-python ./code/cli.py --resource filter_keywords --group sexuality --years 2007-2009
+python ./code/cli.py --type comments --resource filter_keywords --group sexuality --years 2007-2009
 ```
-This example command will use the appropriate keyword lists from this repository to identify documents in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
+This example command will use the appropriate keyword lists from this repository to identify comments in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
 
 **Note:** The scripts may be used without any changes to recreate the ISAAC corpus. For that purpose, the code base currently assumes the following order in the use of resources for a given social group and year range:
 
@@ -85,7 +86,7 @@ This example command will use the appropriate keyword lists from this repository
 7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. 
 8. _```label_emotion```_: Generates a range of emotion labels for a post based on the neural network models found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
 
-**Note:** _italicized_ resources are LLM-based and require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 1200 and 2500 were used during the development of ISAAC. 
+**Note:** _italicized_ resources are LLM-based and require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 200 and 2500 were used based on system parameters during the development of ISAAC. 
 
 **Note**: LLM-based resources would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment. You can speed up processing even further by using batch processing in a computing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. 
 

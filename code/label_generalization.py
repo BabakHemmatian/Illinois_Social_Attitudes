@@ -20,6 +20,7 @@ from pathlib import Path
 args = get_args()
 years = parse_range(args.years)
 group = args.group
+type_ = args.type
 batch_size = args.batchsize
 if args.array is not None:
     array = args.array
@@ -31,8 +32,8 @@ MODELS_DIR = PROJECT_ROOT / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 
 model_path = MODELS_DIR / "label_generalization"
-sentiment_labeled_path = DATA_DIR / "data_reddit_curated" / group / "labeled_sentiment"
-output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_generalization"
+sentiment_labeled_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_sentiment"
+output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_generalization"
 output_path.mkdir(parents=True, exist_ok=True)
 
 # Set moralization labeling hyperparameters
@@ -167,6 +168,7 @@ def run_pipeline(texts, model_batch_size=32, max_length=max_length):
     return results, results_with_labels
 
 # extracts generalization labels from clause-segmented input
+@torch.no_grad()
 def get_pred_generalization_labels(clauses, model_batch_size=32, max_length=256):
     clause2labels = []
     for i in range(0, len(clauses), model_batch_size):
@@ -194,6 +196,7 @@ def get_pred_generalization_labels(clauses, model_batch_size=32, max_length=256)
     return clause2labels
 
 # generates clause segmentations from input
+@torch.no_grad()
 def get_pred_clause_labels(texts, tokenized_texts, model_batch_size=32, max_length=256):
     all_labels = []
 

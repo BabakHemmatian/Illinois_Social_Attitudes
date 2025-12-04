@@ -13,7 +13,7 @@ from pathlib import Path
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
-type_ = "reddit_" + args.type
+type_ = args.type
 group = args.group
 
 # Increase the field size limit to handle larger fields

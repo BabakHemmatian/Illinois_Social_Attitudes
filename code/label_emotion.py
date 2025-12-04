@@ -17,6 +17,7 @@ from pathlib import Path
 args = get_args()
 years = parse_range(args.years)
 group = args.group
+type_ = args.type
 batch_size = args.batchsize
 if args.array is not None:
     array = args.array
@@ -27,8 +28,8 @@ PROJECT_ROOT = CODE_DIR.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 
-generalization_labeled_path = DATA_DIR / "data_reddit_curated" / group / "labeled_sentiment"
-output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_emotion"
+generalization_labeled_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_sentiment"
+output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_emotion"
 output_path.mkdir(parents=True, exist_ok=True)
 
 # Use CUDA if available
@@ -60,6 +61,7 @@ model1.eval() # set model to evaluation mode
 model2.eval() # set model to evaluation mode
 model3.eval() # set model to evaluation mode
 
+@torch.no_grad()
 def get_predictions(texts, tokenizer=None, model=None, max_length=512):
     """
     Tokenize and encode a batch of texts, then return predicted labels.

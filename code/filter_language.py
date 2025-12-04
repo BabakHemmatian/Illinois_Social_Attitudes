@@ -17,7 +17,7 @@ csv.field_size_limit(2**31 - 1)
 
 # Extract and transform CLI arguments 
 args = get_args()
-type_ = "reddit_" + args.type
+type_ = args.type
 group = args.group
 years = parse_range(args.years)
 

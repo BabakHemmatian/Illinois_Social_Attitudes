@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, headers, log_report
+from utils import parse_range, log_report
 
 # import Python packages
 import os, sys
@@ -16,6 +16,7 @@ from pathlib import Path
 args = get_args()
 years = parse_range(args.years)
 group = args.group
+type_ = args.type
 batch_size = args.batchsize
 if args.array is not None:
     array = args.array
@@ -27,8 +28,8 @@ MODELS_DIR = PROJECT_ROOT / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 
 model_path = MODELS_DIR / "label_moralization"
-keywords_adv_filtered_path = DATA_DIR / "data_reddit_curated" / group / "filtered_keywords_adv"
-output_path = DATA_DIR / "data_reddit_curated" / group / "labeled_moralization"
+keywords_adv_filtered_path = DATA_DIR / "data_reddit_curated" / group / type_ / "filtered_keywords_adv"
+output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_moralization"
 output_path.mkdir(parents=True, exist_ok=True)
 
 # Use CUDA if available
@@ -50,6 +51,7 @@ if torch.cuda.device_count() > 1: # if more than one GPU is available
 model.eval() # set model to evaluation mode
 
 # Define function to infer labels for a batch of documents
+@torch.no_grad()
 def get_predictions(texts, max_length=512):
     """
     Tokenize and encode a batch of texts, then return predicted labels.

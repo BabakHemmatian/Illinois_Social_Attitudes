@@ -1,8 +1,10 @@
-# import helper functions, kept in a separate file for readability
+### Imports
+
+## helper functions, kept in a separate file for readability
 from cli import get_args, dir_path
 from utils import dataset_split, split_dataset_to_file, split_dataset_from_file, f1_calculator
 
-# Import needed python packages and functions
+## needed python packages and functions
 import torch
 from transformers.file_utils import is_torch_available
 from transformers import (
@@ -20,30 +22,33 @@ from datetime import datetime
 import os
 from pathlib import Path
 
-# CLI args & basic configuration
+## CLI args & basic configuration
 args = get_args()
 group = args.group          # e.g. "race"
 type_ = args.type           # "comments" or "submissions"
 
-# Run settings / modes
+### Run settings / modes
+
 # NOTE: Exactly one of these three should be active at a time:
 
 trial = 2   # identifies the original training run
 
-# 1) Train a model from the original data and evaluate on original test set
+## 1) Train a model from the original data and evaluate on original test set
 training = False
 
-# 2) Just evaluate inference performance on the original test set
+## 2) Just evaluate inference performance on the original test set
 #    (change thresholding params etc. and set training = False, retraining = False)
 #    --> This mode uses the model saved under `model_path`.
 #    NOTE: if both training and retraining are False, this is the default mode.
 
-# 3) Retrain (fine-tune) an already-trained model on additional data
+## 3) Retrain (fine-tune) an already-trained model on additional data
 #    and evaluate on a held-out retraining test set.
 retraining = True
-retrain_trial = 1  # identifies the retraining run
+retrain_trial = 3 # identifies the retraining run
 
-# Training hyperparameters
+### Hyperparameters
+
+## Training
 max_length = 512           # max tokens per document
 train_batch_size = 8       # batch size for original training
 retrain_batch_size = 4     # batch size for retraining
@@ -53,18 +58,53 @@ penalize_confusion = "0_to_1" # which direction in mistakes is more important to
 penalty_weight = 1.0       # only matters if custom_training is True
 num_annot = 2              # number of annotators in original data
 
-# Thresholding (used only at inference time)
-thresholding = False       # if True, apply custom thresholding logic
+## Thresholding (used only at inference time)
+thresholding = True       # if True, apply custom thresholding logic
 threshold_class = 1        # which class gets thresholding
 threshold = 0.6            # probability threshold
 
-# Sanity: don’t allow “train” and “retrain” simultaneously
+## Sanity: don’t allow “train” and “retrain” simultaneously
 if training and retraining:
     raise ValueError("Set at most one of `training` or `retraining` to True.")
 
-# Model / paths
+## a function that records the parameters for logging purposes
+def collect_run_params():
+    """
+    Automatically collect all major run parameters for logging.
+    This avoids manual sync when new parameters are added.
+    """
+    return {
+        # Run identity
+        "group": group,
+        "type": type_,
+        "trial": trial,
+        "training": training,
+        "retraining": retraining,
+        "retrain_trial": retrain_trial if retraining else None,
 
-model_name = "roberta-large"
+        # Model
+        "model_name": model_name,
+        "max_length": max_length,
+
+        # Training hyperparameters
+        "train_batch_size": train_batch_size,
+        "retrain_batch_size": retrain_batch_size,
+        "epochs": epochs,
+        "custom_training": custom_training,
+        "penalize_confusion": penalize_confusion,
+        "penalty_weight": penalty_weight,
+        "num_annot": num_annot,
+
+        # Thresholding
+        "thresholding": thresholding,
+        "threshold_class": threshold_class,
+        "threshold": threshold,
+    }
+
+### Model / paths
+
+model_name = "roberta-large" 
+# NOTE: roberta-base was used for skin tone, roberta-large for the rest in the original training
 
 CODE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CODE_DIR.parent
@@ -86,13 +126,16 @@ retrain_path = os.path.join(
 ratings_path = DATA_DIR / "data_relevance_ratings" / type_
 reratings_path = DATA_DIR / "data_relevance_QAratings"
 
-# Label mappings
+
+
+### Utilities
+
+## Label mappings
 title_label = {"Irrelevant": 0, "Relevant": 1}
 label_title = {0: "Irrelevant", 1: "Relevant"}
 num_labels = len(label_title)
 
-# Utilities
-
+## Random seed for reproducability
 def set_seed(seed: int):
     """Set random seeds for reproducibility."""
     random.seed(seed)
@@ -103,14 +146,14 @@ def set_seed(seed: int):
 
 set_seed(1)
 
-# tokenizer is shared across all modes
+## tokenizer is shared across all modes
 tokenizer = RobertaTokenizerFast.from_pretrained(model_name, do_lower_case=True)
 
-# device (CPU/GPU)
+## device (CPU/GPU)
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Performing computations on {device}")
 
-# Data loading helpers
+### Data loading helpers
 
 # Load the original ratings for training/validation/test splitting.
 # NOTE: Assumes two annotators with files: relevance_sample_{group}_{rater}_rated.csv and uses "x" / numeric rating in column 3.
@@ -305,7 +348,7 @@ def make_weighted_trainer(
             model,
             inputs,
             return_outputs: bool = False,
-            num_items_in_batch: int | None = None,  # HF passes this in recent versions
+            num_items_in_batch: int | None = None,  
         ):
             # Standard class-weighted CE loss
             labels = inputs.get("labels")
@@ -320,18 +363,17 @@ def make_weighted_trainer(
                 labels.view(-1),
             )
 
-            # If no custom training / penalty, we're done
-            if not custom_training or penalize_confusion is None:
+            if not custom_training or penalize_confusion is None: # If no custom training / penalty
                 loss = ce_loss
             else:
                 # confusion-based penalty
                 preds = torch.argmax(logits, dim=-1)
 
                 if penalize_confusion == "1_to_0":
-                    # penalize false negatives: true=1, pred=0
+                    # penalize false negatives
                     confusion_mask = (labels == 1) & (preds == 0)
                 elif penalize_confusion == "0_to_1":
-                    # penalize false positives: true=0, pred=1
+                    # penalize false positives
                     confusion_mask = (labels == 0) & (preds == 1)
                 else:
                     confusion_mask = None
@@ -351,7 +393,7 @@ def make_weighted_trainer(
         eval_dataset=eval_dataset,
     )
 
-# Prediction and evaluation helpers
+## Prediction and evaluation helpers
 
 def get_prediction(
     text,
@@ -384,7 +426,6 @@ def get_prediction(
     else:
         return probs.argmax().item()
 
-
 def evaluate_and_save(
     texts,
     labels,
@@ -392,9 +433,6 @@ def evaluate_and_save(
     txt_path,
     description="test",
 ):
-    """
-    Run inference on a split, save per-example CSV + summary TXT, and print metrics.
-    """
     print(f"\nEvaluating on {description} set...")
     predictions = [get_prediction(text) for text in texts]
 
@@ -407,7 +445,6 @@ def evaluate_and_save(
                 [text, label_title[int(true_label)], label_title[int(pred)]]
             )
 
-    # Safe F1 calculation handled inside utils.f1_calculator (you patched it)
     precision, recall, f1 = f1_calculator(
         [int(l) for l in labels],
         [int(p) for p in predictions],
@@ -415,6 +452,13 @@ def evaluate_and_save(
 
     with open(txt_path, "a+", encoding="utf-8", errors="ignore") as f:
         f.write("***{}***\n".format(datetime.now()))
+
+        run_params = collect_run_params()
+        f.write("Run parameters:\n")
+        for k, v in run_params.items():
+            f.write(f"{k}: {v}\n")
+
+        f.write("\nPerformance on the test set:\n")
         f.write(f"Precision: {precision}\n")
         f.write(f"Recall: {recall}\n")
         f.write(f"F1: {f1}\n")
@@ -423,7 +467,7 @@ def evaluate_and_save(
     print(f"Recall: {recall}")
     print(f"F1: {f1}")
 
-# Main flow
+### Main flow
 
 # 1. Original data: load, split, tokenize, and build datasets
 texts, labels = load_main_annotations(ratings_path, group, num_annot)
@@ -449,6 +493,7 @@ split_data_path = model_path.replace(
     description="original",
 )
 
+# print out stats for the splits
 summarize_split("training", train_texts, train_labels_raw)
 summarize_split("validation", valid_texts, valid_labels_raw)
 summarize_split("test", test_texts, test_labels_raw)
@@ -458,7 +503,7 @@ train_labels = tensorize_labels(train_labels_raw)
 valid_labels = tensorize_labels(valid_labels_raw)
 test_labels = tensorize_labels(test_labels_raw)
 
-# class weights for original training; slightly down-weight the positive class as before
+# class weights for original training
 orig_weights = list(
     compute_class_weight(
         "balanced",
@@ -466,7 +511,6 @@ orig_weights = list(
         y=np.asarray(train_labels),
     )
 )
-orig_weights[1] = orig_weights[1] * 0.6 # optional down-adjustment of the least prevalent class
 
 print(f"Class weights to account for imbalanced training data: {orig_weights}")
 
@@ -551,10 +595,12 @@ if retraining:
         description="retraining",
     )
 
+    # print stats for the splits
     summarize_split("retraining", retrain_texts, retrain_labels_raw)
     summarize_split("revalidation", revalid_texts, revalid_labels_raw)
     summarize_split("retest", retest_texts, retest_labels_raw)
 
+    # prepare the labels for Torch
     retrain_labels = tensorize_labels(retrain_labels_raw)
     revalid_labels = tensorize_labels(revalid_labels_raw)
     retest_labels = tensorize_labels(retest_labels_raw)
@@ -605,6 +651,7 @@ if retraining:
     penalize_confusion=penalize_confusion,
     )
 
+    # perform the retraining
     retrainer.train()
 
     # save retrained model
@@ -622,12 +669,13 @@ if retraining:
         f"retest_results_{group}_{model_name}_{retrain_trial}.txt",
     )
 
+    # log the results and parameters
     evaluate_and_save(
         texts=retest_texts,
         labels=retest_labels_raw,
         csv_path=retest_csv,
         txt_path=retest_txt,
-        description="retraining test (held-out new data)",
+        description="retraining test set (held-out new data)",
     )
 
     # Evaluate retrained model on ORIGINAL test set
@@ -645,13 +693,13 @@ if retraining:
         labels=test_labels_raw,
         csv_path=origtest_csv,
         txt_path=origtest_txt,
-        description="original test (after retraining)",
+        description="original test set (after retraining)",
     )
 
 # Final: evaluation on the original test set
 #   - Path 1 (training=True, retraining=False): evaluate trained model
 #   - Path 2 (training=False, retraining=False): evaluate loaded model
-#   - Path 3 (retraining=True): already evaluated above, so skip here
+#   - Path 3 (retraining=True): already evaluated above, skip
 
 if not retraining:
     test_csv = os.path.join(

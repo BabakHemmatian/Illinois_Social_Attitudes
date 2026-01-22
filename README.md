@@ -1,3 +1,4 @@
+![ISAAC Logo](./ISAAC_Logo_1.png)
 # Illinois Social Attitudes Aggregate Corpus (ISAAC)
 
 This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 

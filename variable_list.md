@@ -5,7 +5,7 @@ Each row in ISAAC represents a Reddit submission or comment associated with its 
 1. **id**: a Reddit submission or comment's unique identifier. 
 2. **parent id**: the unique identifier for the submission under which a comment appears.
 3. **text**: the content of the Reddit submission or comment.
-4. **auther**: the account associated with a Reddit post.
+4. **author**: the account associated with a Reddit post.
 5. **time**: the time in GMT when the post was created.
 6. **subreddit**: the subreddit to which a post belongs.
 7. **score**: the relative count of likes and dislikes on a post. Positive numbers indicate more likes than dislikes.

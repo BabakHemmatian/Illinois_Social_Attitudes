@@ -15,6 +15,11 @@ from pathlib import Path
 # Increase the field size limit to handle larger fields
 csv.field_size_limit(2**31 - 1)
 
+# set path variables
+dir_path = os.path.dirname(os.path.realpath(__file__))  # kept for backward-compat
+CODE_DIR = Path(__file__).resolve().parent              # absolute /code
+PROJECT_ROOT = CODE_DIR.parent                          # absolute project root
+
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
@@ -24,7 +29,7 @@ batch_size = args.batchsize
 
 # Set relevance filtering hyperparameters
 max_length = 512
-if group == "skin_tone":
+if group == "skin_tone" or group == "race":
     thresholding = True # If True, the model will use a confidence threshold (set below) to determine the class of a document. If False, it will always return the most probable class.
 else:
     thresholding = False # thresholding is only applied to the filter_relevance model for skin_tone
@@ -39,7 +44,7 @@ report_file_path = os.path.join(dir_path, f"report_filter_relevance.csv")
 log_report(report_file_path,f"Using device: {device}")
 
 # Load relevance model
-model_path = os.path.join(dir_path.replace("code", "models"),
+model_path = os.path.join(PROJECT_ROOT,"models",
                           f"filter_relevance_{group}")
 tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
 model = RobertaForSequenceClassification.from_pretrained(model_path).to(device)
@@ -82,8 +87,7 @@ def get_predictions(texts, threshold_class=threshold_class, threshold=threshold,
     return predictions
 
 # Survey the language-filtered input files 
-language_filtered_path = os.path.join(
-    dir_path.replace("code", "data"),
+language_filtered_path = os.path.join(PROJECT_ROOT,"data",
     "data_reddit_curated", group, type_, "filtered_language"
 )
 
@@ -96,7 +100,7 @@ for year in years:
         if os.path.exists(path_):
             file_list.append(path_)
         else:
-            raise Exception("Missing language-filtered file for the {} social group from year {}, month {}".format(group, year, month))
+            raise Exception("Missing keywords-refiltered file for the {} social group from year {}, month {}.\nExpected path: {}".format(group, year, month,path_))
 
 # the following portion allows each slurm process to process multiple files if files_per_job is set in the command line arguments.
 array_index   = getattr(args, "array", None)
@@ -121,7 +125,7 @@ if array_index is not None:
     )
 
 # Prepare and survey the output path for relevance filtering
-output_path = os.path.join(dir_path.replace("code", "data"),
+output_path = os.path.join(PROJECT_ROOT,"data",
                            "data_reddit_curated", group, type_, "filtered_relevance")
 os.makedirs(output_path, exist_ok=True)
 
@@ -267,7 +271,10 @@ for year in years:
     expected_months = set(f"{m:02d}" for m in range(1, 13))
     processed_months = set()
     for file in os.listdir(output_path):
-        m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
+        if type_ == "comments":
+            m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
+        elif type_ == "submissions":
+            m = re.search(r'RS_' + str(year) + r'-(\d{2})\.csv', file)
         if m:
             processed_months.add(m.group(1))
     missing = expected_months - processed_months
@@ -279,7 +286,7 @@ for year in years:
 # ----- Aggregate overall statistics and save final summary report -----
 final_report = [
     ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
-    [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
+    [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, years, overall_docs, f"{overall_elapsed:.2f}"]
 ]
 final_report_file = os.path.join(output_path, "Final_Report_FilterRelevance.csv")
 with open(final_report_file, "w", encoding="utf-8", newline="") as rf:

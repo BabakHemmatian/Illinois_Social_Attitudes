@@ -25,7 +25,8 @@ def get_args(argv=None):
         'label_moralization',
         'label_sentiment',
         'label_generalization',
-        'label_emotion'
+        'label_emotion',
+        'label_location'
     ]
 
     # Conditionally require --batchsize
@@ -34,7 +35,8 @@ def get_args(argv=None):
         'label_moralization',
         'label_generalization',
         'label_emotion',
-        'label_sentiment'
+        'label_sentiment',
+        'label_location'
     ]
     
     argparser.add_argument(
@@ -54,7 +56,7 @@ def get_args(argv=None):
         choices=[
             'filter_keywords', 'filter_language', 'filter_sample',
             'filter_relevance', 'filter_keywords_adv','metrics_interrater', 'label_moralization',
-            'label_generalization', 'label_sentiment', 'train_relevance', 'label_emotion'
+            'label_generalization', 'label_sentiment', 'train_relevance', 'label_emotion','label_location'
         ],
         required=True,
         help="Indicate the type of processing needed. Labeling and metrics options require the output of filtering steps for the indicated years. Filtering should be done with consecutive commands in order: keywords, language, then relevance."
@@ -82,16 +84,41 @@ def get_args(argv=None):
         help="Submit a Slurm job. Best used for NN resources (filter_relevance, label_moralization, label_generalization). Should only be used on a Slurm computing cluster."
     )
     argparser.add_argument(
+        '-j',"--num-jobs",
+        dest='numjob',
+        type=int,
+        default=10,
+        help="The cap on the number of simultaneous jobs spawned if the slurm flag is raised."
+    )
+    argparser.add_argument(
         "--files-per-job",
         type=int,
         default=1,
         help="Number of monthly files each Slurm array task should process."
     )
     argparser.add_argument(
-    "--array",
-    type=int,
-    help="Index from SLURM_ARRAY_TASK_ID; if set, process only that indexed file. If omitted, process all files."
-)
+        "--array",
+        type=int,
+        help="Index from SLURM_ARRAY_TASK_ID; if set, process only that indexed file. If omitted, process all files."
+    )
+    argparser.add_argument(
+        "--maxitems", "--max-items", "--max_items_per_author",
+        dest="maxitems",
+        type=int,
+        help="Max number of comments/submissions sampled per author for location estimation (default 25)."
+    )
+    argparser.add_argument(
+        "--maxfiles", "--max-files", "--max_files_to_scan",
+        dest="maxfiles",
+        type=int,
+        help="Hard cap on the number of monthly files scanned while collecting samples (default 60)."
+    )
+    argparser.add_argument(
+        "--maxradius", "--max-radius", "--max_radius",
+        dest="maxradius",
+        type=int,
+        help="Max month-radius around target month to consider while scanning (default 30)."
+    )
 
     args = argparser.parse_args(argv)
 
@@ -138,9 +165,17 @@ if __name__ == "__main__":
         if args.files_per_job:
             slurm_vars += f",files_per_job={args.files_per_job}"
 
+        # Location-labeling sampling controls (forwarded to label_location)
+        if getattr(args, "maxitems", None) is not None:
+            slurm_vars += f",maxitems={args.maxitems}"
+        if getattr(args, "maxfiles", None) is not None:
+            slurm_vars += f",maxfiles={args.maxfiles}"
+        if getattr(args, "maxradius", None) is not None:
+            slurm_vars += f",maxradius={args.maxradius}"
+
         slurm_script = str(CODE_DIR / "slurm.sh")
 
-        concurrency_cap = 5  # number of simultaneous tasks
+        concurrency_cap = args.numjob  # number of simultaneous tasks
         array_flag = f"--array={array_spec}%{concurrency_cap}" if array_spec else ""
 
         cmd = f'sbatch {array_flag} --export=ALL,{slurm_vars} "{slurm_script}"'
@@ -154,4 +189,15 @@ if __name__ == "__main__":
             cmd += f' -y {args.years}'
         if args.batchsize:
             cmd += f' -b {args.batchsize}'
+        # Forward array index and location-labeling knobs when running locally
+        if args.array is not None:
+            cmd += f" --array {args.array}"
+        if getattr(args, "maxitems", None) is not None:
+            cmd += f" --maxitems {args.maxitems}"
+        if getattr(args, "maxfiles", None) is not None:
+            cmd += f" --maxfiles {args.maxfiles}"
+        if getattr(args, "maxradius", None) is not None:
+            cmd += f" --maxradius {args.maxradius}"
+        if args.files_per_job:
+            cmd += f" --files-per-job {args.files_per_job}"
         os.system(cmd)

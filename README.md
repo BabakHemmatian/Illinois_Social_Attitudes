@@ -2,7 +2,7 @@
 
 # Illinois Social Attitudes Aggregate Corpus (ISAAC)
 
-This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. 
+This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. The resources also support user location estimation.
 
 **Corpus size (comments): 554,464,184 posts**
 
@@ -13,15 +13,11 @@ This repository contains tools for the development and evaluation of the **Illin
 
 ## Corpus Access
 
-A coding-free website for convenient access to the full corpus or samples of it will soon go live at [https://isaac.psychology.illinois.edu/](https://isaac.psychology.illinois.edu/). Until then, you can find the monthly comment files for each social distinction using direct download links formatted as follows:
-
-```https://rfyavjpuqoepfkxhtzie.supabase.co/storage/v1/object/public/refiltered-files/[social distinction]/RC_[4-digit year]-[2-digit month].csv```, where social distinction can be ```sexuality```,```age```,```ability```, ```weight```, ```race``` or ```skin_tone```, and the year value between ```2007``` and ```2023```.
-
-**Example**: ```https://rfyavjpuqoepfkxhtzie.supabase.co/storage/v1/object/public/refiltered-files/ability/RC_2007-01.csv``` will start download for the ability-related posts from the January of 2007.
+A coding-free website for convenient access to the full comment corpus or samples of it can be found [here](http://141.142.219.201/). The submissions data will be added to the website soon.
 
 ## Corpus Interpretation
 
-You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). We are currently in the process of adding social-psychological labels to the uploaded version of the corpus, but users can find plug-and-play scripts in this repository for extracting them themselves. 
+You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). We are currently in the process of adding social-psychological and location labels to the uploaded version of the corpus, but users can find plug-and-play scripts in this repository for extracting them themselves. 
 
 ## The Current Repository
 
@@ -29,12 +25,12 @@ This repository contains the scripts that allow you to rebuild ISAAC from scratc
 - Filtering Reddit content by keywords and the use of English language. 
 - Applying pre-trained neural networks and complex pattern matching to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). 
 - Generating generalized language (e.g., genericity), moralization, sentiment and emotion labels for the pruned corpus.
+- Estimate user location down to the county-level based on Reddit activity history.
 
 The scripts were designed to be easily adapted for developing other Reddit corpora. See the **Adaptations** section below for more information.
 
 **Note:**
 - The scripts were developed on Windows 11, then tested on Ubuntu. However, cross-platform compatibility is not guaranteed.
-- The ```label_localization``` resource, identifying the country and the state where a user likely resides, is in development.
 
 ## Citation
 If you use this repository in your work, please cite us as follows:
@@ -88,10 +84,11 @@ This example command will use the appropriate keyword lists from this repository
 6. _```label_sentiment```_: Generates a range of sentiment labels for a post based on [Stanza](https://stanfordnlp.github.io/stanza/sentiment.html), [TextBlob](https://textblob.readthedocs.io/en/dev/quickstart.html) and [Vader](https://github.com/cjhutto/vaderSentiment) models. The combination of multiple models supports reliable inference.
 7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. 
 8. _```label_emotion```_: Generates a range of emotion labels for a post based on the neural network models found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
+9. ```label_location```: Estimates a submission/comment author's home location down to the county level based on Reddit posting history. This is an updated and expanded version of the Bayesian model described [here](https://aclanthology.org/W18-6103.pdf). This resource has its own command line arguments with default values. Because this resource goes over large swathes of raw Reddit data for estimating features, using the parallelized version is recommended. 
 
 **Note:** _italicized_ resources are LLM-based and require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 200 and 2500 were used based on system parameters during the development of ISAAC. 
 
-**Note**: LLM-based resources would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment. You can speed up processing even further by using batch processing in a computing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. 
+**Note**: LLM-based resources would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment. You can speed up processing even further by using batch processing in a computing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. Several command line arguments such as ```--num-jobs``` control the behavior of the slurm versions of scripts. 
 
 If you plan instead to adapt the code for developing new datasets, see the section below. 
 

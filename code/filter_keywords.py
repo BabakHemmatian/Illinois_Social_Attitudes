@@ -3,7 +3,7 @@ import csv
 import json
 import time
 from datetime import datetime
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import zstandard
 import io
 import ahocorasick
@@ -40,11 +40,18 @@ automaton.make_automaton()
 # Prepare and inspect the output path
 output_path = os.path.join(dir_path.replace("code", os.path.join("data", "data_reddit_curated", group,type_,"filtered_keywords")))
 os.makedirs(output_path, exist_ok=True)
-processed_files = set(f for f in os.listdir(output_path) if f.endswith('.csv'))
 
 # Setup the report file (tab-separated format)
 output_report_filename = "Report_filter_keywords.csv"
 report_file_path = os.path.join(output_path, output_report_filename)
+
+# Track completed outputs
+processed_stems = {
+    Path(f).stem
+    for f in os.listdir(output_path)
+    if f.endswith(".csv") and f != output_report_filename
+}
+
 if not os.path.exists(report_file_path):
     mode = 'w'
 else:
@@ -75,7 +82,7 @@ def filter_keyword_file(file):
             writer = csv.writer(csv_file)
             writer.writerow(headers)
             
-            dctx = zstandard.ZstdDecompressor(max_window_size=2 ** 31)
+            dctx = zstandard.ZstdDecompressor(max_window_size=2 ** 31) # 2GB cap
             stream_reader = dctx.stream_reader(fh, read_across_frames=True)
             text_stream = io.TextIOWrapper(stream_reader, encoding='utf-8')
 
@@ -161,19 +168,19 @@ def filter_keyword_parallel():
     
     total_lines = 0
     matched_lines = 0
-    max_workers = min(6, os.cpu_count())
+    max_workers = min(4, os.cpu_count())
     log_report(report_file_path, f"Using {max_workers} processes for parallel processing.")
 
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
-        futures = []
 
         for year in years:
             log_report(report_file_path, f"Processing year: {year}")
             start_year_time = time.time()
             files_by_month = {}
+            futures = []
 
             for file in sorted(os.listdir(DATA_DIR)):
-                if str(year) in file and file.endswith(".zst") and file.split('.zst')[0] not in processed_files:
+                if str(year) in file and file.endswith(".zst") and Path(file).stem not in processed_stems:
                     try:
 
                         # Assuming filename format includes month as "YYYY-MM" or "YYYY-MM-..."
@@ -192,7 +199,7 @@ def filter_keyword_parallel():
             for month, files in sorted(files_by_month.items()):
                 futures.append(executor.submit(filter_keyword_month, year, month, files))
 
-            for future in futures:
+            for future in as_completed(futures):
                 try:
                     month_lines, month_matched = future.result()
                     total_lines += month_lines

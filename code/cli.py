@@ -39,6 +39,21 @@ def get_args(argv=None):
         'label_location'
     ]
     
+    # Conditionally require --group (train_location is global, not group-specific)
+    needs_group = [
+        'filter_keywords',
+        'filter_language',
+        'filter_relevance',
+        'filter_keywords_adv',
+        'filter_sample',
+        'metrics_interrater',
+        'label_moralization',
+        'label_sentiment',
+        'label_generalization',
+        'label_emotion',
+        'label_location',
+        'train_relevance'
+    ]
     argparser.add_argument(
         '-t', '--type',
         type=str,
@@ -56,7 +71,7 @@ def get_args(argv=None):
         choices=[
             'filter_keywords', 'filter_language', 'filter_sample',
             'filter_relevance', 'filter_keywords_adv','metrics_interrater', 'label_moralization',
-            'label_generalization', 'label_sentiment', 'train_relevance', 'label_emotion','label_location'
+            'label_generalization', 'label_sentiment', 'label_emotion','label_location', 'train_relevance', 'train_location'
         ],
         required=True,
         help="Indicate the type of processing needed. Labeling and metrics options require the output of filtering steps for the indicated years. Filtering should be done with consecutive commands in order: keywords, language, then relevance."
@@ -65,8 +80,8 @@ def get_args(argv=None):
         '-g', '--group',
         type=str,
         choices=list(groups.keys()),
-        required=True,
-        help='Identify the social group to which the processing should be applied.'
+        required=False,
+        help='Identify the social group to which the processing should be applied. Not required for train_location.'
     )
     argparser.add_argument(
         '-y', '--years',
@@ -122,6 +137,12 @@ def get_args(argv=None):
 
     args = argparser.parse_args(argv)
 
+    
+    # Validate group if required
+    if args.resource in needs_group:
+        if not args.group:
+            argparser.error("--group is required for this resource")
+
     # Validate years if required
     if args.resource in needs_years:
         if not args.years:
@@ -146,7 +167,7 @@ if __name__ == "__main__":
         # Include type as one of the exported SLURM vars
         slurm_vars = (
             f"resource={args.resource},"
-            f"group={args.group},"
+            f"group={args.group}," if args.group else ""
             f"type={args.type}"
         )
 
@@ -184,7 +205,9 @@ if __name__ == "__main__":
     else:
         # Robust path to the resource script inside code/
         resource_script = str(CODE_DIR / f"{args.resource}.py")
-        cmd = f'python "{resource_script}" -t {args.type} -r {args.resource} -g {args.group}'
+        cmd = f'python "{resource_script}" -t {args.type} -r {args.resource}'
+        if args.group:
+            cmd += f' -g {args.group}'
         if args.years:
             cmd += f' -y {args.years}'
         if args.batchsize:

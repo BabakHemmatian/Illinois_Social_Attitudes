@@ -109,3 +109,6 @@ If there are still many irrelevant posts in your dataset, you might want to cons
 
 ### Label Generation
 If the social-psychological labels provided alongside ISAAC work well for your use case, you can apply ```label``` resources to generate them for your new corpus. 
+
+### Training Location Model
+The ```train_location``` resource can be used to train a Dirichlet-multinomial model for estimating user location from Reddit history (word usage, subreddits and timestamps). Note that using this resource requires ```jsonl``` files that contain word use, subreddit and timestamp frequencies for a set of users with labeled location, who are identified in a separate ```csv``` file. Due to data security considerations, we do not provide the data files used for training our own model. If you would like more information about how the files should be formatted for a model that you are training, please reach out to the repository owner. 

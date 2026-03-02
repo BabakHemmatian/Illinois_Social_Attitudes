@@ -164,25 +164,21 @@ if __name__ == "__main__":
     args = get_args()
 
     if args.slurm:
-        # Include type as one of the exported SLURM vars
-        slurm_vars = (
-            f"resource={args.resource},"
-            f"group={args.group}," if args.group else ""
-            f"type={args.type}"
-        )
-
+        
+        slurm_vars = f"resource={args.resource},type={args.type}"
+        
         array_spec = None
 
+        if args.group:
+            slurm_vars += f",group={args.group}"
         if args.years:
             slurm_vars += f",years={args.years}"
             months = array_span_from_years(args.years)  # total month-files
             files_per_job = args.files_per_job
             num_jobs = ceil(months / files_per_job)
             array_spec = f"0-{num_jobs-1}"
-
         if args.batchsize:
             slurm_vars += f",batchsize={args.batchsize}"
-
         if args.files_per_job:
             slurm_vars += f",files_per_job={args.files_per_job}"
 

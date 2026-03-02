@@ -13,7 +13,7 @@ This repository contains tools for the development and evaluation of the **Illin
 
 ## Corpus Access
 
-A coding-free website for convenient access to the full comment corpus or samples of it can be found [here](http://141.142.219.201/). The submissions data will be added to the website soon.
+A coding-free website for convenient access to the full comment corpus or samples of it can be found [here](http://141.142.219.201/). Submissions will be integrated into the same dataset soon.
 
 ## Corpus Interpretation
 
@@ -25,7 +25,7 @@ This repository contains the scripts that allow you to rebuild ISAAC from scratc
 - Filtering Reddit content by keywords and the use of English language. 
 - Applying pre-trained neural networks and complex pattern matching to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). 
 - Generating generalized language (e.g., genericity), moralization, sentiment and emotion labels for the pruned corpus.
-- Estimate user location down to the county-level based on Reddit activity history.
+- Estimate user location down roughly to the county-level based on Reddit activity history.
 
 The scripts were designed to be easily adapted for developing other Reddit corpora. See the **Adaptations** section below for more information.
 
@@ -84,11 +84,11 @@ This example command will use the appropriate keyword lists from this repository
 6. _```label_sentiment```_: Generates a range of sentiment labels for a post based on [Stanza](https://stanfordnlp.github.io/stanza/sentiment.html), [TextBlob](https://textblob.readthedocs.io/en/dev/quickstart.html) and [Vader](https://github.com/cjhutto/vaderSentiment) models. The combination of multiple models supports reliable inference.
 7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. 
 8. _```label_emotion```_: Generates a range of emotion labels for a post based on the neural network models found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
-9. ```label_location```: Estimates a submission/comment author's home location down to the county level based on Reddit posting history. This is an updated and expanded version of the Bayesian model described [here](https://aclanthology.org/W18-6103.pdf). This resource has its own command line arguments with default values. Because this resource goes over large swathes of raw Reddit data for estimating features, using the parallelized version is recommended. 
+9. _```label_location```_: Estimates a submission/comment author's home location down roughly to the county level (geohash4) based on Reddit posting history. This is an updated, expanded and optimized version of the Bayesian model described [here](https://aclanthology.org/W18-6103.pdf). This resource has its own command line arguments with default values. Because this resource goes over large swathes of raw Reddit data for estimating a large number of variables, parallelization and GPU use are recommended (see below). 
 
-**Note:** _italicized_ resources are LLM-based and require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 200 and 2500 were used based on system parameters during the development of ISAAC. 
+**Note:** _italicized_ resources require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 200 and 4096 were used based on the resource and system parameters while developing ISAAC. 
 
-**Note**: LLM-based resources would become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, follow the steps [here](https://medium.com/@harunijaz/a-step-by-step-guide-to-installing-cuda-with-pytorch-in-conda-on-windows-verifying-via-console-9ba4cd5ccbef) to install PyTorch with Cuda support within your new conda environment. You can speed up processing even further by using batch processing in a computing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. Several command line arguments such as ```--num-jobs``` control the behavior of the slurm versions of scripts. 
+**Note**: Resources requiring ```batchsize``` become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, make sure you have PyTorch with Cuda support installed within your new conda environment (included in ```req.txt```). You can speed up processing even further by using batch processing in a computing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. Several command line arguments such as ```--num-jobs``` control the behavior of the slurm versions of scripts. 
 
 If you plan instead to adapt the code for developing new datasets, see the section below. 
 
@@ -111,4 +111,4 @@ If there are still many irrelevant posts in your dataset, you might want to cons
 If the social-psychological labels provided alongside ISAAC work well for your use case, you can apply ```label``` resources to generate them for your new corpus. 
 
 ### Training Location Model
-The ```train_location``` resource can be used to train a Dirichlet-multinomial model for estimating user location from Reddit history (word usage, subreddits and timestamps). Note that using this resource requires ```jsonl``` files that contain word use, subreddit and timestamp frequencies for a set of users with labeled location, who are identified in a separate ```csv``` file. Due to data security considerations, we do not provide the data files used for training our own model. If you would like more information about how the files should be formatted for a model that you are training, please reach out to the repository owner. 
+The ```train_location``` resource can be used to train a Dirichlet-multinomial model for estimating user location from Reddit history (word usage, subreddits and timestamps). Note that using this resource requires ```jsonl``` files that contain word use, subreddit and timestamp frequencies for users with labeled location, identified in a separate ```csv``` file. Due to data security considerations, we do not provide the data files used for training our own model. If you would like more information about how the files should be formatted for a model that you are training, please reach out to the repository owner. 

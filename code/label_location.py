@@ -8,6 +8,7 @@ import pickle
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from typing import Dict, List, Tuple, Optional
+import torch
 from cli import get_args, dir_path
 from utils import (
     check_reqd_files,
@@ -20,25 +21,27 @@ from utils import (
     cache_put_locations,
 )
 
-## Confidence variables
+### High-level parameters
+
+# Confidence variables
 CONF_MARGIN = 1.5            # log-score gap needed between top1 and top2
 MIN_SAMPLES_FOR_CACHE = 10   # require at least this many raw items collected
 UNKNOWN_LABEL = "__UNKNOWN__" # For users that cannot be geolocated with decent confidence:
 
-## get run arguments from CLI
+# get run arguments from CLI
 args = get_args()
 type_ = args.type
 years = parse_range(args.years)
 if isinstance(years, int):
     years = [years]
 group = args.group
-batch_size = getattr(args, "batchsize", 512)
-max_items_per_author = getattr(args, "maxitems", 25)   # sample target per author. Has default.
+batch_size = getattr(args, "batchsize", 4096)
+max_items_per_author = getattr(args, "maxitems", 25)      # sample target per author. Has default.
 max_files_to_scan = getattr(args, "maxfiles", 60)         # hard cap month-positions to scan. Has default.
 max_radius = getattr(args, "maxradius", 30)               # ±30 months around target month. Has default.
 include_hours = True
 
-## path variables
+# path variables
 CODE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CODE_DIR.parent
 DATA_DIR = PROJECT_ROOT
@@ -62,7 +65,7 @@ MODEL_PATH = os.path.join(MODELS_DIR, "location_model.pkl")
 
 processed_stems = {Path(f).stem for f in os.listdir(output_path) if f.endswith(".csv")}
 
-## Model loading + inference
+### Model loading + inference
 
 # Load the pickled location model
 def load_model(path: str):
@@ -111,8 +114,216 @@ def dm_loglik(counts: Dict[str, int], loc_param, vocab_set: set) -> float:
         ll += math.lgamma(a + int(c)) - math.lgamma(a)
     return ll
 
-# Batched prediction. Returns top-k [(label, log_score)] per sample.
-def predict_batch(batch_counts: List[Dict[str, int]], model, topk: int = 1) -> List[List[Tuple[str, float]]]:
+### Torch GPU batched scorer
+
+def _torch_available() -> bool:
+    try:
+        return torch.cuda.is_available()
+    except Exception:
+        return False
+
+# Vectorized (batch x locations) scorer on GPU (CUDA) with a sparse correction path.
+# NOTE: Score(user, loc) = log(prior(loc)) + const(loc) - lgamma(alpha_sum(loc) + n_user) + sum_{w in user} [lgamma(alpha_loc_w + c_w) - lgamma(alpha_loc_w)], 
+# where alpha_loc_w = loc_param.alpha.get(w, alpha0)  (only if w in vocab_set)
+class TorchBatchedScorer:
+    def __init__(self, model):
+        vocab, priors, loc_params, locations = _safe_model_fields(model)
+        self.vocab_set = set(vocab)
+        self.locations = list(locations)
+
+        # Device
+        self.device = torch.device("cuda") if _torch_available() else torch.device("cpu")
+
+        # Build dense per-location tensors
+        L = len(self.locations)
+        const = torch.empty(L, dtype=torch.float32)
+        alpha_sum = torch.empty(L, dtype=torch.float32)
+        log_priors = torch.empty(L, dtype=torch.float32)
+
+        # We assume a single alpha0 shared across locations. If missing, default to 0.01.
+        alpha0_val = None
+
+        # Feature -> list of (loc_index, alpha_value) overrides. We store only features in vocab_set.
+        feat_locs: Dict[str, list] = {}
+        feat_alphas: Dict[str, list] = {}
+
+        for li, gh in enumerate(self.locations):
+            lp = loc_params.get(gh)
+            if lp is None:
+                # Make it extremely unlikely
+                const[li] = float("-inf")
+                alpha_sum[li] = 1.0
+                log_priors[li] = -100.0
+                continue
+
+            c = getattr(lp, "const", None)
+            if c is None:
+                # Older models may not have const; fall back (slower) by using dm_loglik CPU path
+                raise ValueError("Model lacks loc_param.const; GPU batched scorer requires precomputed const.")
+            const[li] = float(c)
+
+            asum = getattr(lp, "alpha_sum", None)
+            if asum is None:
+                raise ValueError("Model lacks loc_param.alpha_sum; GPU batched scorer requires alpha_sum.")
+            alpha_sum[li] = float(asum)
+
+            p = float(priors.get(gh, 1e-30))
+            log_priors[li] = math.log(p) if p > 0 else -1000.0
+
+            a0 = getattr(lp, "alpha0", None)
+            if alpha0_val is None and a0 is not None:
+                alpha0_val = float(a0)
+
+            alpha_dict = getattr(lp, "alpha", None)
+            if not alpha_dict:
+                continue
+
+            # Build inverted index for overrides
+            for feat, aval in alpha_dict.items():
+                if feat not in self.vocab_set:
+                    continue
+                # If alpha dict redundantly stores alpha0, skip (saves memory + work)
+                try:
+                    aval_f = float(aval)
+                except Exception:
+                    continue
+                if alpha0_val is not None and abs(aval_f - alpha0_val) < 1e-12:
+                    continue
+                feat_locs.setdefault(feat, []).append(li)
+                feat_alphas.setdefault(feat, []).append(aval_f)
+
+        if alpha0_val is None:
+            alpha0_val = 0.01
+        self.alpha0 = torch.tensor(alpha0_val, dtype=torch.float32, device=self.device)
+
+        self.const = const.to(self.device)
+        self.alpha_sum = alpha_sum.to(self.device)
+        self.log_priors = log_priors.to(self.device)
+
+        # Convert feature override lists to tensors on device
+        self.feat_override = {}
+        for feat, loc_list in feat_locs.items():
+            loc_t = torch.tensor(loc_list, dtype=torch.long, device=self.device)
+            a_t = torch.tensor(feat_alphas[feat], dtype=torch.float32, device=self.device)
+            self.feat_override[feat] = (loc_t, a_t)
+
+    # Convert list of count dicts into:
+    # - per user: feature list and counts
+    # - n_user tensor (sum counts over in-vocab features)
+    # - base_term tensor (sum [lgamma(alpha0+c)-lgamma(alpha0)] over in-vocab features)
+    # - feat -> (user_indices tensor, counts tensor) for features present in batch
+    def _batch_prepare(self, batch_counts: List[Dict[str, int]]):
+        B = len(batch_counts)
+        n_user = torch.zeros(B, dtype=torch.float32, device=self.device)
+        base_term = torch.zeros(B, dtype=torch.float32, device=self.device)
+
+        feat_users: Dict[str, list] = {}
+        feat_counts: Dict[str, list] = {}
+
+        # Keep CPU loop to build sparse structures; GPU does the heavy math.
+        for ui, counts in enumerate(batch_counts):
+            if not counts:
+                continue
+            for feat, c in counts.items():
+                if feat not in self.vocab_set:
+                    continue
+                ic = int(c)
+                if ic <= 0:
+                    continue
+                n_user[ui] += ic
+                # base DM contribution for this feature if alpha == alpha0 everywhere
+                base_term[ui] += torch.lgamma(self.alpha0 + ic) - torch.lgamma(self.alpha0)
+
+                if feat in self.feat_override:
+                    feat_users.setdefault(feat, []).append(ui)
+                    feat_counts.setdefault(feat, []).append(ic)
+
+        feat_batch = {}
+        for feat, ulist in feat_users.items():
+            u_t = torch.tensor(ulist, dtype=torch.long, device=self.device)
+            c_t = torch.tensor(feat_counts[feat], dtype=torch.float32, device=self.device)
+            feat_batch[feat] = (u_t, c_t)
+        return n_user, base_term, feat_batch
+
+    @torch.no_grad()
+    def predict_topk(self, batch_counts: List[Dict[str, int]], topk: int = 2):
+        """
+        Returns list of length B, each item: [(label, score), ...] (up to topk)
+        """
+        if not batch_counts:
+            return []
+
+        B = len(batch_counts)
+        L = self.const.shape[0]
+
+        n_user, base_term, feat_batch = self._batch_prepare(batch_counts)
+
+        # Base scores: shape [B, L]
+        # scores = log_priors + const - lgamma(alpha_sum + n_user) + base_term
+        
+        # Broadcasting
+        scores = self.log_priors.unsqueeze(0) + self.const.unsqueeze(0)
+        scores = scores - torch.lgamma(self.alpha_sum.unsqueeze(0) + n_user.unsqueeze(1))
+        scores = scores + base_term.unsqueeze(1)
+
+        # Apply sparse corrections for per-location feature overrides
+        # NOTE: For each feature: for affected users, adjust scores at override locations by:(lgamma(alpha_loc + c) - lgamma(alpha_loc)) - (lgamma(alpha0 + c) - lgamma(alpha0))
+        # where second term is the base already included in base_term. We compute correction per user and add for all override locations.
+        THRESH_OUTER = 2_000_000  # outer product elements threshold for vectorized update
+        for feat, (u_idx, c_vec) in feat_batch.items():
+            loc_idx, a_loc = self.feat_override[feat]
+            # base for these users
+            base = torch.lgamma(self.alpha0 + c_vec) - torch.lgamma(self.alpha0)  # [U]
+            U = u_idx.numel()
+            K = loc_idx.numel()
+            if U == 0 or K == 0:
+                continue
+
+            if U * K <= THRESH_OUTER:
+                # Vectorized: compute [U,K] correction and scatter-add
+                # corr = f(a_loc, c) - base
+                corr = (torch.lgamma(a_loc.unsqueeze(0) + c_vec.unsqueeze(1)) - torch.lgamma(a_loc).unsqueeze(0)) - base.unsqueeze(1)
+                # Build index tensors
+                u_exp = u_idx.unsqueeze(1).expand(U, K).reshape(-1)
+                l_exp = loc_idx.unsqueeze(0).expand(U, K).reshape(-1)
+                v_exp = corr.reshape(-1)
+                scores.index_put_((u_exp, l_exp), v_exp, accumulate=True)
+            else:
+                # Fallback: loop users for this feature (still vectorized over locations)
+                for j in range(U):
+                    ui = int(u_idx[j].item())
+                    c = c_vec[j]
+                    base_j = base[j]
+                    corr_loc = (torch.lgamma(a_loc + c) - torch.lgamma(a_loc)) - base_j  # [K]
+                    scores.index_put_((torch.full((K,), ui, device=self.device, dtype=torch.long), loc_idx), corr_loc, accumulate=True)
+
+        # Top-k over locations
+        k = min(topk, L)
+        vals, idxs = torch.topk(scores, k=k, dim=1)
+
+        # Convert to python output
+        out = []
+        vals_cpu = vals.detach().cpu().tolist()
+        idxs_cpu = idxs.detach().cpu().tolist()
+        for b in range(B):
+            pairs = []
+            for j in range(k):
+                li = idxs_cpu[b][j]
+                pairs.append((self.locations[li], float(vals_cpu[b][j])))
+            out.append(pairs if pairs else [(UNKNOWN_LABEL, float("-inf"))])
+        return out
+
+
+# Predict top-k locations for a batch of users.
+# NOTE: If `scorer` is provided and is a TorchBatchedScorer, scoring runs on GPU (CUDA) in a true batch x locations tensor. Otherwise falls back to the original CPU implementation.
+def predict_batch(batch_counts: List[Dict[str, int]], model, topk: int = 1, scorer: Optional[object] = None) -> List[List[Tuple[str, float]]]:
+    if scorer is not None:
+        try:
+            return scorer.predict_topk(batch_counts, topk=max(topk, 1))
+        except Exception:
+            # fallback to CPU if something goes wrong (e.g., model missing const)
+            pass
+
     vocab, priors, loc_params, locations = _safe_model_fields(model)
     vocab_set = set(vocab)
 
@@ -155,7 +366,7 @@ def _extract_year_month_from_name(path: str) -> Optional[Tuple[int, int]]:
         return None
     return int(m.group(1)), int(m.group(2))
 
-## Location labeling pipeline
+### Location labeling pipeline
 
 # Monthly processing function
 # 1. Reads a curated file to set authors, uses a persistent cache to quickly label authors
@@ -267,6 +478,15 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     # Load model inside worker
     model = load_model(MODEL_PATH)
 
+    # Optional GPU scorer (true batch x locations). Falls back to CPU if CUDA not available or model incompatible.
+    scorer = None
+    try:
+        scorer = TorchBatchedScorer(model)
+        log_report(report_file_path, f"[gpu] {stem}: using torch device={scorer.device} batch_scoring=yes")
+    except Exception as e:
+        scorer = None
+        log_report(report_file_path, f"[gpu] {stem}: torch batch scorer unavailable; using CPU. reason={type(e).__name__}")
+
     author_to_counts, author_seen = build_author_feature_map_from_raw_zst_with_seen(
         raw_files=raw_files,
         target_authors=remaining_authors,
@@ -287,7 +507,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         batch_counts = [author_to_counts.get(a, {}) for a in chunk]
 
         # Get top-2 to compute a confidence margin (log-score gap)
-        top2 = predict_batch(batch_counts, model, topk=2)
+        top2 = predict_batch(batch_counts, model, topk=2, scorer=scorer)
 
         for a, scores in zip(chunk, top2):
             # predicted label
@@ -354,6 +574,9 @@ def label_location_parallel():
             log_report(report_file_path, f"[warn] invalid --array '{array_idx}', running full set")
 
     max_workers = min(4, os.cpu_count() or 1)
+    # If CUDA is available, avoid multiple processes competing for one GPU.
+    if _torch_available():
+        max_workers = 1
     log_report(report_file_path, f"Using {max_workers} processes for parallel month processing.")
     total_rows = 0
     total_authors = 0
@@ -379,4 +602,4 @@ if __name__ == "__main__":
     except Exception as e:
         log_report(report_file_path, f"Fatal error during location labeling: {e}")
     mins = (time.time() - overall) / 60
-    log_report(report_file_path, f"Location labeling finished in {mins:.2f} minutes")
+    log_report(report_file_path, f"Location labeling finished in {mins:.2f} minutes.")

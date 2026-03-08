@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, headers, log_report
+from utils import parse_range, log_report, check_reqd_files
 
 # import Python packages
 import os
@@ -19,8 +19,11 @@ years = parse_range(args.years)
 group = args.group
 type_ = args.type
 batch_size = args.batchsize
+array_index   = getattr(args, "array", None)
 if args.array is not None:
     array = args.array
+files_per_job = getattr(args, "files_per_job", 1)
+
 
 # set path variables
 CODE_DIR = Path(__file__).resolve().parent         
@@ -28,7 +31,7 @@ PROJECT_ROOT = CODE_DIR.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 
-generalization_labeled_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_sentiment"
+generalization_labeled_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_generalization"
 output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_emotion"
 output_path.mkdir(parents=True, exist_ok=True)
 
@@ -87,15 +90,7 @@ def get_predictions(texts, tokenizer=None, model=None, max_length=512):
 
 
 # Build file_list organized by year and raise an error if an expected file is missing 
-file_list = []
-for year in years:
-    for month in range(1, 13):
-        filename = "RC_{}-{:02d}.csv".format(year, month)
-        path_ = os.path.join(generalization_labeled_path, filename)
-        if os.path.exists(path_):
-            file_list.append(path_)
-        else:
-            raise Exception("Missing generalization-labeled file for the {} social group from year {}, month {}".format(group, year, month))
+file_list = check_reqd_files(years, generalization_labeled_path, type_)
 
 # generates labels for a month's worth of documents. Resumes labeling if it finds incomplete output files. 
 def label_emotion_file(file):
@@ -239,39 +234,43 @@ def label_emotion_file(file):
 
     return total_lines
 
-##########################################
 # Main execution: process each file and aggregate stats
-##########################################
 start_time = time.time()
 
 overall_docs = 0
 
-if args.array is not None: # for batch processing
-    overall_docs += label_emotion_file(file_list[array])
+if args.array is not None: # for batch processing (Slurm array task)
+    start = array * files_per_job
+    end = min(start + files_per_job, len(file_list))
+    if start >= len(file_list):
+        raise RuntimeError(
+            f"Array index {array} out of range for {len(file_list)} files (files_per_job={files_per_job})."
+        )
+    for file in file_list[start:end]:
+        overall_docs += label_emotion_file(file)
 
 else: # for sequential processing
     for file in file_list:        
         overall_docs += label_emotion_file(file)
 
-    ##########################################
-    # ----- Check for missing monthly outputs -----
-    for year in years:
-        expected_months = set(f"{m:02d}" for m in range(1, 13))
-        processed_months = set()
-        for file in os.listdir(output_path):
-            m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
-            if m:
-                processed_months.add(m.group(1))
-        missing = expected_months - processed_months
-        if missing:
-            log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
-    ##########################################
+    # Check for missing monthly outputs
+    if not args.array:
+        prefix = "RC" if type_ == "comments" else "RS"
+        for year in years:
+            expected_months = set(f"{m:02d}" for m in range(1, 13))
+            processed_months = set()
+            for file in os.listdir(output_path):
+                m = re.search(rf"{prefix}_{year}-(\d{{2}})\.csv", file)
+                if m:
+                    processed_months.add(m.group(1))
+            missing = expected_months - processed_months
+            if missing:
+                log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
 
-    overall_elapsed = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Emotion labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+        overall_elapsed = (time.time() - start_time) / 60
+        log_report(report_file_path, f"Emotion labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
 
-    ##########################################
-    # ----- Aggregate overall statistics and save final summary report -----
+    # Aggregate overall statistics and save final summary report
     final_report = [
         ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
         [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
@@ -281,4 +280,3 @@ else: # for sequential processing
         writer = csv.writer(rf)
         writer.writerows(final_report)
     log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
-    ##########################################

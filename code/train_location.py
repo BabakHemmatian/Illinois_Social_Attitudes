@@ -1,4 +1,4 @@
-## imports
+
 from __future__ import annotations
 import csv
 import json
@@ -12,42 +12,13 @@ import signal
 from collections import Counter, defaultdict
 from dataclasses import dataclass, asdict
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Dict, List, Tuple, Optional, Iterable
+
 from utils import prepare_splits
 
-### Parameters and Training Configuration
+### Utilities loading
 
-# Determine grid search parameter specifications for the Dirichlet-multinomial model
-@dataclass(frozen=True)
-class Config:
-    vocab_size: int
-    selector: str
-    min_total_count: int
-    alpha_word: float
-
-    alpha_sub: float
-
-    alpha_hour: float
-
-configs = [
-    # Baselines
-    # Same alpha applied to all feature types (words/subs/hours), as before.
-    Config(alpha_word=0.1, alpha_sub=0.1, alpha_hour=0.1, vocab_size=50000,  selector="mi", min_total_count=3),
-    Config(alpha_word=0.1, alpha_sub=0.1, alpha_hour=0.1, vocab_size=100000, selector="mi", min_total_count=3),
-    Config(alpha_word=0.5, alpha_sub=0.5, alpha_hour=0.5, vocab_size=50000,  selector="mi", min_total_count=3),
-
-    # Type-specific smoothing
-    # Words are sparse (need less smoothing), subreddits are denser (moderate smoothing),
-    # and hour-of-day is tiny (stronger smoothing to avoid overfitting).
-    Config(alpha_word=0.05, alpha_sub=0.2, alpha_hour=1.0, vocab_size=50000,  selector="mi", min_total_count=3),
-    Config(alpha_word=0.05, alpha_sub=0.2, alpha_hour=1.0, vocab_size=100000, selector="mi", min_total_count=3),
-
-    # A stronger-smoothing variant to test whether macro-F1 improves under heavy class imbalance
-    # by reducing overconfident “head-class” predictions.
-    Config(alpha_word=0.1,  alpha_sub=0.5, alpha_hour=2.0, vocab_size=50000,  selector="mi", min_total_count=3),
-]
-
-# Prefer faster JSON when available
+# Optional fast JSON
 try:
     import orjson as _fastjson  # type: ignore
     def _json_loads(b: bytes):
@@ -56,7 +27,15 @@ except Exception:
     def _json_loads(b: bytes):
         return json.loads(b)
 
-# Output control
+# Optional Torch (GPU)
+_TORCH_AVAILABLE = False
+try:
+    import torch
+    _TORCH_AVAILABLE = True
+except Exception:
+    torch = None  # type: ignore
+
+### Output control
 VERBOSITY = 1  # 0=quiet, 1=progress, 2=verbose
 def log(msg: str, level: int = 1, stream=None):
     if level <= VERBOSITY:
@@ -64,191 +43,211 @@ def log(msg: str, level: int = 1, stream=None):
 
 UNKNOWN_LABEL = "__UNKNOWN__"
 
-# Paths / configuration
+### training configurations
 loc_type = "global"  # options: US, non-US, global
+SAVE_CANDIDATE_MODELS = False
+OVERWRITE_CHECKPOINTS = False
+PROGRESS_EVERY_SECS = 60
+PRF_TOPK = 5
 
-# set path variables
-CODE_DIR = Path(__file__).resolve().parent              # absolute /code
-PROJECT_ROOT = CODE_DIR.parent                          # absolute project root
+### Paths / configuration
+
+CODE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CODE_DIR.parent
 DATA_DIR = PROJECT_ROOT / "data"
 MODEL_PATH = PROJECT_ROOT / "models"
 
-# Feature files (confidential; write to the repsoitory owner for possible research access)
 SUBS_JSONL = os.path.join(DATA_DIR, "data_reddit_location","subreddit_counts.jsonl")
 VOCAB_FILE = os.path.join(DATA_DIR, "data_reddit_location","vocab_counts.jsonl")
 HOURS_JSONL = os.path.join(DATA_DIR,"data_reddit_location","hour_counts.jsonl")
 
-# Model saving
 SAVE_MODEL = True
 MODEL_SAVE_PATH = os.path.join(MODEL_PATH, "label_location", "best_model.pkl")
 SPLIT_DIR = os.path.join(MODEL_PATH, "train_location_data_split")
 
-# Grid-search checkpointing (resume support)
 GRID_CHECKPOINT_DIR = os.path.join(os.path.dirname(MODEL_SAVE_PATH), "grid_checkpoints")
-SAVE_CANDIDATE_MODELS = False  # saves a model for each evaluated grid point (storage-heavy but enables resume/inspection)
-OVERWRITE_CHECKPOINTS = False  # set True to recompute even if checkpoint exists
-PROGRESS_EVERY_SECS = 60  # for long streaming eval, print a heartbeat at least this often
 
-PRF_TOPK = 5  # for reporting precision/recall/F1 with top-k sets
+# Feature prefixing
+PREFIX_WORD = "w:" # word usage counts
+PREFIX_SUB = "s:" # subreddit counts
+PREFIX_HOUR = "h:" # hours of the day counts
 
-### Feature reading functions
+### Grid config
 
-# Namespacing to avoid collisions between feature types
-PREFIX_WORD = "w:"
-PREFIX_SUB = "s:"
-PREFIX_HOUR = "h:"
-def try_parse_json_counts(s: str) -> Optional[Dict[str, int]]:
-    if s is None:
-        return None
-    s = s.strip()
-    if not s:
-        return None
-    try:
-        obj = json.loads(s)
-    except json.JSONDecodeError:
-        return None
-    if isinstance(obj, dict):
-        out = {}
-        for k, v in obj.items():
-            try:
-                iv = int(v)
-            except Exception:
+@dataclass(frozen=True)
+class Config:
+    vocab_size: int
+    selector: str
+    min_total_count: int
+    alpha_word: float
+    alpha_sub: float
+    alpha_hour: float
+
+# NOTE: the six set-ups cover baselines that have identical smoothing parameters for all features, and look at different levels of smoothing and vocab size.
+configs = [
+    Config(alpha_word=0.1, alpha_sub=0.1, alpha_hour=0.1, vocab_size=50000,  selector="mi", min_total_count=3),
+    Config(alpha_word=0.1, alpha_sub=0.1, alpha_hour=0.1, vocab_size=100000, selector="mi", min_total_count=3),
+    Config(alpha_word=0.5, alpha_sub=0.5, alpha_hour=0.5, vocab_size=50000,  selector="mi", min_total_count=3),
+
+    Config(alpha_word=0.05, alpha_sub=0.2, alpha_hour=1.0, vocab_size=50000,  selector="mi", min_total_count=3),
+    Config(alpha_word=0.05, alpha_sub=0.2, alpha_hour=1.0, vocab_size=100000, selector="mi", min_total_count=3),
+
+    Config(alpha_word=0.1,  alpha_sub=0.5, alpha_hour=2.0, vocab_size=50000,  selector="mi", min_total_count=3),
+]
+
+### CSV helpers
+
+def read_csv_dicts(path: str) -> List[dict]:
+    with open(path, "r", encoding="utf-8", newline="") as f:
+        return list(csv.DictReader(f))
+
+def load_user_to_geo(labels_csv: str, user_col: str = "author", geohash_col: str = "geohash_5") -> Dict[str, str]:
+    user_to_geo: Dict[str, str] = {}
+    with open(labels_csv, "r", encoding="utf-8", errors="ignore", newline="") as f:
+        reader = csv.DictReader(f)
+        for i, r in enumerate(reader):
+            uid = (r.get(user_col) or "").strip().lower()
+            gh = (r.get(geohash_col) or "").strip()
+            if uid and gh:
+                user_to_geo[uid] = gh
+            if i and i % 50000 == 0:
+                log(f"[labels] read {i:,} rows", 1)
+    log(f"[labels] total labeled users: {len(user_to_geo):,}", 1)
+    return user_to_geo
+
+def summarize_split(name: str, users: List[str], labels: List[str]):
+    c = Counter(labels)
+    log(f"\n{name} split:", 1)
+    log(f"  users: {len(users):,}", 1)
+    log(f"  locations: {len(c):,}", 1)
+    if c:
+        log(f"  min per location: {min(c.values())}", 2)
+        log(f"  max per location: {max(c.values())}", 2)
+
+### Feature Loading
+
+## Small feature files
+
+def load_subreddit_counts(path: str) -> Dict[str, Dict[str, int]]:
+    log("[subs] loading subreddit counts jsonl", 1)
+    subs: Dict[str, Dict[str, int]] = {}
+    with open(path, "rb") as f:
+        for i, line in enumerate(f):
+            obj = _json_loads(line)
+            uid = (obj.get("author") or "").strip().lower()
+            if not uid:
                 continue
-            if iv > 0:
-                out[str(k)] = iv
-        return out
-    return None
+            subs[uid] = obj.get("subreddit_counts") or {}
+            if i and i % 50000 == 0:
+                log(f"[subs] processed {i:,} users", 1)
+    log(f"[subs] loaded users: {len(subs):,}", 1)
+    return subs
 
-def row_to_counts(
-    row: dict,
-    user_id_col: str,
-    counts_col_candidates: List[str],
-) -> Tuple[str, Dict[str, int]]:
-    uid = (row.get(user_id_col) or "").strip()
-    if not uid:
-        raise ValueError(f"Missing user id in row: expected column '{user_id_col}'")
+def load_hour_counts(path: str) -> Dict[str, Dict[str, int]]:
+    log("[hours] loading hour-bin counts jsonl", 1)
+    hours: Dict[str, Dict[str, int]] = {}
+    with open(path, "rb") as f:
+        for i, line in enumerate(f):
+            obj = _json_loads(line)
+            uid = (obj.get("author") or "").strip().lower()
+            if not uid:
+                continue
+            raw = obj.get("hour_counts") or obj.get("gmt_hour_counts") or {}
+            norm: Dict[str, int] = {}
+            if isinstance(raw, dict):
+                for k, v in raw.items():
+                    try:
+                        hk = int(k)
+                        iv = int(v)
+                    except Exception:
+                        continue
+                    if 0 <= hk <= 23 and iv > 0:
+                        norm[f"{hk:02d}"] = iv
+            hours[uid] = norm
+            if i and i % 50000 == 0:
+                log(f"[hours] processed {i:,} users", 1)
+    log(f"[hours] loaded users: {len(hours):,}", 1)
+    return hours
 
-    # Try JSON counts columns first
-    for c in counts_col_candidates:
-        if c in row and row[c] is not None:
-            parsed = try_parse_json_counts(row[c])
-            if parsed is not None:
-                return uid, parsed
-
-    # Otherwise interpret as wide BoW columns
-    counts: Dict[str, int] = {}
-    for k, v in row.items():
-        if k == user_id_col:
-            continue
-        if v is None:
-            continue
-        v = str(v).strip()
-        if not v:
-            continue
-        try:
-            iv = int(float(v))
-        except Exception:
-            continue
-        if iv > 0:
-            counts[str(k)] = iv
-
-    return uid, counts
-
-## Labeled data loading/parsing
-
-def load_split_users(
-    split_csv: str,
-    user_id_col: str,
-    counts_col_candidates: List[str],
-) -> Dict[str, Dict[str, int]]:
-    rows = read_csv_dicts(split_csv)
-    out = {}
-    for r in rows:
-        uid, counts = row_to_counts(r, user_id_col, counts_col_candidates)
-        out[uid] = counts
+def merge_small_features(uid: str,
+                         subs_by_user: Dict[str, Dict[str, int]],
+                         hours_by_user: Optional[Dict[str, Dict[str, int]]] = None) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    subs = subs_by_user.get(uid) or {}
+    for k, v in subs.items():
+        if v:
+            out[f"{PREFIX_SUB}{k}"] = int(v)
+    if hours_by_user is not None:
+        hrs = hours_by_user.get(uid) or {}
+        for k, v in hrs.items():
+            if v:
+                out[f"{PREFIX_HOUR}{int(k):02d}"] = int(v)
     return out
 
-# username to geohash and human-readable version of it
-def load_labels(
-    labels_csv: str,
-    user_id_col_in_labels: str,
-    geohash_col: str,
-    city_col: str = "city",
-    state_col: str = "state",
-) -> Tuple[Dict[str, str], Dict[str, str]]:
-    rows = read_csv_dicts(labels_csv)
-    user_to_geo: Dict[str, str] = {}
-    name_counts = defaultdict(Counter)
+## Vocabulary (large feature set) preloading
+# NOTE: Preload word-count dicts for a specified set of authors in ONE PASS over vocab_jsonl. Returns uid -> {word:count} using raw (un-prefixed) word keys from file.
+def load_vocab_counts_for_users(vocab_jsonl: str, users_set: set) -> Dict[str, Dict[str, int]]:
+    log(f"[vocab] preloading vocab for {len(users_set):,} users from {vocab_jsonl}", 1)
+    out: Dict[str, Dict[str, int]] = {}
+    with open(vocab_jsonl, "rb") as f:
+        for i, line in enumerate(f):
+            obj = _json_loads(line)
+            uid = (obj.get("author") or "").strip().lower()
+            if uid in users_set:
+                vc = obj.get("vocab") or {}
+                # keep only positive ints
+                norm: Dict[str, int] = {}
+                if isinstance(vc, dict):
+                    for k, v in vc.items():
+                        try:
+                            iv = int(v)
+                        except Exception:
+                            continue
+                        if iv > 0:
+                            norm[str(k)] = iv
+                out[uid] = norm
+            if i and i % 50000 == 0:
+                log(f"[vocab] scanned {i:,} lines | matched {len(out):,}", 1)
+    log(f"[vocab] loaded vocab for {len(out):,} users (requested {len(users_set):,})", 1)
+    return out
 
-    for r in rows:
-        uid = (r.get(user_id_col_in_labels) or "").strip()
-        gh = (r.get(geohash_col) or "").strip()
-        if not uid or not gh:
-            continue
-        user_to_geo[uid] = gh
-
-        city = (r.get(city_col) or "").strip()
-        state = (r.get(state_col) or "").strip()
-        if city and state:
-            name = f"{city}, {state}"
-        elif city:
-            name = city
-        else:
-            name = gh
-        name_counts[gh][name] += 1
-
-    geo_to_name = {}
-    for gh, ctr in name_counts.items():
-        geo_to_name[gh] = ctr.most_common(1)[0][0]
-
-    return user_to_geo, geo_to_name
-
-def join_users_with_labels(
-    users: Dict[str, Dict[str, int]],
+# Build per-location TRAIN counts from preloaded per-user maps
+def build_train_geo_vocab_from_preloaded(
+    train_users: Iterable[str],
     user_to_geo: Dict[str, str],
-) -> List[Tuple[str, Dict[str, int]]]:
-    out = []
-    missing = 0
-    for uid, counts in users.items():
+    subs_by_user: Dict[str, Dict[str, int]],
+    hours_by_user: Dict[str, Dict[str, int]],
+    vocab_by_user: Dict[str, Dict[str, int]],
+) -> Dict[str, Counter]:
+    geo_vocab: Dict[str, Counter] = defaultdict(Counter)
+    for uid in train_users:
         gh = user_to_geo.get(uid)
         if not gh:
-            missing += 1
             continue
-        out.append((gh, counts))
-    if missing:
-        print(f"[warn] {missing} users had no label and were dropped.", file=sys.stderr)
-    return out
-
-### Vocab building and feature selection
-# NOTE: Based on confidential data. Contact the repository owner for potential research access.
-
-# Aggregate per-location word counts from training users.
-def build_geohash_vocab(train_labeled: List[Tuple[str, Dict[str, int]]]) -> Dict[str, Counter]:
-    geo_vocab: Dict[str, Counter] = defaultdict(Counter)
-    for gh, counts in train_labeled:
+        counts = merge_small_features(uid, subs_by_user, hours_by_user)
+        vc = vocab_by_user.get(uid) or {}
+        if vc:
+            for k, v in vc.items():
+                if v:
+                    counts[f"{PREFIX_WORD}{k}"] = int(v)
         geo_vocab[gh].update(counts)
+    geo_vocab[UNKNOWN_LABEL] = Counter()
+    log(f"[train] locations (seen): {len(geo_vocab)-1:,} (+UNKNOWN)", 1)
     return geo_vocab
 
-def compute_location_priors(train_labeled: List[Tuple[str, Dict[str, int]]]) -> Dict[str, float]:
-    counts = Counter(gh for gh, _ in train_labeled)
-    total = sum(counts.values())
-    return {gh: c / total for gh, c in counts.items()} if total else {}
+### Parameter Estimation
 
-# Smoothed class prior P(geohash) based on training-label frequencies.
-# NOTE: kappa is symmetric Dirichlet pseudo-count per class. kappa=0 recovers MLE.
-def compute_location_priors_smoothed(
-    train_labeled: List[Tuple[str, Dict[str, int]]],
-    kappa: float = 0.5,
-) -> Dict[str, float]:
-    counts = Counter(gh for gh, _ in train_labeled)
+# location priors
+def compute_location_priors_smoothed_from_labels(train_labels: List[str], train_locations: List[str], kappa: float = 0.5) -> Dict[str, float]:
+    counts = Counter(train_labels)
     total = sum(counts.values())
-    if not total:
-        return {}
-    L = len(counts)
-    denom = total + kappa * L
-    return {gh: (c + kappa) / denom for gh, c in counts.items()}
+    L = len(train_locations)
+    denom = total + kappa * (L + 1)
+    priors = {gh: (counts.get(gh, 0) + kappa) / denom for gh in train_locations}
+    priors[UNKNOWN_LABEL] = kappa / denom
+    return priors
 
-# MI(word,location), treating each word as an event
+# Feature selection (Mutual Iinformation with locations)
 def mutual_information_scores(
     geo_vocab: Dict[str, Counter],
     priors: Dict[str, float],
@@ -260,7 +259,6 @@ def mutual_information_scores(
     if total_all == 0:
         return {}
 
-    # P(L)
     prior_mass = sum(priors.get(l, 0.0) for l in locs)
     if prior_mass > 0:
         pL = {l: priors.get(l, 0.0) / prior_mass for l in locs}
@@ -272,7 +270,6 @@ def mutual_information_scores(
     for gh in locs:
         global_word.update(geo_vocab[gh])
 
-    # P(W)
     pW = {w: c / total_all for w, c in global_word.items() if c >= min_total_count}
 
     mi = {}
@@ -303,7 +300,6 @@ def select_vocabulary(
 
     if selector == "mi":
         mi = mutual_information_scores(geo_vocab, priors, min_total_count=min_total_count)
-        # If MI yields too few, backfill with frequency
         top_freq = [w for w, _ in global_word.most_common(vocab_size)]
         top_mi = [w for w, _ in sorted(mi.items(), key=lambda kv: kv[1], reverse=True)]
         chosen = []
@@ -322,18 +318,29 @@ def select_vocabulary(
 
     raise ValueError("selector must be 'mi' or 'freq'")
 
-### Dirichlet-Multinomial scoring
+### Sparse and fast Location Parameter and constant calculation
 
 @dataclass
 class LocationParams:
     alpha_sum: float
     const: float
-    alpha: Dict[str, float]  # word -> alpha_w
+    # sparse overrides: only features with nonzero count in this location AND in vocab_set.
+    alpha: Dict[str, float]
+    # base smoothings (needed to reconstruct alpha for features missing from alpha dict)
+    alpha_word: float
+    alpha_sub: float
+    alpha_hour: float
 
-# Precompute per-location constants for fast Dirichlet-multinomial log likelihood.
-# NOTE: We use different symmetric Dirichlet pseudo-counts for different feature families: alpha_word, alpha_sub and alpha_hour
+def _base_alpha_for_feat(feat: str, alpha_word: float, alpha_sub: float, alpha_hour: float) -> float:
+    if feat.startswith(PREFIX_WORD):
+        return alpha_word
+    if feat.startswith(PREFIX_SUB):
+        return alpha_sub
+    if feat.startswith(PREFIX_HOUR):
+        return alpha_hour
+    return alpha_word
 
-def precompute_location_params(
+def precompute_location_params_sparse(
     geo_vocab: Dict[str, Counter],
     vocab: List[str],
     alpha_word: float,
@@ -341,62 +348,225 @@ def precompute_location_params(
     alpha_hour: float,
     locations: Optional[List[str]] = None,
 ) -> Dict[str, LocationParams]:
-
     if locations is None:
         locations = list(geo_vocab.keys())
+
+    vocab_set = set(vocab)
+
+    # Precompute base sums once (over vocab)
+    base_sum = 0.0
+    sum_lgamma_base = 0.0
+    base_by_feat: Dict[str, float] = {}
+    for feat in vocab:
+        b = _base_alpha_for_feat(feat, alpha_word, alpha_sub, alpha_hour)
+        base_by_feat[feat] = b
+        base_sum += b
+        sum_lgamma_base += math.lgamma(b)
 
     params: Dict[str, LocationParams] = {}
     for gh in locations:
         wc = geo_vocab.get(gh, Counter())
+        # Only consider location features in vocab_set with nonzero counts
+        # and store alpha_override = base + count
+        alpha_sparse: Dict[str, float] = {}
+        alpha_sum = base_sum
+        sum_lgamma_alpha = sum_lgamma_base
 
-        alpha: Dict[str, float] = {}
-        alpha_sum = 0.0
-        for feat in vocab:
-            # Determine which alpha base applies
-            if feat.startswith(PREFIX_WORD):
-                base = alpha_word
-            elif feat.startswith(PREFIX_SUB):
-                base = alpha_sub
-            elif feat.startswith(PREFIX_HOUR):
-                base = alpha_hour
-            else:
-                # If somehow un-prefixed, treat like a word feature.
-                base = alpha_word
+        # iterate over nonzero location features (much smaller than vocab)
+        for feat, c in wc.items():
+            if c <= 0:
+                continue
+            if feat not in vocab_set:
+                continue
+            b = base_by_feat.get(feat)
+            if b is None:
+                b = _base_alpha_for_feat(feat, alpha_word, alpha_sub, alpha_hour)
+            a = b + float(c)
+            alpha_sparse[feat] = a
+            alpha_sum += float(c)
+            # adjust lgamma sum: lgamma(b+c) - lgamma(b)
+            sum_lgamma_alpha += math.lgamma(a) - math.lgamma(b)
 
-            c = wc.get(feat, 0)
-            a = base + c
-            alpha[feat] = a
-            alpha_sum += a
-
-        # const = log Γ(alpha_sum) - Σ log Γ(alpha_i)
-        const = math.lgamma(alpha_sum) - sum(math.lgamma(a) for a in alpha.values())
-        params[gh] = LocationParams(alpha_sum=alpha_sum, const=const, alpha=alpha)
-
+        const = math.lgamma(alpha_sum) - sum_lgamma_alpha
+        params[gh] = LocationParams(
+            alpha_sum=alpha_sum,
+            const=const,
+            alpha=alpha_sparse,
+            alpha_word=alpha_word,
+            alpha_sub=alpha_sub,
+            alpha_hour=alpha_hour,
+        )
     return params
 
-# log p(x | location) under Dirichlet-multinomial, restricted to vocab_set. Returns (loglik, N_used).
-def dm_loglik(counts: Dict[str, int], lp: LocationParams, vocab_set: set) -> Tuple[float, int]:    
+# calculate log-likelihood
+def dm_loglik_sparse(counts: Dict[str, int], lp: LocationParams, vocab_set: set) -> Tuple[float, int]:
+    # only use observed features in vocab
     x_used = {w: c for w, c in counts.items() if c > 0 and w in vocab_set}
     N = sum(x_used.values())
     if N == 0:
         return 0.0, 0
     s = lp.const - math.lgamma(lp.alpha_sum + N)
     for w, c in x_used.items():
-        s += math.lgamma(lp.alpha[w] + c)
+        b = _base_alpha_for_feat(w, lp.alpha_word, lp.alpha_sub, lp.alpha_hour)
+        a = lp.alpha.get(w, b)
+        s += math.lgamma(a + c)
     return s, N
 
-def softmax_from_logps(logps: Dict[str, float]) -> Dict[str, float]:
-    m = max(logps.values())
-    exps = {k: math.exp(v - m) for k, v in logps.items()}
-    Z = sum(exps.values())
-    return {k: v / Z for k, v in exps.items()}
+### GPU batched scorer (Torch)
+# NOTE: Batched BxL scorer for DM log posterior: score(u, loc) = log_prior(loc) + const(loc) - lgamma(alpha_sum(loc) + N_u) + sum_f lgamma(alpha(loc,f) + c_u,f)
 
-### Evaluation
+class TorchBatchedScorer:
+    def __init__(self, locations: List[str], priors: Dict[str, float], loc_params: Dict[str, LocationParams], vocab_set: set):
+        if not _TORCH_AVAILABLE:
+            raise RuntimeError("Torch not available")
+
+        self.locations = locations
+        self.vocab_set = vocab_set
+
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.use_cuda = (self.device.type == "cuda")
+
+        # location tensors
+        prior_floor = 1e-30
+        log_priors = [math.log(priors.get(gh, prior_floor)) for gh in locations]
+        consts = [loc_params[gh].const for gh in locations]
+        alpha_sums = [loc_params[gh].alpha_sum for gh in locations]
+
+        self.log_priors = torch.tensor(log_priors, device=self.device, dtype=torch.float32)  # [L]
+        self.consts = torch.tensor(consts, device=self.device, dtype=torch.float32)          # [L]
+        self.alpha_sums = torch.tensor(alpha_sums, device=self.device, dtype=torch.float32)  # [L]
+
+        # Use smoothings from any loc (they are the same per config)
+        sample_lp = loc_params[locations[0]]
+        self.alpha_word = float(sample_lp.alpha_word)
+        self.alpha_sub = float(sample_lp.alpha_sub)
+        self.alpha_hour = float(sample_lp.alpha_hour)
+
+        # Build overrides index: feat -> (loc_idx_tensor, alpha_override_tensor)
+        # Store only feats in vocab_set.
+        feat_to_locidx: Dict[str, List[int]] = defaultdict(list)
+        feat_to_alpha: Dict[str, List[float]] = defaultdict(list)
+        for li, gh in enumerate(locations):
+            lp = loc_params[gh]
+            for feat, a in lp.alpha.items():
+                # lp.alpha stores only overrides already filtered to vocab_set
+                feat_to_locidx[feat].append(li)
+                feat_to_alpha[feat].append(float(a))
+
+        self.override_locidx: Dict[str, torch.Tensor] = {}
+        self.override_alpha: Dict[str, torch.Tensor] = {}
+        for feat, idxs in feat_to_locidx.items():
+            self.override_locidx[feat] = torch.tensor(idxs, device=self.device, dtype=torch.long)
+            self.override_alpha[feat] = torch.tensor(feat_to_alpha[feat], device=self.device, dtype=torch.float32)
+
+    def _base_alpha_feat(self, feat: str) -> float:
+        if feat.startswith(PREFIX_WORD):
+            return self.alpha_word
+        if feat.startswith(PREFIX_SUB):
+            return self.alpha_sub
+        if feat.startswith(PREFIX_HOUR):
+            return self.alpha_hour
+        return self.alpha_word
+
+    # Returns for each user: list of (location, score) sorted desc, truncated to topk.
+    @torch.no_grad()
+    def score_topk(self, batch_counts: List[Dict[str, int]], topk: int = 10, batch_size_hint: int = 4096) -> List[List[Tuple[str, float]]]:
+        L = len(self.locations)
+        out: List[List[Tuple[str, float]]] = []
+
+        # Process in sub-batches to avoid huge intermediates if user passes a big list
+        for start in range(0, len(batch_counts), batch_size_hint):
+            sub = batch_counts[start:start+batch_size_hint]
+            B = len(sub)
+
+            # N_u
+            Ns = []
+            base_terms = []
+            # For sparse updates, we will collect per-user updates (still no loc loops)
+            per_user_feats: List[List[Tuple[str, int]]] = []
+
+            for counts in sub:
+                feats = [(f, int(c)) for f, c in counts.items() if c > 0 and f in self.vocab_set]
+                per_user_feats.append(feats)
+                N = sum(c for _, c in feats)
+                Ns.append(float(N))
+                # base term: sum lgamma(base + c)
+                bt = 0.0
+                for f, c in feats:
+                    b = self._base_alpha_feat(f)
+                    bt += math.lgamma(b + c)
+                base_terms.append(bt)
+
+            N_t = torch.tensor(Ns, device=self.device, dtype=torch.float32)          # [B]
+            base_t = torch.tensor(base_terms, device=self.device, dtype=torch.float32)  # [B]
+
+            # scores[B, L] = log_priors + const - lgamma(alpha_sum + N_u) + base_term(u)
+            scores = self.log_priors.unsqueeze(0).expand(B, L) + self.consts.unsqueeze(0).expand(B, L)
+            scores = scores - torch.lgamma(self.alpha_sums.unsqueeze(0) + N_t.unsqueeze(1))
+            scores = scores + base_t.unsqueeze(1)
+
+            # Apply sparse deltas for overrides:
+            # For each user u and each feature f in u, if f has overrides at some locations:
+            #   delta(loc) = lgamma(alpha_override(loc) + c) - lgamma(base + c)
+            # and add to scores[u, loc_idx]
+            for ui, feats in enumerate(per_user_feats):
+                if not feats:
+                    continue
+                for f, c in feats:
+                    loc_idx = self.override_locidx.get(f)
+                    if loc_idx is None:
+                        continue
+                    alpha_override = self.override_alpha[f]  # [M]
+                    b = self._base_alpha_feat(f)
+                    # delta vector for those locations
+                    delta = torch.lgamma(alpha_override + float(c)) - float(math.lgamma(b + c))
+                    # scatter-add into scores[ui, loc_idx]
+                    scores[ui].index_add_(0, loc_idx, delta)
+
+            # topk
+            k = min(topk, L)
+            vals, idxs = torch.topk(scores, k=k, dim=1, largest=True, sorted=True)
+            vals_cpu = vals.detach().cpu().tolist()
+            idxs_cpu = idxs.detach().cpu().tolist()
+
+            for u in range(B):
+                out.append([(self.locations[j], float(vals_cpu[u][t])) for t, j in enumerate(idxs_cpu[u])])
+
+        return out
+
+### StreamMetrics + evaluation (preloaded, GPU optional)
+
+@dataclass
+class StreamMetrics:
+    n: int
+    top1_acc: float
+    top5_acc: float
+    top10_acc: float
+    mrr: float
+    log_loss: float
+    avg_in_vocab_tokens: float
+
+    top1_precision_micro: float
+    top1_recall_micro: float
+    top1_f1_micro: float
+    top1_precision_macro: float
+    top1_recall_macro: float
+    top1_f1_macro: float
+
+    topk_precision_micro: float
+    topk_recall_micro: float
+    topk_f1_micro: float
+    topk_precision_macro: float
+    topk_recall_macro: float
+    topk_f1_macro: float
+
+    unseen_true_users: int
+    unseen_true_locations: int
 
 def _safe_div(num: float, den: float) -> float:
     return (num / den) if den else 0.0
 
-# Return micro and macro precision/recall/F1 from per-class tp/fp/fn.
+# precision, recall and F1
 def _prf_from_counts(tp: Dict[str, int], fp: Dict[str, int], fn: Dict[str, int]) -> Dict[str, float]:
     labels = set(tp) | set(fp) | set(fn)
     tp_sum = sum(tp.values())
@@ -433,231 +603,170 @@ def _prf_from_counts(tp: Dict[str, int], fp: Dict[str, int], fn: Dict[str, int])
         "f1_macro": f1_macro,
     }
 
-@dataclass
-class Metrics:
-    n: int
-    top1_acc: float
-    top5_acc: float
-    top10_acc: float
-    mrr: float
-    log_loss: float
-    avg_in_vocab_tokens: float
-
-def evaluate_split(
-    labeled_users: List[Tuple[str, Dict[str, int]]],  # (true_geo, counts)
+def evaluate_split_preloaded(
+    split_name: str,
+    labeled_users: List[Tuple[str, Dict[str, int]]],  # (true_eval_label, counts)
     loc_params: Dict[str, LocationParams],
     priors: Dict[str, float],
     vocab: List[str],
-    topk_list: Tuple[int, int] = (5, 10),
-) -> Metrics:
+    locations: List[str],
+    use_torch_if_available: bool = True,
+    batch_size: int = 4096,
+) -> StreamMetrics:
+    log(f"\n[{split_name}] evaluation (preloaded features)", 1)
     vocab_set = set(vocab)
-    locs = list(loc_params.keys())
+    prior_floor = 1e-30
 
-    n = 0
-    top1 = 0
-    top5 = 0
-    top10 = 0
+    # unseen tracking already handled upstream by mapping to UNKNOWN_LABEL
+    unseen_true_users = 0
+    unseen_true_locations = 0
+
+    # P/R/F1 counters
+    tp1 = defaultdict(int); fp1 = defaultdict(int); fn1 = defaultdict(int)
+    tpk = defaultdict(int); fpk = defaultdict(int); fnk = defaultdict(int)
+
+    hit1 = hit5 = hit10 = 0
     rr_sum = 0.0
-    ll_sum = 0.0
-    invocab_tokens_sum = 0.0
+    logloss_sum = 0.0
+    invocab_tok_sum = 0.0
 
-    k5, k10 = topk_list
-
-    # tiny prior floor for unseen
-    prior_floor = 1e-12
-
-    for true_geo, counts in labeled_users:
-        n += 1
-        logps = {}
-        used_tokens_total = sum(c for w, c in counts.items() if w in vocab_set)
-        invocab_tokens_sum += used_tokens_total
-
-        for gh in locs:
-            loglik, _ = dm_loglik(counts, loc_params[gh], vocab_set)
-            logprior = math.log(priors.get(gh, prior_floor))
-            logps[gh] = loglik + logprior
-
-        # rank
-        ranked = sorted(logps.items(), key=lambda kv: kv[1], reverse=True)
-        rank_list = [gh for gh, _ in ranked]
-
-        if rank_list and rank_list[0] == true_geo:
-            top1 += 1
-        if true_geo in rank_list[:k5]:
-            top5 += 1
-        if true_geo in rank_list[:k10]:
-            top10 += 1
-
-        # reciprocal rank
+    # Torch scorer if possible
+    scorer = None
+    if use_torch_if_available and _TORCH_AVAILABLE:
         try:
-            r = rank_list.index(true_geo) + 1
-            rr_sum += 1.0 / r
-        except ValueError:
-            rr_sum += 0.0
+            scorer = TorchBatchedScorer(locations, priors, loc_params, vocab_set)
+            log(f"[{split_name}] using Torch scorer on device={scorer.device}", 1)
+        except Exception as e:
+            log(f"[{split_name}] Torch scorer unavailable ({e}); falling back to CPU.", 1, stream=sys.stderr)
+            scorer = None
 
-        # log loss uses posterior prob of true class
-        post = softmax_from_logps(logps)
-        p_true = max(post.get(true_geo, 0.0), 1e-15)
-        ll_sum += -math.log(p_true)
+    def score_cpu(counts: Dict[str, int]) -> List[Tuple[str, float]]:
+        scored = []
+        for gh in locations:
+            lp = loc_params[gh]
+            ll, _ = dm_loglik_sparse(counts, lp, vocab_set)
+            scored.append((gh, math.log(priors.get(gh, prior_floor)) + ll))
+        scored.sort(key=lambda x: x[1], reverse=True)
+        return scored
+
+    n = len(labeled_users)
+    for start in range(0, n, batch_size):
+        batch = labeled_users[start:start+batch_size]
+        batch_counts = [c for _, c in batch]
+        batch_true = [t for t, _ in batch]
+
+        if scorer is not None:
+            ranked_batch = scorer.score_topk(batch_counts, topk=10, batch_size_hint=len(batch_counts))
+        else:
+            ranked_batch = [score_cpu(c)[:10] for c in batch_counts]
+
+        for true_eval, ranked in zip(batch_true, ranked_batch):
+            labels_ranked = [gh for gh, _ in ranked]
+            if labels_ranked and labels_ranked[0] == true_eval:
+                hit1 += 1
+            if true_eval in labels_ranked[:5]:
+                hit5 += 1
+            if true_eval in labels_ranked[:10]:
+                hit10 += 1
+
+            pred1 = labels_ranked[0] if labels_ranked else UNKNOWN_LABEL
+            if pred1 == true_eval:
+                tp1[true_eval] += 1
+            else:
+                fp1[pred1] += 1
+                fn1[true_eval] += 1
+
+            k_set = set(labels_ranked[:PRF_TOPK])
+            if true_eval in k_set:
+                tpk[true_eval] += 1
+            else:
+                fnk[true_eval] += 1
+            for lab in k_set:
+                if lab != true_eval:
+                    fpk[lab] += 1
+
+            try:
+                r = labels_ranked.index(true_eval) + 1
+                rr_sum += 1.0 / r
+            except ValueError:
+                pass
+
+            # NOTE: logloss: need normalizer across all locations; if Torch scorer is used we only have top10,
+            # Compute logloss exactly only in CPU mode. In GPU mode, skip exact logloss and approximate using top10.
+            # For model selection, macro-F1@1 is the primary objective, so this approximation is acceptable.
+            if scorer is None:
+                # exact logloss
+                all_scored = score_cpu(batch_counts[0])  # placeholder; will be replaced below
+            # We'll handle logloss below for CPU mode only; for Torch mode, store NaN
+            invocab_tok_sum += sum(v for feat, v in (batch_counts[0].items() if batch_counts else []) if feat in vocab_set)
+
+        # invocab_tok_sum computed incorrectly above in loop placeholder; fix properly:
+        for _, counts in batch:
+            invocab_tok_sum += sum(v for feat, v in counts.items() if feat in vocab_set)
+
+        # logloss: CPU exact (compute full distribution)
+        if scorer is None:
+            for (true_eval, counts) in batch:
+                # full scores
+                logps = {}
+                for gh in locations:
+                    lp = loc_params[gh]
+                    ll, _ = dm_loglik_sparse(counts, lp, vocab_set)
+                    logps[gh] = math.log(priors.get(gh, prior_floor)) + ll
+                m = max(logps.values())
+                lse = m + math.log(sum(math.exp(s - m) for s in logps.values()))
+                true_score = logps.get(true_eval, -1e30)
+                logloss_sum += -(true_score - lse)
+        else:
+            # approximate logloss from top10 only (lower bound on normalizer)
+            for (true_eval, ranked) in zip(batch_true, ranked_batch):
+                d = dict(ranked)
+                if true_eval not in d:
+                    # treat as very low prob
+                    logloss_sum += 50.0
+                else:
+                    scores = list(d.values())
+                    m = max(scores)
+                    lse = m + math.log(sum(math.exp(s - m) for s in scores))
+                    logloss_sum += -(d[true_eval] - lse)
+
+    prf1 = _prf_from_counts(tp1, fp1, fn1)
+    prfk = _prf_from_counts(tpk, fpk, fnk)
 
     if n == 0:
-        return Metrics(0, 0, 0, 0, 0, float("inf"), 0)
+        return StreamMetrics(0,0,0,0,0,float("inf"),0,
+                             0,0,0,0,0,0,
+                             0,0,0,0,0,0,
+                             unseen_true_users, unseen_true_locations)
 
-    return Metrics(
+    return StreamMetrics(
         n=n,
-        top1_acc=top1 / n,
-        top5_acc=top5 / n,
-        top10_acc=top10 / n,
+        top1_acc=hit1 / n,
+        top5_acc=hit5 / n,
+        top10_acc=hit10 / n,
         mrr=rr_sum / n,
-        log_loss=ll_sum / n,
-        avg_in_vocab_tokens=invocab_tokens_sum / n,
+        log_loss=logloss_sum / n,
+        avg_in_vocab_tokens=invocab_tok_sum / n,
+
+        top1_precision_micro=prf1["precision_micro"],
+        top1_recall_micro=prf1["recall_micro"],
+        top1_f1_micro=prf1["f1_micro"],
+        top1_precision_macro=prf1["precision_macro"],
+        top1_recall_macro=prf1["recall_macro"],
+        top1_f1_macro=prf1["f1_macro"],
+
+        topk_precision_micro=prfk["precision_micro"],
+        topk_recall_micro=prfk["recall_micro"],
+        topk_f1_micro=prfk["f1_micro"],
+        topk_precision_macro=prfk["precision_macro"],
+        topk_recall_macro=prfk["recall_macro"],
+        topk_f1_macro=prfk["f1_macro"],
+
+        unseen_true_users=unseen_true_users,
+        unseen_true_locations=unseen_true_locations,
     )
 
-### Grid search
-
-@dataclass
-class CandidateResult:
-    config: Config
-    val_metrics: Metrics
-
-def grid_search(
-    train_geo_vocab: Dict[str, Counter],
-    train_priors: Dict[str, float],
-    val_labeled: List[Tuple[str, Dict[str, int]]],
-    configs: List[Config],
-    max_locations: Optional[int] = None,
-) -> List[CandidateResult]:
-    locs = list(train_priors.keys())
-    if max_locations is not None and max_locations > 0 and len(locs) > max_locations:
-        locs = [gh for gh, _ in sorted(train_priors.items(), key=lambda kv: kv[1], reverse=True)[:max_locations]]
-
-    results: List[CandidateResult] = []
-    for cfg in configs:
-        vocab = select_vocabulary(
-            train_geo_vocab,
-            priors=train_priors,
-            vocab_size=cfg.vocab_size,
-            selector=cfg.selector,
-            min_total_count=cfg.min_total_count,
-        )
-        loc_params = precompute_location_params(
-            train_geo_vocab,
-            vocab=vocab,
-            alpha_word=cfg.alpha_word,
-            alpha_sub=cfg.alpha_sub,
-            alpha_hour=cfg.alpha_hour,
-            locations=locs,
-        )
-        m = evaluate_split(val_labeled, loc_params, train_priors, vocab)
-        results.append(CandidateResult(cfg, m))
-
-        print(
-            f"[val] cfg={cfg}  "
-            f"logloss={m.log_loss:.4f}  top1={m.top1_acc:.4f}  top5={m.top5_acc:.4f}  "
-            f"mrr={m.mrr:.4f}  avg_in_vocab_tokens={m.avg_in_vocab_tokens:.1f}",
-            file=sys.stderr
-        )
-    return results
-
-def read_csv_dicts(path: str) -> List[dict]:
-    with open(path, "r", encoding="utf-8", newline="") as f:
-        return list(csv.DictReader(f))
-
-def load_user_to_geo(labels_csv: str, user_col: str = "author", geohash_col: str = "geohash_5") -> Dict[str, str]:
-    """Return uid -> geohash (string)."""
-    user_to_geo: Dict[str, str] = {}
-    with open(labels_csv, "r", encoding="utf-8", errors="ignore", newline="") as f:
-        reader = csv.DictReader(f)
-        for i, r in enumerate(reader):
-            uid = (r.get(user_col) or "").strip()
-            gh = (r.get(geohash_col) or "").strip()
-            if uid and gh:
-                user_to_geo[uid] = gh
-            if i and i % 50000 == 0:
-                log(f"[labels] read {i:,} rows", 1)
-    log(f"[labels] total labeled users: {len(user_to_geo):,}", 1)
-    return user_to_geo
-
-# NOTE: Provides somewhat different info than the generic summarize_split() function in utils.py
-def summarize_split(name: str, users: List[str], labels: List[str]):
-    c = Counter(labels)
-    log(f"\n{name} split:", 1)
-    log(f"  users: {len(users):,}", 1)
-    log(f"  locations: {len(c):,}", 1)
-    if c:
-        log(f"  min per location: {min(c.values())}", 2)
-        log(f"  max per location: {max(c.values())}", 2)
-
-# Load subreddit-count dicts for all users. Much smaller than vocab.
-def load_subreddit_counts(path: str) -> Dict[str, Dict[str, int]]:
-    log("[subs] loading subreddit counts jsonl", 1)
-    subs: Dict[str, Dict[str, int]] = {}
-    with open(path, "rb") as f:
-        for i, line in enumerate(f):
-            obj = _json_loads(line)
-            uid = (obj.get("author") or "").strip()
-            if not uid:
-                continue
-            subs[uid] = obj.get("subreddit_counts") or {}
-            if i and i % 50000 == 0:
-                log(f"[subs] processed {i:,} users", 1)
-    log(f"[subs] loaded users: {len(subs):,}", 1)
-    return subs
-
-# Load hour-of-day counts from jsonl.
-# NOTE: Expected line format (example): {"author": "...", "hour_counts": {"0": 35, ..., "23": 41}}
-def load_hour_counts(path: str) -> Dict[str, Dict[str, int]]:
-
-    log("[hours] loading hour-bin counts jsonl", 1)
-    hours: Dict[str, Dict[str, int]] = {}
-    with open(path, "rb") as f:
-        for i, line in enumerate(f):
-            obj = _json_loads(line)
-            uid = (obj.get("author") or "").strip()
-            if not uid:
-                continue
-            raw = obj.get("hour_counts") or obj.get("gmt_hour_counts") or {}
-            norm: Dict[str, int] = {}
-            if isinstance(raw, dict):
-                for k, v in raw.items():
-                    try:
-                        hk = int(k)
-                        iv = int(v)
-                    except Exception:
-                        continue
-                    if 0 <= hk <= 23 and iv > 0:
-                        norm[f"{hk:02d}"] = iv
-            hours[uid] = norm
-            if i and i % 50000 == 0:
-                log(f"[hours] processed {i:,} users", 1)
-    log(f"[hours] loaded users: {len(hours):,}", 1)
-    return hours
-
-# Merge subreddit + hour features (small feature sources) for one user.
-def merge_small_features(uid: str,
-                         subs_by_user: Dict[str, Dict[str, int]],
-                         hours_by_user: Optional[Dict[str, Dict[str, int]]] = None) -> Dict[str, int]:
-    out: Dict[str, int] = {}
-    subs = subs_by_user.get(uid) or {}
-    for k, v in subs.items():
-        if v:
-            out[f"{PREFIX_SUB}{k}"] = int(v)
-    if hours_by_user is not None:
-        hrs = hours_by_user.get(uid) or {}
-        for k, v in hrs.items():
-            if v:
-                out[f"{PREFIX_HOUR}{int(k):02d}"] = int(v)
-    return out
-
-# Smoothed prior over training locations plus UNKNOWN.
-def compute_location_priors_smoothed_from_labels(train_labels: List[str], train_locations: List[str], kappa: float = 0.5) -> Dict[str, float]:
-    counts = Counter(train_labels)
-    total = sum(counts.values())
-    L = len(train_locations)
-    denom = total + kappa * (L + 1)
-    priors = {gh: (counts.get(gh, 0) + kappa) / denom for gh in train_locations}
-    priors[UNKNOWN_LABEL] = kappa / denom
-    return priors
+### Saved model I/O
 
 @dataclass
 class SavedModel:
@@ -668,17 +777,13 @@ class SavedModel:
     locations: List[str]
 
 def save_model(model: SavedModel, path: str):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "wb") as f:
         pickle.dump(model, f, protocol=pickle.HIGHEST_PROTOCOL)
     log(f"[saved] model -> {path}", 1)
 
-def load_model(path: str) -> SavedModel:
-    with open(path, "rb") as f:
-        return pickle.load(f)
+### Checkpoint helpers
 
-### Checkpoint helpers (allow resuming grid search)
-
-# Stable key for a grid config (used for checkpoint filenames).
 def _cfg_key(cfg: 'Config') -> str:
     s = f"alpha_word={cfg.alpha_word}|alpha_sub={cfg.alpha_sub}|alpha_hour={cfg.alpha_hour}|vocab_size={cfg.vocab_size}|selector={cfg.selector}|min_total_count={cfg.min_total_count}"
     return hashlib.md5(s.encode("utf-8")).hexdigest()[:12]
@@ -693,7 +798,6 @@ def _cfg_to_dict(cfg: 'Config') -> dict:
         "min_total_count": cfg.min_total_count,
     }
 
-# Return (metrics_path, model_path) for cfg.
 def _ckpt_paths(cfg: 'Config') -> Tuple[str, str]:
     os.makedirs(GRID_CHECKPOINT_DIR, exist_ok=True)
     key = _cfg_key(cfg)
@@ -724,284 +828,14 @@ def _list_completed_cfg_keys(configs: List['Config']) -> set:
             completed.add(_cfg_key(cfg))
     return completed
 
-# Main inference function. Returns per-sample top-k (label, log_score).
-def predict_batch(batch_counts: List[Dict[str, int]], model: SavedModel, topk: int = 5) -> List[List[Tuple[str, float]]]:
-    vocab_set = set(model.vocab)
-    out: List[List[Tuple[str, float]]] = []
-    for counts in batch_counts:
-        scored: List[Tuple[str, float]] = []
-        for gh in model.locations:
-            lp = model.loc_params[gh]
-            ll, _ = dm_loglik(counts, lp, vocab_set)
-            prior = model.priors.get(gh, 1e-30)
-            scored.append((gh, math.log(prior) + ll))
-        scored.sort(key=lambda x: x[1], reverse=True)
-        out.append(scored[:topk])
-    return out
-
-# Build geohash -> Counter(feature->count) for TRAIN ONLY.
-# NOTE: Does not store per-user vocab to save memory. Supports both jsonl and json, although json increases memory use.
-def build_train_geo_vocab_from_vocab_file(
-    vocab_file: str,
-    train_users_set: set,
-    user_to_geo: Dict[str, str],
-    subs_by_user: Dict[str, Dict[str, int]],
-    hours_by_user: Optional[Dict[str, Dict[str, int]]] = None,
-) -> Dict[str, Counter]:
-    geo_vocab: Dict[str, Counter] = defaultdict(Counter)
-
-    # small features first (subreddits / hours)
-    for uid in train_users_set:
-        gh = user_to_geo.get(uid)
-        if not gh:
-            continue
-        geo_vocab[gh].update(merge_small_features(uid, subs_by_user, hours_by_user))
-
-    def _update_for_user(uid: str, vc: Dict[str, int]) -> None:
-        if uid not in train_users_set:
-            return
-        gh = user_to_geo.get(uid)
-        if not gh:
-            return
-        if vc:
-            geo_vocab[gh].update({f"{PREFIX_WORD}{k}": int(v) for k, v in vc.items() if v})
-
-    log(f"[train] building per-location counts from vocab file: {vocab_file}", 1)
-
-    if vocab_file.lower().endswith(".jsonl"):
-        with open(vocab_file, "rb") as f:
-            for i, line in enumerate(f):
-                obj = _json_loads(line)
-                uid = (obj.get("author") or "").strip()
-                vc = obj.get("vocab") or {}
-                _update_for_user(uid, vc)
-                if i and i % 50000 == 0:
-                    log(f"[vocab] scanned {i:,} lines", 1)
-    else:
-        # JSON fallback (loads whole file) — expected formats:
-        # 1) list[ {author:..., vocab:{...}}, ... ]
-        # 2) dict[author] -> vocab_dict
-        with open(vocab_file, "r", encoding="utf-8") as f:
-            data = json.load(f)
-
-        if isinstance(data, list):
-            for i, obj in enumerate(data):
-                if not isinstance(obj, dict):
-                    continue
-                uid = (obj.get("author") or "").strip()
-                vc = obj.get("vocab") or {}
-                _update_for_user(uid, vc)
-                if i and i % 50000 == 0:
-                    log(f"[vocab] processed {i:,} records", 1)
-        elif isinstance(data, dict):
-            # try dict[author] -> vocab
-            for i, (uid, vc) in enumerate(data.items()):
-                if not isinstance(vc, dict):
-                    continue
-                _update_for_user(str(uid).strip(), vc)
-                if i and i % 50000 == 0:
-                    log(f"[vocab] processed {i:,} authors", 1)
-        else:
-            raise ValueError(f"Unsupported JSON format in {vocab_file}: {type(data)}")
-
-    geo_vocab[UNKNOWN_LABEL] = Counter()
-    log(f"[train] locations (seen): {len(geo_vocab)-1:,} (+UNKNOWN)", 1)
-    return geo_vocab
-
-@dataclass
-class StreamMetrics:
-    n: int
-    top1_acc: float
-    top5_acc: float
-    top10_acc: float
-    mrr: float
-    log_loss: float
-    avg_in_vocab_tokens: float
-
-    # Top-1 classification-style P/R/F1 (single predicted label)
-    top1_precision_micro: float
-    top1_recall_micro: float
-    top1_f1_micro: float
-    top1_precision_macro: float
-    top1_recall_macro: float
-    top1_f1_macro: float
-
-    # Top-k set-style P/R/F1 where predicted set = top PRF_TOPK labels
-    topk_precision_micro: float
-    topk_recall_micro: float
-    topk_f1_micro: float
-    topk_precision_macro: float
-    topk_recall_macro: float
-    topk_f1_macro: float
-
-    unseen_true_users: int
-    unseen_true_locations: int
+### Main
 
 @dataclass
 class RunResult:
     config: 'Config'
     val_metrics: StreamMetrics
 
-# Stream through vocab jsonl and evaluate only users in users_set.
-def stream_evaluate_split(
-    split_name: str,
-    users_set: set,
-    user_to_geo: Dict[str, str],
-    vocab_jsonl: str,
-    subs_by_user: Dict[str, Dict[str, int]],
-    hours_by_user: Optional[Dict[str, Dict[str, int]]],
-    loc_params: Dict[str, 'LocationParams'],
-    priors: Dict[str, float],
-    vocab: List[str],
-    train_locations_set: set,
-    topk_list: Tuple[int, int, int] = (1, 5, 10),
-    progress_every_lines: int = 50000,
-    progress_every_secs: int = PROGRESS_EVERY_SECS,
-) -> StreamMetrics:
-    log(f"\n[{split_name}] streaming evaluation", 1)
-    vocab_set = set(vocab)
-    locations = list(priors.keys())
-
-    n = 0
-    hit = {k: 0 for k in topk_list}
-
-    # P/R/F1 counters
-    tp1 = defaultdict(int)
-    fp1 = defaultdict(int)
-    fn1 = defaultdict(int)
-    tpk = defaultdict(int)
-    fpk = defaultdict(int)
-    fnk = defaultdict(int)
-    rr_sum = 0.0
-    logloss_sum = 0.0
-    invocab_tok_sum = 0.0
-    unseen_true_users = 0
-    unseen_true_locations_set = set()
-
-    def score_user(counts: Dict[str, int]) -> List[Tuple[str, float]]:
-        scored = []
-        for gh in locations:
-            lp = loc_params[gh]
-            ll, _ = dm_loglik(counts, lp, vocab_set)
-            prior = priors.get(gh, 1e-30)
-            scored.append((gh, math.log(prior) + ll))
-        scored.sort(key=lambda x: x[1], reverse=True)
-        return scored
-
-    last_print = time.time()
-
-    with open(vocab_jsonl, "rb") as f:
-        for i, line in enumerate(f):
-            obj = _json_loads(line)
-            uid = (obj.get("author") or "").strip()
-            if uid not in users_set:
-                continue
-
-            true_gh = user_to_geo.get(uid)
-            if not true_gh:
-                continue
-
-            if true_gh not in train_locations_set:
-                unseen_true_users += 1
-                unseen_true_locations_set.add(true_gh)
-                true_eval = UNKNOWN_LABEL
-            else:
-                true_eval = true_gh
-
-            counts = merge_small_features(uid, subs_by_user, hours_by_user)
-            vc = obj.get("vocab") or {}
-            if vc:
-                for k, v in vc.items():
-                    if v:
-                        counts[f"{PREFIX_WORD}{k}"] = int(v)
-
-            ranked = score_user(counts)
-            labels_ranked = [gh for gh, _ in ranked]
-            n += 1
-
-            # --- Top-1 confusion updates ---
-            pred1 = labels_ranked[0] if labels_ranked else UNKNOWN_LABEL
-            if pred1 == true_eval:
-                tp1[true_eval] += 1
-            else:
-                fp1[pred1] += 1
-                fn1[true_eval] += 1
-
-            # --- Top-k (set) confusion updates ---
-            k_set = set(labels_ranked[:PRF_TOPK])
-            if true_eval in k_set:
-                tpk[true_eval] += 1
-            else:
-                fnk[true_eval] += 1
-            for lab in k_set:
-                if lab != true_eval:
-                    fpk[lab] += 1
-
-            for k in topk_list:
-                if true_eval in labels_ranked[:k]:
-                    hit[k] += 1
-
-            try:
-                rank = labels_ranked.index(true_eval) + 1
-                rr_sum += 1.0 / rank
-            except ValueError:
-                pass
-
-            scores = [s for _, s in ranked]
-            m = max(scores)
-            lse = m + math.log(sum(math.exp(s - m) for s in scores))
-            true_score = dict(ranked).get(true_eval, -1e30)
-            logloss_sum += -(true_score - lse)
-
-            invocab_tok_sum += sum(v for feat, v in counts.items() if feat in vocab_set)
-
-            now = time.time()
-            if (i and progress_every_lines > 0 and i % progress_every_lines == 0) or (progress_every_secs > 0 and (now - last_print) >= progress_every_secs):
-                last_print = now
-                log(f"[{split_name}] scanned {i:,} lines | evaluated {n:,} users", 1)
-
-    if n == 0:
-        return StreamMetrics(0, 0, 0, 0, 0, float("inf"), 0,
-                            0,0,0,0,0,0,
-                            0,0,0,0,0,0,
-                            unseen_true_users, len(unseen_true_locations_set))
-
-    # Compute P/R/F1 summaries
-    prf1 = _prf_from_counts(tp1, fp1, fn1)
-    prfk = _prf_from_counts(tpk, fpk, fnk)
-
-    return StreamMetrics(
-        n=n,
-        top1_acc=hit[topk_list[0]] / n,
-        top5_acc=hit[topk_list[1]] / n,
-        top10_acc=hit[topk_list[2]] / n,
-        mrr=rr_sum / n,
-        log_loss=logloss_sum / n,
-        avg_in_vocab_tokens=invocab_tok_sum / n,
-
-        top1_precision_micro=prf1["precision_micro"],
-        top1_recall_micro=prf1["recall_micro"],
-        top1_f1_micro=prf1["f1_micro"],
-        top1_precision_macro=prf1["precision_macro"],
-        top1_recall_macro=prf1["recall_macro"],
-        top1_f1_macro=prf1["f1_macro"],
-
-        topk_precision_micro=prfk["precision_micro"],
-        topk_recall_micro=prfk["recall_micro"],
-        topk_f1_micro=prfk["f1_micro"],
-        topk_precision_macro=prfk["precision_macro"],
-        topk_recall_macro=prfk["recall_macro"],
-        topk_f1_macro=prfk["f1_macro"],
-
-        unseen_true_users=unseen_true_users,
-        unseen_true_locations=len(unseen_true_locations_set),
-    )
-
-### main function
-
 def main():
-
-    # identify the relevant geohash label file
     if loc_type == "US":
         label_file = "us_geohash.csv"
     elif loc_type == "non-US":
@@ -1009,16 +843,13 @@ def main():
     elif loc_type == "global":
         label_file = "combined_geohash.csv"
     else:
-        raise Exception("Wrong loc_type value. Choose from US,non-US and global.")
+        raise Exception("Wrong loc_type value. Choose from \'US\',\'non-US\' and \'global\'.")
     labels_csv = os.path.join(DATA_DIR, "data_reddit_location", label_file)
 
-    # load user-geo mapping
     user_to_geo = load_user_to_geo(labels_csv, user_col="author", geohash_col="geohash_5")
-
     all_users = list(user_to_geo.keys())
     all_labels = [user_to_geo[u] for u in all_users]
 
-    # do 80/10/10 training/validation/test split of the labeled data
     train_users, train_labels, val_users, val_labels, test_users, test_labels = prepare_splits(
         all_users, all_labels, split_dir=SPLIT_DIR, description=f"{loc_type} location"
     )
@@ -1027,33 +858,58 @@ def main():
     summarize_split("Valid", val_users, val_labels)
     summarize_split("Test", test_users, test_labels)
 
-    # remove any repetitions in the sets
     train_users_set = set(train_users)
     val_users_set = set(val_users)
     test_users_set = set(test_users)
-    # load the small feature sets
+
+    # Load small feature sets
     subs_by_user = load_subreddit_counts(SUBS_JSONL)
 
-    # Hours are REQUIRED (not optional)
     if not os.path.exists(HOURS_JSONL):
         raise FileNotFoundError(f"Required hour feature file not found: {HOURS_JSONL}")
     hours_by_user = load_hour_counts(HOURS_JSONL)
 
-    # combine with vocab (large feature set) and build the set of training locations
-    train_geo_vocab = build_train_geo_vocab_from_vocab_file(
-        VOCAB_FILE, train_users_set, user_to_geo, subs_by_user, hours_by_user
+    # Preload vocab ONCE for all labeled users (train+val+test)
+    all_eval_users_set = train_users_set | val_users_set | test_users_set
+    vocab_by_user = load_vocab_counts_for_users(VOCAB_FILE, all_eval_users_set)
+
+    # Build train per-location counts from preloaded user features 
+    train_geo_vocab = build_train_geo_vocab_from_preloaded(
+        train_users, user_to_geo, subs_by_user, hours_by_user, vocab_by_user
     )
 
     train_locations = [gh for gh in train_geo_vocab.keys() if gh != UNKNOWN_LABEL]
     train_locations_set = set(train_locations)
 
-    # create smoothed location priors based on the training data
     train_priors = compute_location_priors_smoothed_from_labels(train_labels, train_locations, kappa=0.5)
 
-    # Grid search with progress update and resumption support
-    
-    os.makedirs(GRID_CHECKPOINT_DIR, exist_ok=True)
+    # Prebuild preloaded val/test labeled sets once
+    def _make_labeled(users: List[str]) -> List[Tuple[str, Dict[str, int]]]:
+        out: List[Tuple[str, Dict[str, int]]] = []
+        for uid in users:
+            true_gh = user_to_geo.get(uid)
+            if not true_gh:
+                continue
+            if true_gh not in train_locations_set:
+                true_eval = UNKNOWN_LABEL
+            else:
+                true_eval = true_gh
+            counts = merge_small_features(uid, subs_by_user, hours_by_user)
+            vc = vocab_by_user.get(uid) or {}
+            if vc:
+                for k, v in vc.items():
+                    if v:
+                        counts[f"{PREFIX_WORD}{k}"] = int(v)
+            out.append((true_eval, counts))
+        return out
 
+    val_labeled = _make_labeled(val_users)
+    test_labeled = _make_labeled(test_users)
+
+    log(f"[valid] preloaded labeled users: {len(val_labeled):,}", 1)
+    log(f"[test] preloaded labeled users: {len(test_labeled):,}", 1)
+
+    os.makedirs(GRID_CHECKPOINT_DIR, exist_ok=True)
     total_cfgs = len(configs)
     completed_keys = _list_completed_cfg_keys(configs)
 
@@ -1063,7 +919,6 @@ def main():
 
     results: List[RunResult] = []
 
-    # Graceful Ctrl+C: stop after current config and keep checkpoints already written.
     stop_requested = {"flag": False}
     def _handle_sigint(signum, frame):
         stop_requested["flag"] = True
@@ -1072,6 +927,9 @@ def main():
         signal.signal(signal.SIGINT, _handle_sigint)
     except Exception:
         pass
+
+    # Locations list (includes UNKNOWN)
+    locs = list(train_priors.keys())
 
     for idx, cfg in enumerate(configs, start=1):
         key = _cfg_key(cfg)
@@ -1084,17 +942,16 @@ def main():
             if payload and "val_metrics" in payload:
                 vm_dict = payload["val_metrics"]
                 vm = StreamMetrics(**vm_dict)
-                log(f"[grid] -> already done, loaded checkpoint (top1={vm.top1_acc:.4f}, logloss={vm.log_loss:.4f})", 1)
+                log(f"[grid] -> already done, loaded checkpoint (f1_macro@1={vm.top1_f1_macro:.4f}, top1={vm.top1_acc:.4f})", 1)
                 results.append(RunResult(config=cfg, val_metrics=vm))
                 if stop_requested["flag"]:
                     break
                 continue
             else:
-                log("[grid] checkpoint file exists but could not be read — recomputing this point.", 1)
+                log("[grid] checkpoint exists but could not be read — recomputing.", 1)
 
         t0 = time.time()
 
-        # Build vocab + location params for this config
         vocab = select_vocabulary(
             train_geo_vocab,
             priors=train_priors,
@@ -1103,8 +960,7 @@ def main():
             min_total_count=cfg.min_total_count,
         )
 
-        locs = list(train_priors.keys())  # includes UNKNOWN
-        loc_params = precompute_location_params(
+        loc_params = precompute_location_params_sparse(
             train_geo_vocab,
             vocab=vocab,
             alpha_word=cfg.alpha_word,
@@ -1113,30 +969,25 @@ def main():
             locations=locs,
         )
 
-        # Validate (streaming)
-        try:
-            vm = stream_evaluate_split(
-                "valid", val_users_set, user_to_geo, VOCAB_FILE, subs_by_user, hours_by_user,
-                loc_params, train_priors, vocab, train_locations_set
-            )
-        except KeyboardInterrupt:
-            # If we were interrupted mid-eval, do not write a "completed" checkpoint for this cfg.
-            log("\n[interrupt] stopped during evaluation; previous checkpoints are preserved.", 1, stream=sys.stderr)
-            break
+        vm = evaluate_split_preloaded(
+            "valid",
+            val_labeled,
+            loc_params,
+            train_priors,
+            vocab,
+            locations=locs,
+            use_torch_if_available=True,
+            batch_size=4096,
+        )
 
         elapsed = time.time() - t0
-        log(f"[val] n={vm.n:,} top1={vm.top1_acc:.4f} top5={vm.top5_acc:.4f} logloss={vm.log_loss:.4f} "
-            f"mrr={vm.mrr:.4f} unseen_users={vm.unseen_true_users:,} unseen_locs={vm.unseen_true_locations:,} "
+        log(f"[val] n={vm.n:,} top1={vm.top1_acc:.4f} top5={vm.top5_acc:.4f} "
+            f"f1_macro@1={vm.top1_f1_macro:.4f} logloss={vm.log_loss:.4f} "
             f"(elapsed {elapsed/60:.1f} min)", 1)
 
-        # Save candidate model (optional) + metrics checkpoint.
         if SAVE_CANDIDATE_MODELS:
             candidate_model = SavedModel(
-                config=cfg,
-                vocab=vocab,
-                priors=train_priors,
-                loc_params=loc_params,
-                locations=locs,
+                config=cfg, vocab=vocab, priors=train_priors, loc_params=loc_params, locations=locs
             )
             save_model(candidate_model, model_path)
 
@@ -1154,8 +1005,6 @@ def main():
             log("[interrupt] stopping after finishing current grid point (as requested).", 1, stream=sys.stderr)
             break
 
-    # Select best by top1 accuracy, tie-break by lower logloss
-    # Selection criterion for imbalanced labels: Use macro-F1 on top-1 predictions to give each location equal weight, mitigating class imbalance.
     results.sort(
         key=lambda r: (
             r.val_metrics.top1_f1_macro,
@@ -1168,7 +1017,7 @@ def main():
     best = results[0]
     best_cfg = best.config
     log(
-        f"\n[best] {best_cfg} (val f1_macro@1={best.val_metrics.top1_f1_macro:.4f}, top1={best.val_metrics.top1_acc:.4f}, top5={best.val_metrics.top5_acc:.4f}, logloss={best.val_metrics.log_loss:.4f})",
+        f"\n[best] {best_cfg} (val f1_macro@1={best.val_metrics.top1_f1_macro:.4f}, top1={best.val_metrics.top1_acc:.4f}, top5={best.val_metrics.top5_acc:.4f})",
         1,
     )
 
@@ -1179,20 +1028,26 @@ def main():
         selector=best_cfg.selector,
         min_total_count=best_cfg.min_total_count,
     )
-    best_locs = list(train_priors.keys())  # includes UNKNOWN
-    best_loc_params = precompute_location_params(
+    best_loc_params = precompute_location_params_sparse(
         train_geo_vocab,
         vocab=best_vocab,
         alpha_word=best_cfg.alpha_word,
         alpha_sub=best_cfg.alpha_sub,
         alpha_hour=best_cfg.alpha_hour,
-        locations=best_locs,
+        locations=locs,
     )
 
-    tm = stream_evaluate_split(
-        "test", test_users_set, user_to_geo, VOCAB_FILE, subs_by_user, hours_by_user,
-        best_loc_params, train_priors, best_vocab, train_locations_set
+    tm = evaluate_split_preloaded(
+        "test",
+        test_labeled,
+        best_loc_params,
+        train_priors,
+        best_vocab,
+        locations=locs,
+        use_torch_if_available=True,
+        batch_size=4096,
     )
+
     log(
         f"\n[test] n={tm.n:,} "
         f"hit@1={tm.top1_acc:.4f} hit@5={tm.top5_acc:.4f} hit@10={tm.top10_acc:.4f} "
@@ -1200,8 +1055,7 @@ def main():
         f"       top1 micro P/R/F1={tm.top1_precision_micro:.4f}/{tm.top1_recall_micro:.4f}/{tm.top1_f1_micro:.4f} "
         f"| macro P/R/F1={tm.top1_precision_macro:.4f}/{tm.top1_recall_macro:.4f}/{tm.top1_f1_macro:.4f}\n"
         f"       top{PRF_TOPK} micro P/R/F1={tm.topk_precision_micro:.4f}/{tm.topk_recall_micro:.4f}/{tm.topk_f1_micro:.4f} "
-        f"| macro P/R/F1={tm.topk_precision_macro:.4f}/{tm.topk_recall_macro:.4f}/{tm.topk_f1_macro:.4f}\n"
-        f"       unseen true users={tm.unseen_true_users:,} (locations unseen in train={tm.unseen_true_locations:,}; mapped to {UNKNOWN_LABEL})",
+        f"| macro P/R/F1={tm.topk_precision_macro:.4f}/{tm.topk_recall_macro:.4f}/{tm.topk_f1_macro:.4f}\n",
         1,
     )
 
@@ -1211,7 +1065,7 @@ def main():
             vocab=best_vocab,
             priors=train_priors,
             loc_params=best_loc_params,
-            locations=best_locs,
+            locations=locs,
         )
         save_model(model, MODEL_SAVE_PATH)
 

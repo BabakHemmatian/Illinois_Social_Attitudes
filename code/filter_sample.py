@@ -15,29 +15,46 @@ args = get_args()
 years = parse_range(args.years)
 type_ = args.type
 group = args.group
+sample_size = getattr(args, "sample", 200)
+target = args.target
 
 # Increase the field size limit to handle larger fields
 csv.field_size_limit(2**31 - 1)
 
 ### sampling hyper-parameters
 num_annot = 2
-sample_size = 1500
 
 # Survey the language-filtered input files and raise an error if an expected file is missing
-language_filtered_path = os.path.join(
+sample_path = os.path.join(
     dir_path.replace("code", "data"),
-    "data_reddit_curated", group, type_, "filtered_language"
+    "data_reddit_curated", group, type_, '{}ed_{}'.format(target.split('_')[0],target.split('_')[1])
 )
 
 # Organize files by year
-files_by_year = {}
+files_by_year = {year: [] for year in years}
+if type_ == "comments":
+    prefix = "RC"
+elif type_ == "submissions":
+    prefix = "RS"
+else:
+    raise Exception("Wrong data type specified. Choose from comments and submissions.")
 for year in years:
-    for month in range(1,13):
-        path_ = language_filtered_path+"\\RC_{}-{:02d}.csv".format(year,month)
+    for month in range(1, 13):
+        path_ = os.path.join(sample_path, f"{prefix}_{year}-{month:02d}.csv")
         if os.path.exists(path_):
             files_by_year[year].append(path_)
         else:
-            raise Exception("Missing language-filtered file for year {}, month {}".format(year, month))
+            raise Exception(
+                f"Missing {prefix} file for year {year}, month {month}. Expected path: {path_}"
+            )
+
+output_dir = os.path.join(
+    dir_path.replace("code", "data"),
+    "samples",
+    group,
+    type_
+)
+os.makedirs(output_dir, exist_ok=True)
 
 # -------------------- Report logging function --------------------
 # Report file path (placed in the project directory)
@@ -240,10 +257,12 @@ def filter_sample_write(all_samples):
     # ========================================
     # After processing all years, write output
     # ========================================
+    years_tag = args.years.replace("-", "_to_")
+    run_tag = f"{target}_n{sample_size}_{years_tag}"
+
     for annot in range(num_annot):
-        sample_file_path = os.path.join(dir_path, f"filter_sample_{type_}_{group}_{annot}.csv")
-        sample_key_file_path = os.path.join(dir_path, f"filter_sample_{type_}_{group}_{annot}_key.csv")
-        
+        sample_file_path = os.path.join(output_dir, f"filter_sample_{run_tag}_annot{annot}.csv")
+        sample_key_file_path = os.path.join(output_dir, f"filter_sample_{run_tag}_annot{annot}_key.csv")
         with open(sample_file_path, "w", encoding='utf-8', newline='') as sample_file, \
              open(sample_key_file_path, "w", encoding='utf-8', newline='') as sample_file_key:
             

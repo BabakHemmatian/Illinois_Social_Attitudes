@@ -4,6 +4,8 @@ import re
 import shlex
 from math import ceil
 from pathlib import Path
+import subprocess
+import sys
 
 from utils import groups, validate_years, array_span_from_years
 
@@ -275,7 +277,7 @@ if __name__ == "__main__":
         # Robust path to the resource script inside code/
         resource_script = CODE_DIR / f"{args.resource}.py"
         cmd_parts = [
-            "python",
+            sys.executable,
             str(resource_script),
             "-t", args.type,
             "-r", args.resource,
@@ -302,6 +304,8 @@ if __name__ == "__main__":
         if args.files_per_job:
             cmd_parts.extend(["--files-per-job", str(args.files_per_job)])
 
-        cmd = _shell_join(cmd_parts)
-        print(f"[cli] running: {cmd}")
-        os.system(cmd)
+        # Pretty log line only
+        print("[cli] running:", subprocess.list2cmdline([str(p) for p in cmd_parts]))
+
+        # Cross-platform execution without shell-quoting issues
+        subprocess.run(cmd_parts, check=True)

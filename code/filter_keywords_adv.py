@@ -1,6 +1,6 @@
 # Import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, log_report, log_error, load_terms, groups
+from utils import parse_range, log_report, log_error, load_terms, groups, check_reqd_files
 
 # Import Python packages
 import os, time
@@ -16,15 +16,20 @@ csv.field_size_limit(2**31 - 1)
 # Extract and transform CLI arguments
 args = get_args()
 years = parse_range(args.years)
-group = args.group  
+type_ = args.type
+group = args.group
+files_per_job = getattr(args, "files_per_job", 1)
+if files_per_job is None or files_per_job < 1:
+    files_per_job = 1
+array = args.array if args.array is not None else None
 
 # set path variables
 CODE_DIR = Path(__file__).resolve().parent
 PROJECT_ROOT = CODE_DIR.parent
 DATA_DIR = PROJECT_ROOT / "data"
 
-relevance_filtered_path = DATA_DIR / "data_reddit_curated" / group / "filtered_relevance"
-output_path = DATA_DIR / "data_reddit_curated" / group / "filtered_keywords_adv"
+relevance_filtered_path = DATA_DIR / "data_reddit_curated" / group / type_ / "filtered_relevance"
+output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "filtered_keywords_adv"
 output_path.mkdir(parents=True, exist_ok=True)
 
 # prepare the report file
@@ -36,6 +41,10 @@ keyword_path = os.path.join(dir_path.replace("code", "keywords"))
 marginalized_words = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][0]}_adv.txt"))
 privileged_words   = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][1]}_adv.txt"))
 all_words = marginalized_words + privileged_words
+
+# Build canonical ordered list of required monthly files.
+# This mirrors the Slurm-safe slicing pattern already used by later resources.
+file_list = check_reqd_files(years, relevance_filtered_path, type_)
 
 # CSV header index assumptions:
 MATCHES_COL_INDEX = 7
@@ -50,6 +59,7 @@ db = None                  # Hyperscan/Chimera database
 id2label = None            # pattern_id -> "Category: term"
 compiled_re_by_id = None   # only for fallback: pattern_id -> Python re.Pattern
 
+
 def _build_id2label(m_words, p_words, group_key):
     mapping = {}
     mid = len(m_words)
@@ -58,6 +68,7 @@ def _build_id2label(m_words, p_words, group_key):
     for j, term in enumerate(p_words, start=mid + 1):
         mapping[j] = f"{groups[group_key][1]}: {term}"
     return mapping
+
 
 # Compile either a Chimera DB (if available) or a Hyperscan prefilter DB plus
 # Python re confirmers for exact semantics.
@@ -97,29 +108,32 @@ def _compile_db(patterns):
     compiled_re_by_id = compiled
     return db_local
 
+
 # intialize the multiprocessing workers: load terms, build id2label, compile DB (Chimera or HS prefilter).
 def _worker_init(group_key, keyword_path):
-
     global db, id2label, marginalized_words, privileged_words, all_words
 
     mfile = os.path.join(keyword_path, f"{group_key}_{groups[group_key][0]}_adv.txt")
     pfile = os.path.join(keyword_path, f"{group_key}_{groups[group_key][1]}_adv.txt")
 
     marginalized_words = load_terms(mfile)
-    privileged_words   = load_terms(pfile)
+    privileged_words = load_terms(pfile)
     all_words = marginalized_words + privileged_words
 
     id2label = _build_id2label(marginalized_words, privileged_words, group_key)
     db = _compile_db(all_words)
 
     # tiny warm-up
-    def _noop_cb(*args, **kwargs): return 0
+    def _noop_cb(*args, **kwargs):
+        return 0
+
     db.scan(b"warmup", _noop_cb, context=[])
 
-# Read a CSV file from input path, scan BODY_COL_INDEX with multi-regex, write matched rows to output_path with a filled 'matches' column.
-def filter_keyword_adv_file(file_name: str):
-    input_path = relevance_filtered_path / file_name
-    out_stem = Path(file_name).with_suffix('').name
+
+# Read a CSV file from input path, scan BODY_COL_INDEX with multi-regex, write matched rows to output_path.
+def filter_keyword_adv_file(file_name):
+    input_path = Path(file_name)
+    out_stem = input_path.with_suffix("").name
     output_csv_file = output_path / f"{out_stem}.csv"
 
     total_lines = 0
@@ -176,40 +190,45 @@ def filter_keyword_adv_file(file_name: str):
                         writer.writerow(row)
 
                 except Exception as e:
-                    log_error("filter_keyword_adv_file", file_name, total_lines, row, e)
+                    log_error("filter_keyword_adv_file", str(input_path), total_lines, row, e)
 
             if not header_written:
                 # if input was empty, still emit the expected header
-                writer.writerow(["id","parent_id","body","author","created_utc","subreddit","score","matches"])
+                writer.writerow(["id", "parent_id", "body", "author", "created_utc", "subreddit", "score", "matches"])
 
     except Exception as e:
-        log_report(report_file_path, f"Error filtering by advanced keywords in file {Path(file_name).name}: {e}")
+        log_report(report_file_path, f"Error filtering by advanced keywords in file {input_path.name}: {e}")
 
     elapsed_time = (time.time() - start_time) / 60
     log_report(
         report_file_path,
-        f"[{ENGINE}] Filtered {Path(file_name).name} in {elapsed_time:.2f} minutes. "
+        f"[{ENGINE}] Filtered {input_path.name} in {elapsed_time:.2f} minutes. "
         f"Total lines: {total_lines}, matched lines: {matched_lines}"
     )
     return total_lines, matched_lines
 
-def filter_keyword_adv_month(year, month, files):
-    log_report(report_file_path, f"Started filtering files by advanced keywords for {year}-{month}; Engine: {ENGINE}.")
-    start_time = time.time()
-    total_lines = 0
-    matched_lines = 0
 
-    for file in files:
-        try:
-            t, m = filter_keyword_adv_file(file)
-            total_lines += t
-            matched_lines += m
-        except Exception as e:
-            log_report(report_file_path, f"Error filtering by advanced keywords in file {Path(file).name}: {e}")
+def _select_files_for_this_run():
+    if array is None:
+        return file_list
 
-    elapsed_time = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Completed filtering {year}-{month} in {elapsed_time:.2f} minutes")
-    return total_lines, matched_lines
+    start = array * files_per_job
+    end = min(start + files_per_job, len(file_list))
+    if start >= len(file_list):
+        raise RuntimeError(
+            f"Array index {array} is out of range for {len(file_list)} files "
+            f"(files_per_job={files_per_job})."
+        )
+
+    selected_files = file_list[start:end]
+    log_report(
+        report_file_path,
+        f"Array task {array}: processing file_list[{start}:{end}] (files_per_job={files_per_job})."
+    )
+    for selected_file in selected_files:
+        log_report(report_file_path, f"Selected input file: {Path(selected_file).name}")
+    return selected_files
+
 
 def filter_keyword_adv_parallel():
     total_lines = 0
@@ -218,56 +237,35 @@ def filter_keyword_adv_parallel():
     log_report(report_file_path, f"Using {max_workers} processes for parallel processing. Engine: {ENGINE}")
 
     initargs = (group, keyword_path)
+    selected_files = _select_files_for_this_run()
 
     with ProcessPoolExecutor(max_workers=max_workers, initializer=_worker_init, initargs=initargs) as executor:
-        for year in years:
-            log_report(report_file_path, f"Processing year: {year}")
-            start_year_time = time.time()
-            files_by_month = {}
-            futures = []
+        futures = [executor.submit(filter_keyword_adv_file, str(file)) for file in selected_files]
 
-            # List all CSV files in relevance_filtered_path for this year
-            for file in sorted(os.listdir(relevance_filtered_path)):
-                if str(year) in file and file.endswith(".csv"):
-                    try:
-                        # Expect filename format like "YYYY-MM-..."
-                        month = file.split('-')[1].split('.')[0]
-                    except IndexError:
-                        continue
-                    files_by_month.setdefault(month, []).append(file)
+        for future in futures:
+            try:
+                t, m = future.result()
+                total_lines += t
+                matched_lines += m
+            except Exception as e:
+                log_report(report_file_path, f"Error filtering by advanced keywords: {e}")
 
-            # Warn about missing months
-            expected_months = [f"{m:02d}" for m in range(1, 13)]
-            missing_months = [m for m in expected_months if m not in files_by_month]
-            if missing_months:
-                log_report(report_file_path, f"Warning: Missing files for months {missing_months} in year {year}")
-
-            # Submit work
-            for month, files in sorted(files_by_month.items()):
-                futures.append(executor.submit(filter_keyword_adv_month, year, month, files))
-
-            for future in futures:
-                try:
-                    t, m = future.result()
-                    total_lines += t
-                    matched_lines += m
-                except Exception as e:
-                    log_report(report_file_path, f"Error filtering by keywords: {e}")
-
-            year_processing_time = (time.time() - start_year_time) / 60
-            log_report(report_file_path, f"Completed filtering year {year} in {year_processing_time:.2f} minutes")
-
-    # Sanity check: output file count
-    expected_file_count = len(years) * 12
-    actual_file_count = sum(
-        1 for f in os.listdir(output_path)
-        if f.endswith('.csv') and f != output_report_filename
-    )
-    if actual_file_count != expected_file_count:
-        log_report(report_file_path, f"Warning: Expected {expected_file_count} output files, but generated {actual_file_count}.")
+    # Only perform the whole-range file-count sanity check in non-array mode.
+    if array is None:
+        expected_file_count = len(file_list)
+        actual_file_count = sum(
+            1 for f in os.listdir(output_path)
+            if f.endswith(".csv") and f != output_report_filename
+        )
+        if actual_file_count != expected_file_count:
+            log_report(
+                report_file_path,
+                f"Warning: Expected {expected_file_count} output files, but generated {actual_file_count}."
+            )
 
     log_report(report_file_path, f"Total lines processed: {total_lines}")
     log_report(report_file_path, f"Total matched lines: {matched_lines}")
+
 
 if __name__ == "__main__":
     overall_start_time = time.time()

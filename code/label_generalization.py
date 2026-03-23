@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, headers, log_report
+from utils import parse_range, headers, log_report, check_reqd_files
 
 # import Python packages
 import os
@@ -19,6 +19,9 @@ from pathlib import Path
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
+files_per_job = getattr(args, "files_per_job", 1)
+if files_per_job is None or files_per_job < 1:
+    files_per_job = 1
 group = args.group
 type_ = args.type
 batch_size = args.batchsize
@@ -60,15 +63,7 @@ clause_model.eval() # set model to evaluation mode
 generalization_model.eval() # set model to evaluation mode
 
 # Build file_list organized by year and raise an error if an expected file is missing 
-file_list = []
-for year in years:
-    for month in range(1, 13):
-        filename = "RC_{}-{:02d}.csv".format(year, month)
-        path_ = os.path.join(sentiment_labeled_path, filename)
-        if os.path.exists(path_):
-            file_list.append(path_)
-        else:
-            raise Exception("Missing sentiment-labeled file for the {} social group from year {}, month {}".format(group, year, month))
+file_list = check_reqd_files(years, sentiment_labeled_path, type_)
 
 # define the mapping between clause labels and each of the three composing features
 labels2attrs = {
@@ -499,8 +494,15 @@ def label_generalization_file(file):
 start_time = time.time()
 overall_docs = 0
 
-if args.array is not None: # for batch processing
-    overall_docs += label_generalization_file(file_list[array])
+if args.array is not None: # for batch processing (Slurm array task)
+    start = array * files_per_job
+    end = min(start + files_per_job, len(file_list))
+    if start >= len(file_list):
+        raise RuntimeError(
+            f"Array index {array} out of range for {len(file_list)} files (files_per_job={files_per_job})."
+        )
+    for file in file_list[start:end]:
+        overall_docs += label_generalization_file(file)
 
 else: # for sequential processing
     for file in file_list:        

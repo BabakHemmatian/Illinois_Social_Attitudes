@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, log_report
+from utils import parse_range, log_report, check_reqd_files
 
 # import Python packages
 import os, sys
@@ -12,18 +12,21 @@ import datetime
 import re
 from pathlib import Path
 
-# Extract and transform CLI arguments 
+# Extract and transform CLI arguments
 args = get_args()
 years = parse_range(args.years)
 group = args.group
 type_ = args.type
 batch_size = args.batchsize
+files_per_job = getattr(args, "files_per_job", 1)
+if files_per_job is None or files_per_job < 1:
+    files_per_job = 1
 if args.array is not None:
     array = args.array
 
 # set path variables
-CODE_DIR = Path(__file__).resolve().parent         
-PROJECT_ROOT = CODE_DIR.parent                     
+CODE_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = CODE_DIR.parent
 MODELS_DIR = PROJECT_ROOT / "models"
 DATA_DIR = PROJECT_ROOT / "data"
 
@@ -37,7 +40,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # prepare the report file
 report_file_path = os.path.join(dir_path, f"report_label_moralization.csv")
-log_report(report_file_path,f"Using device: {device}")
+log_report(report_file_path, f"Using device: {device}")
 
 # Load moralization model
 tokenizer = BertTokenizerFast.from_pretrained(model_path)
@@ -46,9 +49,9 @@ model = BertForSequenceClassification.from_pretrained(
     device_map=None,   # or "auto" if you want
     use_safetensors=True
 ).to(device)
-if torch.cuda.device_count() > 1: # if more than one GPU is available
-    model = torch.nn.DataParallel(model) # parallelize
-model.eval() # set model to evaluation mode
+if torch.cuda.device_count() > 1:  # if more than one GPU is available
+    model = torch.nn.DataParallel(model)  # parallelize
+model.eval()  # set model to evaluation mode
 
 # Define function to infer labels for a batch of documents
 @torch.no_grad()
@@ -63,7 +66,7 @@ def get_predictions(texts, max_length=512):
         max_length=max_length,
         return_tensors="pt"
     ).to(device)
-    
+
     with torch.no_grad():
         with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
             outputs = model(**inputs)
@@ -71,16 +74,8 @@ def get_predictions(texts, max_length=512):
             predictions = probs.argmax(dim=1).tolist()
     return predictions
 
-# Build file_list organized by year and raise an error if an expected file is missing 
-file_list = []
-for year in years:
-    for month in range(1, 13):
-        filename = "RC_{}-{:02d}.csv".format(year, month)
-        path_ = os.path.join(keywords_adv_filtered_path, filename)
-        if os.path.exists(path_):
-            file_list.append(path_)
-        else:
-            raise Exception("Missing relevance-filtered file for the {} social group from year {}, month {}".format(group, year, month))
+# Build file_list organized by year and raise an error if an expected file is missing
+file_list = check_reqd_files(years, keywords_adv_filtered_path, type_)
 
 def label_moralization_file(file):
 
@@ -157,7 +152,7 @@ def label_moralization_file(file):
 
             # get labels for the full batch
             if len(batch_lines) == batch_size:
-                texts = [l[2].strip().replace("\n"," ") for l in batch_lines]
+                texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
                 predictions = get_predictions(texts)
                 for idx, pred in enumerate(predictions):
                     row_out = batch_lines[idx] + ["Moralized" if pred else "Non-Moralized"]
@@ -169,7 +164,7 @@ def label_moralization_file(file):
 
         # Flush final batch
         if batch_lines:
-            texts = [l[2].strip().replace("\n"," ") for l in batch_lines]
+            texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
             predictions = get_predictions(texts)
             for idx, pred in enumerate(predictions):
                 row_out = batch_lines[idx] + ["Moralized" if pred else "Non-Moralized"]
@@ -181,7 +176,11 @@ def label_moralization_file(file):
     # generate processing report
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    log_report(report_file_path, f"Finished labeling moralization for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_report(
+        report_file_path,
+        f"Finished labeling moralization for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. "
+        f"Processed rows: {total_lines}"
+    )
 
     if missing_lines_count:
         missing_records_file = os.path.join(output_path, 'missing_records.csv')
@@ -202,11 +201,20 @@ start_time = time.time()
 overall_docs = 0
 
 # Process each file from the file_list (global mode)
-if args.array is not None: # for batch processing
-    overall_docs += label_moralization_file(file_list[array])
+if args.array is not None:  # for batch processing (Slurm array task)
+    # args.array is the *job index*; each job processes a chunk of monthly files.
+    start = array * files_per_job
+    end = min(start + files_per_job, len(file_list))
+    if start >= len(file_list):
+        raise RuntimeError(
+            f"Array index {array} is out of range for {len(file_list)} files (files_per_job={files_per_job})."
+        )
+    log_report(report_file_path, f"Array task {array}: processing file_list[{start}:{end}] (files_per_job={files_per_job}).")
+    for file in file_list[start:end]:
+        overall_docs += label_moralization_file(file)
 
-else: # for sequential processing
-    for file in file_list:        
+else:  # for sequential processing
+    for file in file_list:
         overall_docs += label_moralization_file(file)
 
     ##########################################
@@ -224,7 +232,11 @@ else: # for sequential processing
     ##########################################
 
     overall_elapsed = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Moralization labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+    log_report(
+        report_file_path,
+        f"Moralization labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. "
+        f"Total processed rows: {overall_docs}"
+    )
 
     ##########################################
     # ----- Aggregate overall statistics and save final summary report -----

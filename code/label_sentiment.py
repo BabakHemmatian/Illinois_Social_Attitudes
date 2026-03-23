@@ -1,6 +1,6 @@
 # import functions and objects
 from cli import get_args, dir_path
-from utils import parse_range, log_report
+from utils import parse_range, log_report, check_reqd_files
 import os
 import csv
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
@@ -27,6 +27,9 @@ type_ = args.type
 batch_size = args.batchsize
 if args.array is not None:
     array = args.array
+files_per_job = getattr(args, "files_per_job", 1)
+if files_per_job is None or files_per_job < 1:
+    files_per_job = 1
 
 # set path variables
 CODE_DIR = Path(__file__).resolve().parent         
@@ -42,15 +45,7 @@ report_file_path = os.path.join(dir_path, f"report_label_sentiment.csv")
 log_report(report_file_path)
 
 # Build file_list organized by year and raise an error if an expected file is missing 
-file_list = []
-for year in years:
-    for month in range(1, 13):
-        filename = "RC_{}-{:02d}.csv".format(year, month)
-        path_ = os.path.join(moralization_labeled_path, filename)
-        if os.path.exists(path_):
-            file_list.append(path_)
-        else:
-            raise Exception("Missing moralization-labeled file for the {} social group from year {}, month {}".format(group, year, month))
+file_list = check_reqd_files(years, moralization_labeled_path, type_)
 
 # generates labels for an entire month's worth of documents. It resumes labeling if it comes across incomplete output.
 def label_sentiment_file(file):
@@ -233,8 +228,15 @@ nlp = stanza.Pipeline(lang='en', processors='tokenize,sentiment')
 analyzer = SentimentIntensityAnalyzer()
 
 # Process each file from the file_list (global mode)
-if args.array is not None: # for batch processing
-    overall_docs += label_sentiment_file(file_list[array])
+if args.array is not None: # for batch processing (Slurm array task)
+    start = array * files_per_job
+    end = min(start + files_per_job, len(file_list))
+    if start >= len(file_list):
+        raise RuntimeError(
+            f"Array index {array} out of range for {len(file_list)} files (files_per_job={files_per_job})."
+        )
+    for file in file_list[start:end]:
+        overall_docs += label_sentiment_file(file)
 
 else: # for sequential processing
     for file in file_list:        

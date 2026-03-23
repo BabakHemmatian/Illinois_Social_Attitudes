@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --mail-user=babak.hemmatian@stonybrook.edu
+#SBATCH --mail-user=[type your email here]
 #SBATCH --mail-type=END,FAIL
 #SBATCH --time=48:00:00
 #SBATCH --mem=32G
@@ -12,7 +12,7 @@ set -euo pipefail
 export PYTHONUNBUFFERED=TRUE
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
-requires_years=("filter_keywords" "filter_language" "filter_relevance" "filter_sample" "label_moralization" "label_sentiment" "label_generalization" "label_emotion" "label_location")
+requires_years=("filter_keywords" "filter_language" "filter_relevance" "filter_keywords_adv" "filter_sample" "label_moralization" "label_sentiment" "label_generalization" "label_emotion" "label_location")
 requires_batch=("filter_relevance" "label_moralization" "label_generalization" "label_emotion" "label_sentiment" "label_location")
 
 in_array() { local needle="$1"; shift; for x in "$@"; do [[ "$x" == "$needle" ]] && return 0; done; return 1; }

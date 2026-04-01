@@ -1,17 +1,23 @@
+### Imports
+
+# package imports
 import os
 import csv
 import json
 import time
 from datetime import datetime
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor
 import zstandard
 import io
+import re
 import ahocorasick
 from pathlib import Path
 
 # Import functions and objects from local modules
 from cli import get_args, dir_path
 from utils import load_terms, groups, headers, parse_range, log_report, log_error
+
+### Argument handling
 
 # Extract and transform CLI arguments
 args = get_args()
@@ -21,13 +27,18 @@ group = args.group
 if isinstance(years, int):
     years = [years]
 
+### Path handling
+
 # Load social group keywords
 keyword_path = os.path.join(dir_path.replace("code", "keywords"))
 marginalized_words = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][0]}.txt"))
 privileged_words = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][1]}.txt"))
 
 # find the raw data folder
-DATA_DIR = os.path.join(Path(__file__).resolve().parent.parent,"data","data_reddit_raw",type_)
+if not args.input:
+    DATA_DIR = os.path.join(Path(__file__).resolve().parent.parent,"data","data_reddit_raw",type_)
+else:
+    DATA_DIR = args.input
 
 # Build an Aho-Corasick automaton for fast pattern matching of the keywords
 automaton = ahocorasick.Automaton()
@@ -38,20 +49,26 @@ for term in privileged_words:
 automaton.make_automaton()
 
 # Prepare and inspect the output path
-output_path = os.path.join(dir_path.replace("code", os.path.join("data", "data_reddit_curated", group,type_,"filtered_keywords")))
+if not args.output:
+    output_path = os.path.join(
+        dir_path.replace("code", os.path.join("data", "data_reddit_curated", group, type_, "filtered_keywords"))
+    )
+else:
+    output_path = args.output
 os.makedirs(output_path, exist_ok=True)
 
 # Setup the report file (tab-separated format)
 output_report_filename = "Report_filter_keywords.csv"
 report_file_path = os.path.join(output_path, output_report_filename)
 
-# Track completed outputs
-processed_stems = {
+# Track already-produced month files by stem, e.g. RC_2012-01
+processed_files = {
     Path(f).stem
     for f in os.listdir(output_path)
     if f.endswith(".csv") and f != output_report_filename
 }
 
+# Setup the report file (tab-separated format)
 if not os.path.exists(report_file_path):
     mode = 'w'
 else:
@@ -61,6 +78,33 @@ with open(report_file_path, mode, encoding='utf-8', newline='') as report_file:
     if mode == 'w':
         writer.writerow(["Timestamp", "Message"])
 
+# Return a list of (year, month) tuples to process. 
+# NOTE: Local run: all requested months. Slurm array task: only the chunk assigned to this task.
+
+def build_requested_months(years_list):
+    months = []
+    for year in years_list:
+        for month in range(1, 13):
+            months.append((year, f"{month:02d}"))
+    return months
+
+def get_target_months(years_list, array_idx=None, files_per_job=1):
+    all_months = build_requested_months(years_list)
+
+    if array_idx is None:
+        return all_months
+
+    start_idx = array_idx * files_per_job
+    end_idx = start_idx + files_per_job
+    return all_months[start_idx:end_idx]
+
+files_per_job = getattr(args, "files_per_job", 1) or 1
+target_months = get_target_months(years, args.array, files_per_job)
+target_month_set = set(target_months)
+
+### Main resource functions
+
+# filters a single input file based on the provided keyword sets
 def filter_keyword_file(file):
 
     # Process a single raw Reddit file by filtering for keyword matches.
@@ -82,7 +126,7 @@ def filter_keyword_file(file):
             writer = csv.writer(csv_file)
             writer.writerow(headers)
             
-            dctx = zstandard.ZstdDecompressor(max_window_size=2 ** 31) # 2GB cap
+            dctx = zstandard.ZstdDecompressor(max_window_size=2 ** 31)
             stream_reader = dctx.stream_reader(fh, read_across_frames=True)
             text_stream = io.TextIOWrapper(stream_reader, encoding='utf-8')
 
@@ -125,7 +169,15 @@ def filter_keyword_file(file):
                             buffer.clear()
 
                 except Exception as e:
-                    log_error("filter_keyword_file",file, total_lines, line, e)
+                    log_error(
+                    "filter_keyword_file",
+                    file,
+                    total_lines,
+                    line,
+                    e,
+                    report_file_path=report_file_path,
+                    output_path=output_path,
+                )
 
                 
 
@@ -137,15 +189,12 @@ def filter_keyword_file(file):
 
 
     elapsed_time = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Filtered {Path(file).name} by for relevance to the {group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
+    log_report(report_file_path, f"Filtered {Path(file).name} for relevance to the {group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
 
     return total_lines, matched_lines
 
+# wrapper for filter_keyword_file
 def filter_keyword_month(year, month, files):
-    """
-    Process all files for a specific month.
-    """
-    log_report(report_file_path, f"Started filtering files for {year}-{month}")
     start_time = time.time()
     total_lines = 0
     matched_lines = 0
@@ -163,62 +212,86 @@ def filter_keyword_month(year, month, files):
     return total_lines, matched_lines
 
 # Process files in parallel while checking for missing month files.
-# Log warnings for missing months before processing.
+# NOTE: Logs warnings for missing months before processing if not running on the cluster.
 def filter_keyword_parallel():
-    
     total_lines = 0
     matched_lines = 0
-    max_workers = min(4, os.cpu_count())
+    max_workers = min(6, os.cpu_count() or 1)
     log_report(report_file_path, f"Using {max_workers} processes for parallel processing.")
 
+    # Group eligible raw files by requested (year, month)
+    files_by_year_month = {}
+
+    for file in sorted(os.listdir(DATA_DIR)):
+        if not file.endswith(".zst"):
+            continue
+
+        stem = file.split(".zst")[0]
+        if stem in processed_files:
+            continue
+
+        # Simple parse based on existing filename convention
+        try:
+            year = int(file.split("_")[1].split("-")[0]) if "_" in file else int(file.split("-")[0])
+            month = file.split("-")[1].split(".zst")[0]
+        except Exception:
+            # More robust fallback: search for YYYY-MM anywhere in filename
+            m = re.search(r"(\d{4})-(\d{2})", file)
+            if not m:
+                continue
+            year = int(m.group(1))
+            month = m.group(2)
+
+        if (year, month) not in target_month_set:
+            continue
+
+        files_by_year_month.setdefault((year, month), []).append(file)
+
+    # Log warnings for target months that have no input files
+    missing_input_months = sorted(target_month_set - set(files_by_year_month.keys()))
+    for year, month in missing_input_months:
+        log_report(report_file_path, f"Warning: Missing input file(s) for {year}-{month}")
+
+    if not target_months:
+        log_report(report_file_path, "No target months assigned to this run.")
+        return
+
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
+        future_to_month = {}
 
-        for year in years:
-            log_report(report_file_path, f"Processing year: {year}")
-            start_year_time = time.time()
-            files_by_month = {}
-            futures = []
+        for year, month in target_months:
+            files = files_by_year_month.get((year, month), [])
+            if not files:
+                continue
+            log_report(report_file_path, f"Started filtering files for {year}-{month}")
+            future = executor.submit(filter_keyword_month, year, month, files)
+            future_to_month[future] = (year, month)
 
-            for file in sorted(os.listdir(DATA_DIR)):
-                if str(year) in file and file.endswith(".zst") and Path(file).stem not in processed_stems:
-                    try:
+        for future, (year, month) in future_to_month.items():
+            try:
+                month_lines, month_matched = future.result()
+                total_lines += month_lines
+                matched_lines += month_matched
+            except Exception as e:
+                log_report(report_file_path, f"Error filtering by keywords for {year}-{month}: {e}")
 
-                        # Assuming filename format includes month as "YYYY-MM" or "YYYY-MM-..."
-                        month = file.split('-')[1].split('.zst')[0]
-                    except IndexError:
-                        continue
-                    files_by_month.setdefault(month, []).append(file)
+    # Check completeness only for the months this run was responsible for
+    processed_months = set()
+    for f in os.listdir(output_path):
+        if not f.endswith(".csv") or f == output_report_filename:
+            continue
+        m = re.search(r"(\d{4})-(\d{2})", f)
+        if m:
+            processed_months.add((int(m.group(1)), m.group(2)))
 
-            # Log a warning if some months are missing for the current year
-            expected_months = [f"{m:02d}" for m in range(1, 13)]
-            missing_months = [m for m in expected_months if m not in files_by_month]
-            if missing_months:
-                warning_msg = f"Warning: Missing files for months {missing_months} in year {year}"
-                log_report(report_file_path, warning_msg)
-
-            for month, files in sorted(files_by_month.items()):
-                futures.append(executor.submit(filter_keyword_month, year, month, files))
-
-            for future in as_completed(futures):
-                try:
-                    month_lines, month_matched = future.result()
-                    total_lines += month_lines
-                    matched_lines += month_matched
-                except Exception as e:
-                    log_report(report_file_path, f"Error filtering by keywords: {e}")
-
-            year_processing_time = (time.time() - start_year_time) / 60
-            log_report(report_file_path, f"Completed filtering year {year} in {year_processing_time:.2f} minutes")
-
-    # TODO: Make the warning message specific to the files in years-months, not counting any .csv output file.
-    # Check the number of output CSV files, excluding the report file
-    expected_file_count = len(years) * 12
-    actual_file_count = sum(1 for f in os.listdir(output_path) if f.endswith('.csv') and f != output_report_filename)
-    if actual_file_count != expected_file_count:
-        log_report(report_file_path, f"Warning: Expected {expected_file_count} output files, but generated {actual_file_count}.")
+    missing_output_months = sorted(target_month_set - processed_months)
+    for year, month in missing_output_months:
+        log_report(report_file_path, f"Warning: Missing output file for {year}-{month}")
 
     log_report(report_file_path, f"Total lines processed: {total_lines}")
     log_report(report_file_path, f"Total matched lines: {matched_lines}")
+
+### Main execution
 
 if __name__ == "__main__":
     overall_start_time = time.time()
@@ -226,5 +299,16 @@ if __name__ == "__main__":
         filter_keyword_parallel()
     except Exception as e:
         log_report(report_file_path, f"Fatal error during processing: {e}")
+
     total_time = (time.time() - overall_start_time) / 60
-    log_report(report_file_path, f"Keyword filtering for {group} for {args.years} finished in {total_time:.2f} minutes")
+
+    if args.array is None:
+        scope_msg = f"{args.years}"
+    else:
+        assigned = ", ".join(f"{y}-{m}" for y, m in target_months) if target_months else f"array task {args.array}"
+        scope_msg = f"{args.years} (task scope: {assigned})"
+
+    log_report(
+        report_file_path,
+        f"Keyword filtering for {group} for {scope_msg} finished in {total_time:.2f} minutes"
+    )

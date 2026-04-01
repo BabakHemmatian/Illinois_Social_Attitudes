@@ -105,6 +105,16 @@ def get_args(argv=None):
         help='Identifies the resource from whose outputs filter_sample is to extract a subset of documents. Only valid for filter and label resources.'
     )
     argparser.add_argument(
+        '-i', '--input',
+        type=str,
+        help="Optionally identify the input folder for the resource. If not provided, defaults to the order of resources indicated in the repository."
+    )
+    argparser.add_argument(
+        '-o','--output',
+        type=str,
+        help="Optionally identify an output folder for the resource. If not provided, defaults to the order of resources indicated in the repository."
+    )
+    argparser.add_argument(
         '-r', '--resource',
         type=str,
         choices=[
@@ -247,6 +257,12 @@ if __name__ == "__main__":
         if getattr(args, "maxradius", None) is not None:
             slurm_vars.append(f"maxradius={args.maxradius}")
 
+        # Forward optional path overrides to slurm.sh
+        if args.input:
+            slurm_vars.append(f"input={args.input}")
+        if args.output:
+            slurm_vars.append(f"output={args.output}")
+
         slurm_script = CODE_DIR / "slurm.sh"
         concurrency_cap = args.numjob  # number of simultaneous tasks
         array_flag = f"{array_spec}%{concurrency_cap}" if array_spec else None
@@ -303,6 +319,12 @@ if __name__ == "__main__":
             cmd_parts.extend(["--maxradius", str(args.maxradius)])
         if args.files_per_job:
             cmd_parts.extend(["--files-per-job", str(args.files_per_job)])
+
+        # Forward optional path overrides when running locally
+        if args.input:
+            cmd_parts.extend(["-i", args.input])
+        if args.output:
+            cmd_parts.extend(["-o", args.output])
 
         # Pretty log line only
         print("[cli] running:", subprocess.list2cmdline([str(p) for p in cmd_parts]))

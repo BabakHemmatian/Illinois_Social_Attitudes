@@ -123,6 +123,33 @@ def log_error(
     except Exception:
         pass
 
+def f1_calculator(labels,predictions):
+
+    metrics = {i:0 for i in ['tp','tn','fp','fn']}
+
+    for idx,prediction in enumerate(predictions):
+        
+            if labels[idx] == 0:
+                if prediction == 0:
+                    metrics['tn'] += 1
+                elif prediction == 1:
+                    metrics['fp'] += 1
+                else:
+                    raise Exception
+            elif labels[idx] == 1:
+                if prediction == 0:
+                    metrics['fn'] += 1
+                elif prediction == 1:
+                    metrics['tp'] += 1
+                else:
+                    raise Exception
+
+    precision = float(metrics['tp']) / float(metrics['tp'] + metrics['fp'])
+    recall = float(metrics['tp']) / float(metrics['tp'] + metrics['fn'])
+    F_1 = 2 * float(precision * recall) / float(precision + recall)
+
+    return precision, recall, F_1
+
 ## File discovery helper
 def check_reqd_files(years: List[int], check_path: str | Path, type_: str) -> List[str]:
     PREFIX_MAP = {"comments": "RC", "submissions": "RS"}

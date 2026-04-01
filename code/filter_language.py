@@ -1,3 +1,5 @@
+### Imports
+
 # Import functions and objects
 from cli import get_args, dir_path
 from utils import parse_range, headers, check_reqd_files, log_report, log_error
@@ -6,14 +8,14 @@ from utils import parse_range, headers, check_reqd_files, log_report, log_error
 import fasttext 
 import os
 import csv
+csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
 import time
 import re
 from datetime import datetime  # For timestamping
 import traceback
 from pathlib import Path
 
-# Increase the field size limit to handle larger fields
-csv.field_size_limit(2**31 - 1)
+### Argument Handling
 
 # Extract and transform CLI arguments 
 args = get_args()
@@ -21,9 +23,11 @@ type_ = args.type
 group = args.group
 years = parse_range(args.years)
 
+### Path Handling
+
 # Load the fastText language identification model
-model_path = os.path.join(dir_path.replace("code", "models"), "filter_language.bin")
-model = fasttext.load_model(model_path)
+model_path = Path(__file__).resolve().parent.parent / "models" / "filter_language.bin"
+model = fasttext.load_model(str(model_path))
 
 # Define a function that applies the fastText model to a given text
 def detect_language(text):
@@ -31,23 +35,52 @@ def detect_language(text):
     # The language code is returned with a prefix "__label__", which we remove
     return predictions[0][0].replace('__label__', '')
 
-# Survey the keyword-filtered input files and raise an error if an expected file is missing
-keyword_filtered_path = os.path.join(
-    dir_path.replace("code", "data"),
-    "data_reddit_curated", group,type_, "filtered_keywords"
-)
-file_list = check_reqd_files(years=years, check_path=keyword_filtered_path)
+# Survey the input files and raise an error if an expected file within the requested range is missing
+if not args.input:
+    input_path = os.path.join(
+        Path(__file__).resolve().parent.parent,
+        "data", "data_reddit_curated", group, type_, "filtered_keywords"
+    )
+else:
+    input_path = args.input
+file_list = check_reqd_files(years=years, type_=type_, check_path=input_path)
+
+# Allow each Slurm array task to process only its assigned slice of files
+array_index = getattr(args, "array", None)
+files_per_job = getattr(args, "files_per_job", 1)
+
+if array_index is not None:
+    total_files = len(file_list)
+    start = array_index * files_per_job
+    end = min(start + files_per_job, total_files)
+
+    if start >= total_files:
+        print(
+            f"No files to process for array index {array_index} "
+            f"(start={start}, total_files={total_files}). Exiting."
+        )
+        exit(0)
+
+    file_list = file_list[start:end]
+    print(
+        f"Array index {array_index}: processing files "
+        f"{start}..{end-1} (of {total_files})"
+    )
 
 # Prepare and survey the output path
-output_path = os.path.join(
-    dir_path.replace("code", "data"),
-    "data_reddit_curated", group, type_, "filtered_language"
-)
+if args.output:
+    output_path = args.output
+else:
+    output_path = os.path.join(
+        dir_path.replace("code", "data"),
+        "data_reddit_curated", group, type_, "filtered_language"
+    )
 os.makedirs(output_path, exist_ok=True)
 
-# -------------------- Report logging --------------------
 # The report file is used to log messages (tab-separated: timestamp and message)
 report_file_path = os.path.join(output_path, "Report_filter_language.csv")
+
+### Main functions
 
 # Function for language filtering a single file
 def filter_language_file(file):
@@ -56,10 +89,7 @@ def filter_language_file(file):
     log_report(report_file_path, f"Started language filtering for {Path(file).name}")
     
     try:
-        # Get the relative path after "keywords/"
-        relative_path = file.split("keywords" + os.sep)[1]
-        # Build the full output file path in a platform-safe way
-        output_file_path = os.path.join(output_path, relative_path)
+        output_file_path = os.path.join(output_path, Path(file).name)
 
         with open(file, "r", encoding='utf-8-sig', errors='ignore') as input_file, \
              open(output_file_path, "w", encoding='utf-8', errors='ignore', newline='') as output_file:
@@ -84,7 +114,15 @@ def filter_language_file(file):
                             passed_counter += 1
                     except IndexError as e:
                         # Log the error and continue with the next line
-                        log_error(function_name, file, id_ + 1, str(line), e)
+                        log_error(
+                            function_name,
+                            file,
+                            id_ + 1,
+                            str(line),
+                            e,
+                            report_file_path=report_file_path,
+                            output_path=output_path,
+                        )
                         error_counter += 1
                         continue
                     filtered_counter += 1
@@ -100,7 +138,11 @@ def filter_language_file(file):
         tb_str = traceback.format_exc()
         log_report(report_file_path, f"Fatal error during processing:\n{tb_str}")
 
+### Main execution
+
 if __name__ == "__main__":
+    target_files = list(file_list)
+
     overall_start_time = time.time()
     total_filtered = 0
     total_passed = 0
@@ -116,37 +158,64 @@ if __name__ == "__main__":
             total_errors += error_counter
 
     overall_elapsed = (time.time() - overall_start_time) / 60
-    log_report(report_file_path, f"Language filtering for the {args.group} social group for {args.years} finished in {overall_elapsed:.2f} minutes")
-    
-    # -------------------- Final summary report --------------------
-    final_report = [
-        ["Timestamp", "Social Group", "Years", "Total Evaluations", "Total Relevant Posts", "Total Missing Lines", "Elapsed Time (minutes)"],
-        [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), args.group, args.years, total_filtered, total_passed, total_errors, f"{overall_elapsed:.2f}"]
-    ]
-    final_report_file = os.path.join(output_path, "Final_report_filter_language.csv")
-    with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
-        writer = csv.writer(rf)
-        writer.writerows(final_report)
-    log_report(final_report_file, f"Final report saved to: {final_report_file}")
-    # --------------------------------------------------------------
 
-    # -------------------- Warning if a particular month is missing --------------------
-    # Assuming that the output filename contains 'YYYY-MM', check if every year has output files for all 12 months.
+    if array_index is None:
+        scope_msg = f"{args.years}"
+    else:
+        scope_msg = f"{args.years} (array index {array_index})"
+
+    log_report(
+        report_file_path,
+        f"Language filtering for the {args.group} social group for {scope_msg} finished in {overall_elapsed:.2f} minutes"
+    )
+
+    # Missing-month checks: evaluate output completeness only after processing
     processed_months = {}
     for file in os.listdir(output_path):
-        if file.endswith('.csv') and file not in [os.path.basename(final_report_file), os.path.basename(report_file_path)]:
-            m = re.search(r'(\d{4})-(\d{2})', file)
+        if file.endswith(".csv") and file not in [os.path.basename(report_file_path), "Final_report_filter_language.csv"]:
+            m = re.search(r"(\d{4})-(\d{2})", file)
             if m:
                 year, month = m.groups()
-                if year not in processed_months:
-                    processed_months[year] = set()
-                processed_months[year].add(month)
-    for year in years:
-        year_str = str(year)
-        expected_months = set(f"{m:02d}" for m in range(1, 13))
-        if year_str in processed_months:
-            missing = expected_months - processed_months[year_str]
+                processed_months.setdefault(year, set()).add(month)
+
+    if array_index is None:
+        # Full-run completeness check
+        for year in years:
+            year_str = str(year)
+            expected_months = set(f"{m:02d}" for m in range(1, 13))
+            actual_months = processed_months.get(year_str, set())
+            missing = expected_months - actual_months
             if missing:
-                log_report(report_file_path, f"Warning: For year {year_str}, missing output files for months: {sorted(list(missing))}")
-        else:
-            log_report(report_file_path, f"Warning: For year {year_str}, no output files found.")
+                log_report(
+                    report_file_path,
+                    f"Warning: For year {year_str}, missing output files for months: {sorted(list(missing))}"
+                )
+
+        # Final summary report only for full runs
+        final_report = [
+            ["Timestamp", "Social Group", "Years", "Total Evaluations", "Total Relevant Posts", "Total Missing Lines", "Elapsed Time (minutes)"],
+            [datetime.now().strftime("%Y-%m-%d %H:%M:%S"), args.group, args.years, total_filtered, total_passed, total_errors, f"{overall_elapsed:.2f}"]
+        ]
+        final_report_file = os.path.join(output_path, "Final_report_filter_language.csv")
+        with open(final_report_file, "w", encoding="utf-8", newline="") as rf:
+            writer = csv.writer(rf)
+            writer.writerows(final_report)
+        log_report(report_file_path, f"Final report saved to: {final_report_file}")
+
+    else:
+        # Array-task completeness check: only for months assigned to this task
+        expected_by_year = {}
+        for file in target_files:
+            m = re.search(r"(\d{4})-(\d{2})", Path(file).name)
+            if m:
+                year, month = m.groups()
+                expected_by_year.setdefault(year, set()).add(month)
+
+        for year_str, expected_months in expected_by_year.items():
+            actual_months = processed_months.get(year_str, set())
+            missing = expected_months - actual_months
+            if missing:
+                log_report(
+                    report_file_path,
+                    f"Warning: For array index {array_index}, year {year_str}, missing output files for months: {sorted(list(missing))}"
+                )

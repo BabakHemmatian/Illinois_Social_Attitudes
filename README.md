@@ -74,7 +74,17 @@ python ./code/cli.py --type comments --resource filter_keywords --group sexualit
 ```
 This example command will use the appropriate keyword lists from this repository to identify comments in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
 
-**Note:** The scripts may be used without any changes to recreate the ISAAC corpus. For that purpose, the code base currently assumes the following order in the use of resources for a given social group and year range:
+**NOTE:** ```filter_keywords``` should always be the first resource called, as it is the only resource interfacing with the raw reddit data. 
+
+**NOTE:** _label_ resources require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 200 and 4096 were used based on the resource and system parameters while developing ISAAC. Parallelization and GPU acceleration are recommended for these more resource-intensive resources (see below).
+
+#### Custom Resource Use Order
+
+Resources other than ```filter_keywords``` can be used in customized order by adding ```--input``` and ```--output``` path arguments to a command pointing to the desired input/output directories. If not provided, the paths default to the resource order indicated below.
+
+### Default Resource Use Order
+
+The scripts may be used without any changes to recreate the ISAAC corpus. To do so, call the resources without ```--input``` and ```--output``` path arguments in the following order for a given social group and year range:
 
 1. ```filter_keywords```: Uses an extremely fast algorithm to parse trillions of Reddit posts for large sets of keywords that suggest potential relevance to ISAAC's key social distinctions. 
 2. ```filter_language```: Uses a pre-trained language detection model from FastText to filter out non-English posts. 
@@ -84,11 +94,17 @@ This example command will use the appropriate keyword lists from this repository
 6. _```label_sentiment```_: Generates a range of sentiment labels for a post based on [Stanza](https://stanfordnlp.github.io/stanza/sentiment.html), [TextBlob](https://textblob.readthedocs.io/en/dev/quickstart.html) and [Vader](https://github.com/cjhutto/vaderSentiment) models. The combination of multiple models supports reliable inference.
 7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. 
 8. _```label_emotion```_: Generates a range of emotion labels for a post based on the neural network models found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
-9. _```label_location```_: Estimates a submission/comment author's home location down roughly to the county level (geohash4) based on Reddit posting history. This is an updated, expanded and optimized version of the Bayesian model described [here](https://aclanthology.org/W18-6103.pdf). This resource has its own command line arguments with default values. Because this resource goes over large swathes of raw Reddit data for estimating a large number of variables, parallelization and GPU use are recommended (see below). 
+9. _```label_location```_: Estimates a submission/comment author's home location down roughly to the county level (geohash4) based on Reddit posting history. This is an updated, expanded and optimized version of the Bayesian model described [here](https://aclanthology.org/W18-6103.pdf). This resource has its own command line arguments with default values.  
 
-**Note:** _label_ resources require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 200 and 4096 were used based on the resource and system parameters while developing ISAAC. These resources become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). If you plan to use this feature, make sure you have PyTorch with Cuda support installed within your new conda environment (included in ```req.txt```). You can speed up processing even further by using batch processing in a computing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. Several command line arguments such as ```--num-jobs``` control the behavior of the slurm versions of scripts. 
+### Batch Processing Support
 
-If you plan instead to adapt the code for developing new datasets, see the section below. 
+All resources support batch processing on a supercomputing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. Several command line arguments such as ```--num-jobs``` control the behavior of the slurm versions of scripts. 
+
+### CPU and GPU Acceleration
+
+_filter_ resources use CPU-based parallelization for extremely fast processing. 
+
+_label_ resources become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). These resources print out the "device" as part of their logging, which can be used to confirm the use of "cuda".
 
 ## Adaptations
 

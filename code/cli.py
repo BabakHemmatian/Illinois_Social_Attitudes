@@ -195,7 +195,7 @@ def get_args(argv=None):
         "--input_2", "-2",
         dest="input_2",
         type=str,
-        help="The second input folder for organize_types. 'type' should be different between 'input' and 'input_2'. Defaults to the most advanced 'filter' or 'label' resource based on the repository's default pathing and resource order if not provided."
+        help="The second input folder for 'organize_types' and 'train_location_weighting'. For organize_types, one input should be a 'comments' and the other a 'submissions' folder. For train_location_weighting, 'input' should be the preprocessed features folder and 'input_2' the regression model folder."
     )
 
     args = argparser.parse_args(argv)

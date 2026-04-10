@@ -1,6 +1,7 @@
+### Imports
+
 from __future__ import annotations
 
-import argparse
 import json
 import os
 import pickle
@@ -14,54 +15,95 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 from scipy.sparse import load_npz
 from sklearn.metrics import log_loss
+from cli import get_args, MODELS_DIR
+from utils import log_report
 
-
-# -------------------------
 # Logging
-# -------------------------
 VERBOSITY = int(os.environ.get("VERBOSITY", "1"))
-
 
 def log(msg: str, level: int = 1, stream=None):
     if level <= VERBOSITY:
         print(msg, file=stream)
 
+### Argument Handling
 
-# -------------------------
-# Paths / defaults
-# -------------------------
-CODE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CODE_DIR.parent
-MODEL_PATH = PROJECT_ROOT / "models"
+args = get_args()
+type_ = args.type
 
-DEFAULT_PREPROC_DIR = os.environ.get(
-    "PREPROCESS_DIR",
-    os.path.join(MODEL_PATH, "label_location", "preprocessed_streaming"),
-)
-DEFAULT_MODEL_DIR = os.environ.get(
-    "TRAIN_OUTPUT_DIR",
-    os.path.join(MODEL_PATH, "label_location", "trained_lr"),
-)
+### Paths Handling
 
-DEFAULT_WORD_FEATURE_SRC = os.environ.get("WORD_FEATURE_SRC", "all").strip().lower()
+# input path processing
+if not args.input and not args.input_2:
+    log_report(
+        "No custom paths provided for preprocessed model features and pretrained models. Setting up default paths..."
+    )
+    PREPROC_DIR = os.path.join(MODELS_DIR, "label_location", "preprocessed_streaming")
+    MODEL_DIR = os.path.join(MODELS_DIR, "label_location", "trained_lr")
+
+# NOTE: for custom pathing, 'input' argument should point to the preprocessed feature sets folder, and 'input_2' to pretrained lr models folder.
+elif args.input and args.input_2:
+    PREPROC_DIR = args.input
+    MODEL_DIR = args.input_2
+else:
+    raise ValueError(
+        "Provide either both --input and --input_2, or neither. "
+        "Supplying only one is not supported."
+    )
+
+# parse the output path
+if not args.output:
+    output_path = Path(MODEL_DIR)
+else:
+    output_path = Path(args.output)
+
+os.makedirs(output_path, exist_ok=True)
+
+### Location Model Mixture Hyperparameters
+
+# task and features
+WORD_FEATURE_SRC = os.environ.get("WORD_FEATURE_SRC", "all").strip().lower() # comments | submissions | all
 TASK = os.environ.get("TASK", "state").strip().lower()  # top | state | region
-WEIGHT_STRUCT = float(os.environ.get("WEIGHT_STRUCT", "0.20"))
-WEIGHT_WORDS = float(os.environ.get("WEIGHT_WORDS", str(1.0 - WEIGHT_STRUCT)))
+WEIGHT_STRUCT = float(os.environ.get("WEIGHT_STRUCT", "0.20")) # matters if OPTIMIZE_WEIGHT_STRUCT == 0
+WEIGHT_WORDS = float(os.environ.get("WEIGHT_WORDS", str(1.0 - WEIGHT_STRUCT))) # MATTERS if OPTIMIZE_WEIGHT_STRUCT == 0
+
+# optimization of model weights
 OPTIMIZE_WEIGHT_STRUCT = os.environ.get("OPTIMIZE_WEIGHT_STRUCT", "1") == "1"
 WEIGHT_STRUCT_GRID = os.environ.get(
     "WEIGHT_STRUCT_GRID",
     "0.00,0.05,0.10,0.15,0.20,0.25,0.30,0.35,0.40,0.45,0.50",
 ).strip()
 OPTIMIZATION_TARGET = os.environ.get("OPTIMIZATION_TARGET", "valid_masked_top1").strip().lower()
+
+# reporting/saving
 SAVE_METRICS = os.environ.get("SAVE_METRICS", "1") == "1"
 DEBUG_TOP_N = int(os.environ.get("DEBUG_TOP_N", "15"))
 PRF_TOPK = int(os.environ.get("PRF_TOPK", "5"))
+
+# smoothing
+TEMPERATURE = float(os.environ.get("TEMPERATURE", "1.25")) # to reduce overconfidence in the chosen label
+ENABLE_GEO_SMOOTHING = os.environ.get("ENABLE_GEO_SMOOTHING", "0") == "1"
+DISTANCE_RADII_KM: Tuple[int, ...] = (100, 300, 500, 1000)
+GEO_SMOOTHING_SIGMA_KM = float(os.environ.get("GEO_SMOOTHING_SIGMA_KM", "400.0")) # Geosmoothing SD in kilometers
+
+# hyperparameter checks
+if TASK not in {"top", "state", "region"}:
+    raise ValueError("TASK must be one of: top, state, region")
+if WEIGHT_STRUCT < 0.0 or WEIGHT_WORDS < 0.0:
+    raise ValueError("WEIGHT_STRUCT and WEIGHT_WORDS must be non-negative")
+if (WEIGHT_STRUCT + WEIGHT_WORDS) <= 0.0:
+    raise ValueError("WEIGHT_STRUCT + WEIGHT_WORDS must be > 0")
+if GEO_SMOOTHING_SIGMA_KM <= 0.0:
+    raise ValueError("GEO_SMOOTHING_SIGMA_KM must be > 0")
+if TEMPERATURE <= 0.0:
+    raise ValueError("TEMPERATURE must be > 0")
+
+### Labels Mapping
 
 TOP_UNKNOWN = "UNKNOWN"
 STATE_UNKNOWN = "UNKNOWN"
 REGION_UNKNOWN = "UNKNOWN"
 
-# from US Census
+# from US Census; to calculate the distance from the predicted label to the real label
 STATE_CENTROIDS: Dict[str, Tuple[float, float]] = {
     "AL": (32.806671, -86.791130),
     "AK": (61.370716, -152.404419),
@@ -116,7 +158,7 @@ STATE_CENTROIDS: Dict[str, Tuple[float, float]] = {
     "WY": (42.755966, -107.30249),
 }
 
-# from US census
+# from US census; to calculate region-level accuracy
 STATE_TO_REGION: Dict[str, str] = {
     "CT": "NORTHEAST", "ME": "NORTHEAST", "MA": "NORTHEAST", "NH": "NORTHEAST",
     "RI": "NORTHEAST", "VT": "NORTHEAST", "NJ": "NORTHEAST", "NY": "NORTHEAST", "PA": "NORTHEAST",
@@ -131,29 +173,66 @@ STATE_TO_REGION: Dict[str, str] = {
     "NM": "WEST", "UT": "WEST", "WY": "WEST",
     "AK": "WEST", "CA": "WEST", "HI": "WEST", "OR": "WEST", "WA": "WEST",
 }
-DISTANCE_RADII_KM: Tuple[int, ...] = (100, 300, 500, 1000)
-ENABLE_GEO_SMOOTHING = os.environ.get("ENABLE_GEO_SMOOTHING", "0") == "1"
-GEO_SMOOTHING_SIGMA_KM = float(os.environ.get("GEO_SMOOTHING_SIGMA_KM", "400.0"))
-TEMPERATURE = float(os.environ.get("TEMPERATURE", "1.25"))
+
+### Data Classes
+
+@dataclass
+class SplitMetrics:
+    n: int
+    top1_acc: float
+    top5_acc: float
+    top10_acc: float
+    mrr: float
+    log_loss: float
+    top1_precision_micro: float
+    top1_recall_micro: float
+    top1_f1_micro: float
+    top1_precision_macro: float
+    top1_recall_macro: float
+    top1_f1_macro: float
+    topk_precision_micro: float
+    topk_recall_micro: float
+    topk_f1_micro: float
+    topk_precision_macro: float
+    topk_recall_macro: float
+    topk_f1_macro: float
+    mean_distance_km: Optional[float] = None
+    median_distance_km: Optional[float] = None
+    top5_min_mean_distance_km: Optional[float] = None
+    top5_min_median_distance_km: Optional[float] = None
+    top10_min_mean_distance_km: Optional[float] = None
+    top10_min_median_distance_km: Optional[float] = None
+    within_100km_acc: Optional[float] = None
+    within_300km_acc: Optional[float] = None
+    within_500km_acc: Optional[float] = None
+    within_1000km_acc: Optional[float] = None
+    region_top1_acc: Optional[float] = None
+    region_top5_acc: Optional[float] = None
 
 
-if TASK not in {"top", "state", "region"}:
-    raise ValueError("TASK must be one of: top, state, region")
-if WEIGHT_STRUCT < 0.0 or WEIGHT_WORDS < 0.0:
-    raise ValueError("WEIGHT_STRUCT and WEIGHT_WORDS must be non-negative")
-if (WEIGHT_STRUCT + WEIGHT_WORDS) <= 0.0:
-    raise ValueError("WEIGHT_STRUCT + WEIGHT_WORDS must be > 0")
-if GEO_SMOOTHING_SIGMA_KM <= 0.0:
-    raise ValueError("GEO_SMOOTHING_SIGMA_KM must be > 0")
-if TEMPERATURE <= 0.0:
-    raise ValueError("TEMPERATURE must be > 0")
+@dataclass
+class TaskData:
+    y_train: np.ndarray
+    y_val: np.ndarray
+    y_test: np.ndarray
+    users_train: np.ndarray
+    users_val: np.ndarray
+    users_test: np.ndarray
+    task_name: str
 
 
-# -------------------------
-# Shared helpers
-# -------------------------
+@dataclass
+class SavedModel:
+    feature_set: str
+    task: str
+    classes_: List[str]
+    model: object
+    metadata: Dict[str, object]
+
+### Utilities 
+
 def resolve_word_feature_src(type_arg: str) -> str:
-    src = (type_arg or DEFAULT_WORD_FEATURE_SRC).strip().lower()
+    src = (type_arg or WORD_FEATURE_SRC).strip().lower()
     if src not in {"comments", "submissions", "all"}:
         raise ValueError("type / WORD_FEATURE_SRC must be one of: comments, submissions, all")
     return src
@@ -178,8 +257,8 @@ def get_preprocess_artifact_paths(preprocess_dir: str, word_feature_src: str) ->
     }
 
 
-def get_model_paths(output_dir: str, task: str, tag: str) -> Dict[str, str]:
-    base = Path(output_dir).resolve()
+def get_model_paths(model_dir: str, task: str, tag: str) -> Dict[str, str]:
+    base = Path(model_dir).resolve()
     return {
         "words_model": str(base / f"lr__words__{task}__{tag}.pkl"),
         "words_metrics": str(base / f"lr__words__{task}__{tag}__metrics.json"),
@@ -307,62 +386,6 @@ def print_majority_baseline(train_labels: Sequence[str], eval_labels: Sequence[s
         1,
     )
 
-
-@dataclass
-class SplitMetrics:
-    n: int
-    top1_acc: float
-    top5_acc: float
-    top10_acc: float
-    mrr: float
-    log_loss: float
-    top1_precision_micro: float
-    top1_recall_micro: float
-    top1_f1_micro: float
-    top1_precision_macro: float
-    top1_recall_macro: float
-    top1_f1_macro: float
-    topk_precision_micro: float
-    topk_recall_micro: float
-    topk_f1_micro: float
-    topk_precision_macro: float
-    topk_recall_macro: float
-    topk_f1_macro: float
-    mean_distance_km: Optional[float] = None
-    median_distance_km: Optional[float] = None
-    top5_min_mean_distance_km: Optional[float] = None
-    top5_min_median_distance_km: Optional[float] = None
-    top10_min_mean_distance_km: Optional[float] = None
-    top10_min_median_distance_km: Optional[float] = None
-    within_100km_acc: Optional[float] = None
-    within_300km_acc: Optional[float] = None
-    within_500km_acc: Optional[float] = None
-    within_1000km_acc: Optional[float] = None
-    region_top1_acc: Optional[float] = None
-    region_top5_acc: Optional[float] = None
-
-
-@dataclass
-class TaskData:
-    y_train: np.ndarray
-    y_val: np.ndarray
-    y_test: np.ndarray
-    users_train: np.ndarray
-    users_val: np.ndarray
-    users_test: np.ndarray
-    task_name: str
-
-
-@dataclass
-class SavedModel:
-    feature_set: str
-    task: str
-    classes_: List[str]
-    model: object
-    metadata: Dict[str, object]
-
-
-
 def _is_state_task_with_geo(y_true: np.ndarray, y_pred: np.ndarray) -> bool:
     if TASK != "state":
         return False
@@ -386,6 +409,7 @@ def _state_distance_km(state_a: str, state_b: str) -> float:
     lat2, lon2 = STATE_CENTROIDS[state_b]
     return _haversine_km(lat1, lon1, lat2, lon2)
 
+### Geographical Metrics Calculation
 
 def compute_geographic_metrics(y_true: np.ndarray, y_pred: np.ndarray, top10_labels: List[List[str]]) -> Dict[str, Optional[float]]:
     if not _is_state_task_with_geo(y_true, y_pred):
@@ -472,6 +496,7 @@ def print_geographic_diagnostics(split_name: str, geo: Dict[str, Optional[float]
         1,
     )
 
+### Smoothing Functions
 
 def build_state_similarity_matrix(classes: Sequence[str], sigma_km: float) -> Optional[np.ndarray]:
     class_list = [str(c) for c in classes]
@@ -522,6 +547,8 @@ def apply_temperature_to_probabilities(proba: np.ndarray, temperature: float) ->
     if np.any(~np.isfinite(row_sums)) or np.any(row_sums <= 0.0):
         raise RuntimeError("Encountered invalid row sums after temperature adjustment")
     return tempered / row_sums
+
+### Evaluation Functions
 
 def validate_prediction_inputs(split_name: str, y_true: np.ndarray, proba: np.ndarray, classes: Sequence[str]) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     y_true = _as_object_array(y_true)
@@ -647,10 +674,8 @@ def evaluate_predictions(split_name: str, y_true: np.ndarray, proba: np.ndarray,
         region_top5_acc=geo["region_top5_acc"],
     )
 
+### Labels / splits / data
 
-# -------------------------
-# Labels / splits / data
-# -------------------------
 def _load_labels_npz(path: str) -> Dict[str, np.ndarray]:
     with np.load(path, allow_pickle=True) as data:
         out = {k: data[k] for k in data.files}
@@ -673,7 +698,7 @@ def _select_task_arrays(labels: Dict[str, np.ndarray], task: str) -> Tuple[np.nd
     raise ValueError(task)
 
 
-def load_task_data(preprocess_dir: str, task: str, artifact_paths: Dict[str, str]) -> TaskData:
+def load_task_data(task: str, artifact_paths: Dict[str, str]) -> TaskData:
     users = np.load(artifact_paths["users"], allow_pickle=True)
     labels = _load_labels_npz(artifact_paths["labels_and_splits"])
     y_all, eligible_mask = _select_task_arrays(labels, task)
@@ -697,7 +722,7 @@ def load_task_data(preprocess_dir: str, task: str, artifact_paths: Dict[str, str
     )
 
 
-def load_masked_eval_labels(preprocess_dir: str, task: str, artifact_paths: Dict[str, str]):
+def load_masked_eval_labels(task: str, artifact_paths: Dict[str, str]):
     if not os.path.exists(artifact_paths["X_words_masked"]):
         return None
     users = np.load(artifact_paths["users"], allow_pickle=True)
@@ -716,9 +741,8 @@ def load_masked_eval_labels(preprocess_dir: str, task: str, artifact_paths: Dict
     }
 
 
-# -------------------------
-# Model loading / ensemble
-# -------------------------
+### Model loading / ensemble
+
 def load_saved_model(path: str) -> SavedModel:
     with open(path, "rb") as f:
         obj = pickle.load(f)
@@ -831,59 +855,25 @@ def choose_best_weight(
     return max(candidate_results, key=sort_key)
 
 
-# -------------------------
-# CLI
-# -------------------------
-def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate a weighted words+struct ensemble for location prediction.")
-    parser.add_argument("-t", "--type", type=str, choices=["comments", "submissions", "all"], required=False, default=DEFAULT_WORD_FEATURE_SRC)
-    parser.add_argument("-r", "--resource", type=str, required=False, default="train_location_lr_weighted")
-    parser.add_argument("-i", "--input", type=str, required=False, default=DEFAULT_PREPROC_DIR, help="Directory containing preprocessing artifacts.")
-    parser.add_argument("-o", "--output", type=str, required=False, default=DEFAULT_MODEL_DIR, help="Directory containing trained model artifacts and where ensemble metrics will be saved.")
+### Main Execution
 
-    parser.add_argument("-g", "--group", type=str, required=False)
-    parser.add_argument("-y", "--years", type=str, required=False)
-    parser.add_argument("-b", "--batchsize", type=int, required=False)
-    parser.add_argument("-c", "--sample", type=int, required=False)
-    parser.add_argument("-S", "--sample-target", dest="target", type=str, required=False)
-    parser.add_argument("--files-per-job", type=int, required=False)
-    parser.add_argument("--array", type=int, required=False)
-    parser.add_argument("--maxitems", "--max-items", "--max_items_per_author", dest="maxitems", type=int, required=False)
-    parser.add_argument("--maxfiles", "--max-files", "--max_files_to_scan", dest="maxfiles", type=int, required=False)
-    parser.add_argument("--maxradius", "--max-radius", "--max_radius", dest="maxradius", type=int, required=False)
-
-    args, unknown = parser.parse_known_args(argv)
-    if unknown:
-        log(f"[cli] ignoring unrecognized forwarded arguments: {' '.join(str(x) for x in unknown)}", 1)
-    return args
-
-
-# -------------------------
-# Main
-# -------------------------
 def main(argv: Optional[Sequence[str]] = None):
-    args = parse_args(argv)
 
-    preprocess_dir = args.input or DEFAULT_PREPROC_DIR
-    output_dir = args.output or DEFAULT_MODEL_DIR
-    os.makedirs(output_dir, exist_ok=True)
+    # resolve paths and locate needed processed feature and trained model files
 
     t0_all = time.time()
-    word_feature_src = resolve_word_feature_src(args.type)
-    artifact_paths = get_preprocess_artifact_paths(preprocess_dir, word_feature_src)
+    word_feature_src = resolve_word_feature_src(type_)
+    artifact_paths = get_preprocess_artifact_paths(PREPROC_DIR, word_feature_src)
     tag = artifact_paths["tag"]
-    model_paths = get_model_paths(output_dir, TASK, tag)
+    model_paths = get_model_paths(MODEL_DIR, TASK, tag)
 
-    log(f"[config] preprocess_dir={Path(preprocess_dir).resolve()}", 1)
-    log(f"[config] output_dir={Path(output_dir).resolve()}", 1)
+    log(f"[config] output_dir={Path(output_path).resolve()}", 1)
     log(f"[config] task={TASK} tag={tag}", 1)
-    log(f"[config] words_weight={WEIGHT_WORDS:.4f} struct_weight={WEIGHT_STRUCT:.4f}", 1)
+    log(f"[config] words_weight (matters if not optimizing weights)={WEIGHT_WORDS:.4f} struct_weight={WEIGHT_STRUCT:.4f}", 1)
     log(f"[config] temperature={TEMPERATURE:.4f}", 1)
     log(f"[config] geo_smoothing_enabled={ENABLE_GEO_SMOOTHING} sigma_km={GEO_SMOOTHING_SIGMA_KM:.1f}", 1)
-    log(f"[config] cli_type={args.type} resource={args.resource}", 1)
-    log("[config] accepted-and-ignored forwarded CLI args are supported for compatibility with cli.py", 1)
 
-    log(f"[load] preprocess_dir={Path(preprocess_dir).resolve()}", 1)
+    log(f"[load] preprocess_dir={Path(PREPROC_DIR).resolve()}", 1)
     for key, path in artifact_paths.items():
         if key == "tag":
             continue
@@ -899,8 +889,10 @@ def main(argv: Optional[Sequence[str]] = None):
     if str(words_saved.task) != TASK or str(struct_saved.task) != TASK:
         raise RuntimeError("Loaded models do not match requested TASK")
 
-    data = load_task_data(preprocess_dir, TASK, artifact_paths)
-    masked_labels = load_masked_eval_labels(preprocess_dir, TASK, artifact_paths)
+    data = load_task_data(TASK, artifact_paths)
+    masked_labels = load_masked_eval_labels(TASK, artifact_paths)
+
+    # perform train/valid/test 80/10/10 split and print diagnostics
 
     summarize_split("Train", data.y_train, topn=DEBUG_TOP_N)
     summarize_split("Valid", data.y_val, topn=DEBUG_TOP_N)
@@ -910,9 +902,13 @@ def main(argv: Optional[Sequence[str]] = None):
     print_majority_baseline(data.y_train, data.y_val, "valid")
     print_majority_baseline(data.y_train, data.y_test, "test")
 
+    # load features
+
     X_words = load_feature_matrix(artifact_paths["X_words"])
     X_struct = load_feature_matrix(artifact_paths["X_struct"])
     log(f"[data] X_words={X_words.shape} X_struct={X_struct.shape}", 1)
+
+    # load labels and masks
 
     labels = _load_labels_npz(artifact_paths["labels_and_splits"])
     y_all, eligible_mask = _select_task_arrays(labels, TASK)
@@ -938,6 +934,8 @@ def main(argv: Optional[Sequence[str]] = None):
     else:
         X_words_val_masked = None
 
+    # calculate label probabilities from the mixture logistic regression models
+
     t0_predict = time.time()
     proba_words_train = words_saved.model.predict_proba(X_words_train)
     proba_struct_train = struct_saved.model.predict_proba(X_struct_train)
@@ -952,6 +950,8 @@ def main(argv: Optional[Sequence[str]] = None):
         proba_words_val_masked = None
         proba_words_test_masked = None
     log(f"[predict] base model probability generation elapsed {(time.time() - t0_predict)/60:.2f} min", 1)
+
+    # model weight optimization grid search
 
     if OPTIMIZE_WEIGHT_STRUCT:
         candidate_weights = parse_weight_grid(WEIGHT_STRUCT_GRID)
@@ -1006,6 +1006,8 @@ def main(argv: Optional[Sequence[str]] = None):
             1,
         )
 
+    # probability blending and prediction evaluation in training/validation/test sets
+
     t0 = time.time()
     proba_train, classes = align_and_blend_probabilities(
         proba_words_train, words_saved.classes_, proba_struct_train, struct_saved.classes_, best_w_words, best_w_struct
@@ -1048,6 +1050,8 @@ def main(argv: Optional[Sequence[str]] = None):
         f"       elapsed {(time.time() - t0)/60:.2f} min",
         1,
     )
+
+    # masked model evaluation
 
     if masked_labels is not None and X_words_test_masked is not None:
         t0 = time.time()
@@ -1102,6 +1106,8 @@ def main(argv: Optional[Sequence[str]] = None):
     else:
         tmm_tempered = None
 
+    # metadata logging
+
     metadata = {
         "task": TASK,
         "tag": tag,
@@ -1145,9 +1151,11 @@ def main(argv: Optional[Sequence[str]] = None):
         "n_classes": int(len(classes)),
     }
 
+    # save metrics to output path and print final updates
+
     if SAVE_METRICS:
         stub = f"lr__weighted_words_struct__{TASK}__{tag}__wstruct-{best_w_struct:.3f}".replace(".", "p")
-        metrics_path = os.path.join(output_dir, f"{stub}__metrics.json")
+        metrics_path = os.path.join(output_path, f"{stub}__metrics.json")
         with open(metrics_path, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2, sort_keys=True)
         log(f"[saved] metrics -> {metrics_path}", 1)
@@ -1156,4 +1164,4 @@ def main(argv: Optional[Sequence[str]] = None):
 
 
 if __name__ == "__main__":
-    main(sys.argv[1:])
+    main()

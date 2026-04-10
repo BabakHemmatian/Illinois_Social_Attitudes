@@ -14,7 +14,7 @@ import ahocorasick
 from pathlib import Path
 
 # Import functions and objects from local modules
-from cli import get_args, PROJECT_ROOT,RAW_DIR
+from cli import get_args, PROJECT_ROOT,RAW_DIR, DATA_DIR
 from utils import load_terms, groups, headers, parse_range, log_report, log_error
 
 ### Argument handling
@@ -51,8 +51,7 @@ automaton.make_automaton()
 # Prepare and inspect the output path
 if not args.output:
     output_path = os.path.join(
-        dir_path.replace("code", os.path.join("data", "data_reddit_curated", group, type_, "filtered_keywords"))
-    )
+        DATA_DIR, "data_reddit_curated", group, type_, "filtered_keywords")
 else:
     output_path = args.output
 os.makedirs(output_path, exist_ok=True)

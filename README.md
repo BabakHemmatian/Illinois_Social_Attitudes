@@ -80,7 +80,7 @@ This example command will use the appropriate keyword lists from this repository
 
 #### Custom Resource Use Order
 
-Resources other than ```filter_keywords``` can be used in customized order by adding ```--input``` and ```--output``` path arguments to a command pointing to the desired input/output directories. If not provided, the paths default to the resource order indicated below.
+```filter_keywords``` must be used first. ```organize``` resources need ```filtered``` or ```labeled``` outputs to work. Otherwise, the resources can be used in customized order by adding ```--input``` and ```--output``` path arguments to a command pointing to the desired input/output directories. If not provided, the paths default to the resource order indicated below.
 
 ### Default Resource Use Order
 
@@ -94,11 +94,13 @@ The scripts may be used without any changes to recreate the ISAAC corpus. To do 
 6. _```label_sentiment```_: Generates a range of sentiment labels for a post based on [Stanza](https://stanfordnlp.github.io/stanza/sentiment.html), [TextBlob](https://textblob.readthedocs.io/en/dev/quickstart.html) and [Vader](https://github.com/cjhutto/vaderSentiment) models. The combination of multiple models supports reliable inference.
 7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. 
 8. _```label_emotion```_: Generates a range of emotion labels for a post based on the neural network models found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
-9. _```label_location```_: Estimates a submission/comment author's home location down roughly to the county level (geohash4) based on Reddit posting history. This is an updated, expanded and optimized version of the Bayesian model described [here](https://aclanthology.org/W18-6103.pdf). This resource has its own command line arguments with default values.  
+9. _```label_location```_: Estimates a submission/comment author's home location down to the state-level for US users and to global region for non-US users based on Reddit posting history. This resource is inspired by the model [here](https://aclanthology.org/W18-6103.pdf), but thoroughly updated and adapted for scalability. This resource has its own command line arguments with default values.  
+10. ```organize_types```: Combines corresponding Reddit 'comment' and 'submissions' datasets into a single timestamp-organized dataset.
+11. ```organize_anonymize```: Replaces author usernames with persistent random IDs to safeguard Reddit users' privacy. 
 
 ### Batch Processing Support
 
-All resources support batch processing on a supercomputing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. Several command line arguments such as ```--num-jobs``` control the behavior of the slurm versions of scripts. 
+All resources support batch processing on a supercomputing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Benefits will be particularly stark for ```label``` resources. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. Several command line arguments such as ```--num-jobs``` control the behavior of the slurm versions of resources. 
 
 ### CPU and GPU Acceleration
 
@@ -125,4 +127,4 @@ If there are still many irrelevant posts in your dataset, you might want to cons
 If the social-psychological labels provided alongside ISAAC work well for your use case, you can apply ```label``` resources to generate them for your new corpus. 
 
 ### Training Location Model
-The ```train_location``` resource can be used to train a Dirichlet-multinomial model for estimating user location from Reddit history (word usage, subreddits and timestamps). Note that using this resource requires ```jsonl``` files that contain word use, subreddit and timestamp frequencies for users with labeled location, identified in a separate ```csv``` file. Due to data security considerations, we do not provide the data files used for training our own model. If you would like more information about how the files should be formatted for a model that you are training, please reach out to the repository owner. 
+The ```train_location``` resource can be used to train a weighted mixture of logistic regressions for estimating user location from Reddit history (word usage, subreddits and timestamps). Note that using this resource requires ```jsonl``` files that contain word use, subreddit and timestamp frequencies for users, as well as user labels identified in a separate ```csv``` file. Due to data security considerations, we do not provide the data files used for training our own model. If you would like more information about how the files should be formatted for a model that you are training, please write to [Babak Hemmatian, Ph.D.](mailto:babak.hemmatian@gmail.com). 

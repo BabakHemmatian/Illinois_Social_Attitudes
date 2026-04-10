@@ -1,36 +1,61 @@
+### Imports
+
 # import functions and objects
-from cli import get_args, dir_path
-from utils import parse_range, groups
+from cli import get_args, DATA_DIR
+from utils import parse_range, groups, log_report, log_error
 
 # import Python packages
 import csv
+csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
 import random
 import os
 import time
 import datetime
 from pathlib import Path
 
+### Argument Handling
+
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
 type_ = args.type
 group = args.group
-sample_size = getattr(args, "sample", 200)
-target = args.target
 
-# Increase the field size limit to handle larger fields
-csv.field_size_limit(2**31 - 1)
+### sampling hyper-parameters/initializations
 
-### sampling hyper-parameters
-num_annot = 2
+num_annot = 2 # number of annotators
 
-# Survey the language-filtered input files and raise an error if an expected file is missing
-sample_path = os.path.join(
-    dir_path.replace("code", "data"),
-    "data_reddit_curated", group, type_, '{}ed_{}'.format(target.split('_')[0],target.split('_')[1])
-)
+sample_size = getattr(args, "sample", 200) # note that because of stratification, the final count might be significantly different from this specific number
+if not args.target: # determines the dataset stage to sample from
+    target = "filter_keywords_adv" # default to post-filtering dataset
+else: 
+    target = args.target # otherwise, set from the CLI arguments
 
-# Organize files by year
+# Calculate how many samples to take per year, per category (top/bottom/random)
+total_samples_per_year = sample_size // len(years)
+samples_per_type_per_year = total_samples_per_year // 3
+
+# Dictionary to store final samples for each annotator
+all_samples = {}
+for i in range(num_annot):
+    all_samples[i] = []
+
+# Global set to track document ids across reservoirs (to prevent duplicates)
+seen_ids = set()
+
+### Path Handling
+
+# set path variables
+
+# Survey the input files and raise an error if an expected file is missing
+
+# determine input folder
+if not args.input: # assumes the default folder structure and naming conventions for the repository
+    sample_path = os.path.join(DATA_DIR,"data_reddit_curated", group, type_, '{}ed_{}'.format(target.split('_')[0],"_".join(target.split('_')[1:])))
+else:
+    sample_path = args.input
+
+# Organize input files by year
 files_by_year = {year: [] for year in years}
 if type_ == "comments":
     prefix = "RC"
@@ -48,58 +73,25 @@ for year in years:
                 f"Missing {prefix} file for year {year}, month {month}. Expected path: {path_}"
             )
 
-output_dir = os.path.join(
-    dir_path.replace("code", "data"),
-    "samples",
-    group,
-    type_
-)
+# determine output folder
+if not args.output:
+    output_dir = os.path.join(DATA_DIR,
+        "samples",
+        group,
+        type_
+    )
+else:
+    output_dir = args.output
+
 os.makedirs(output_dir, exist_ok=True)
 
-# -------------------- Report logging function --------------------
 # Report file path (placed in the project directory)
-report_file_path = os.path.join(dir_path, f"Report_FilterSample.csv")
-def log_report(message):
-    """
-    Append a log entry with the current timestamp and message (including file info) to the report file.
-    """
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    with open(report_file_path, "a", encoding="utf-8", newline="") as rep_f:
-        writer = csv.writer(rep_f, delimiter="\t")
-        writer.writerow([timestamp, message])
-    print(f"{timestamp} - {message}")
-# ------------------------------------------------------------------
+report_file_path = os.path.join(output_dir, f"Report_FilterSample.csv")
 
-# -------------------- Error logging function --------------------
-def log_error(function_name, file, line_number, line_content, error):
-    """
-    Save error details to a file. The filename follows the pattern:
-    error_filter_sample_<resource>_line<line>_<timestamp>.txt.
-    The error log includes file information.
-    """
-    error_time = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    resource_identifier = os.path.basename(file)
-    error_filename = f"error_filter_sample_{resource_identifier}_line{line_number}_{error_time}.txt"
-    # Place error logs in the same directory as the report file
-    error_filepath = os.path.join(dir_path, error_filename)
-    with open(error_filepath, "w", encoding="utf-8") as ef:
-        ef.write(f"Error in {function_name} at line {line_number} in file {file}: {error}\n")
-        ef.write(f"Line content: {line_content}\n")
-    log_report(f"Logged error in {error_filename} (file: {file})")
-# ------------------------------------------------------------------
+### Main Functions
 
+# Extract and count unique social group-related keywords from the input string.
 def get_unique_keywords(keyword_str, max_keywords=100):
-    """
-    Extract and count unique social group-related keywords from the input string.
-    
-    Args:
-        keyword_str (str): Contains a set of keywords separated by commas
-        max_keywords (int): Maximum number of keywords to process
-    
-    Returns:
-        list: List of unique keywords
-        int: Number of unique keywords
-    """
     try:
         # Split by comma and clean each keyword
         keywords = keyword_str.replace('\t', ',').split(',')
@@ -119,18 +111,6 @@ def get_unique_keywords(keyword_str, max_keywords=100):
     except Exception as e:
         log_report(f"Error processing keywords: {e}")
         return [], 0
-
-# Calculate how many samples to take per year, per category (top/bottom/random)
-total_samples_per_year = sample_size // len(years)
-samples_per_type_per_year = total_samples_per_year // 3
-
-# Dictionary to store final samples for each annotator
-all_samples = {}
-for i in range(num_annot):
-    all_samples[i] = []
-
-# Global set to track document ids across reservoirs (to prevent duplicates)
-seen_ids = set()
 
 # Process each year
 def filter_sample_year(year, file_list_for_year):
@@ -178,9 +158,7 @@ def filter_sample_year(year, file_list_for_year):
                             
                             total_docs += 1
 
-                            # ===========================
-                            #    TOP SAMPLES (max)
-                            # ===========================
+                            #    TOP SAMPLES: more unique keywords
                             if len(top_reservoir) < samples_per_type_per_year:
                                 top_reservoir.append((unique_count, text, keywords, file, original_id))
                                 top_reservoir.sort(key=lambda x: x[0], reverse=True)
@@ -189,9 +167,7 @@ def filter_sample_year(year, file_list_for_year):
                                     top_reservoir[-1] = (unique_count, text, keywords, file, original_id)
                                     top_reservoir.sort(key=lambda x: x[0], reverse=True)
 
-                            # ===========================
-                            #    BOTTOM SAMPLES (min)
-                            # ===========================
+                            #    BOTTOM SAMPLES: fewer unique keywords
                             if len(bottom_reservoir) < samples_per_type_per_year:
                                 bottom_reservoir.append((unique_count, text, keywords, file, original_id))
                                 bottom_reservoir.sort(key=lambda x: x[0])
@@ -200,9 +176,7 @@ def filter_sample_year(year, file_list_for_year):
                                     bottom_reservoir[-1] = (unique_count, text, keywords, file, original_id)
                                     bottom_reservoir.sort(key=lambda x: x[0])
 
-                            # ===========================
                             #    RANDOM SAMPLES
-                            # ===========================
                             if len(random_reservoir) < samples_per_type_per_year:
                                 random_reservoir.append((unique_count, text, keywords, file, original_id))
                             else:
@@ -215,7 +189,7 @@ def filter_sample_year(year, file_list_for_year):
                         log_error("filter_sample_year", file, id_ + 1, str(line), e)
                         continue
         except Exception as e:
-            log_error("filter_sample_year", file, "N/A", "File-level error", e)
+            log_error("filter_sample_year", file, 0, "File-level error", e) # Line number for sampling error defaults to 0.
             continue
 
     log_report(f"{total_docs} documents processed for year {year} in group {args.group}.")
@@ -253,10 +227,8 @@ def filter_sample_year(year, file_list_for_year):
     for annot in range(num_annot):
         all_samples[annot].extend(year_sample_data)
 
+# After processing all years, write output
 def filter_sample_write(all_samples):
-    # ========================================
-    # After processing all years, write output
-    # ========================================
     years_tag = args.years.replace("-", "_to_")
     run_tag = f"{target}_n{sample_size}_{years_tag}"
 
@@ -286,6 +258,8 @@ def filter_sample_write(all_samples):
                     ",".join(data['keywords']),
                     data['sample_type']
                 ])
+
+### Main Execution
 
 if __name__ == "__main__":
     start_time = time.time()

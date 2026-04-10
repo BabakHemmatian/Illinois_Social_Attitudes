@@ -14,7 +14,7 @@ import ahocorasick
 from pathlib import Path
 
 # Import functions and objects from local modules
-from cli import get_args, dir_path
+from cli import get_args, PROJECT_ROOT,RAW_DIR
 from utils import load_terms, groups, headers, parse_range, log_report, log_error
 
 ### Argument handling
@@ -30,15 +30,15 @@ if isinstance(years, int):
 ### Path handling
 
 # Load social group keywords
-keyword_path = os.path.join(dir_path.replace("code", "keywords"))
+keyword_path = os.path.join(PROJECT_ROOT,"keywords")
 marginalized_words = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][0]}.txt"))
 privileged_words = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][1]}.txt"))
 
 # find the raw data folder
 if not args.input:
-    DATA_DIR = os.path.join(Path(__file__).resolve().parent.parent,"data","data_reddit_raw",type_)
+    RAW_DIR = os.path.join(RAW_DIR,type_)
 else:
-    DATA_DIR = args.input
+    RAW_DIR = args.input
 
 # Build an Aho-Corasick automaton for fast pattern matching of the keywords
 automaton = ahocorasick.Automaton()
@@ -110,7 +110,7 @@ def filter_keyword_file(file):
     # Process a single raw Reddit file by filtering for keyword matches.
     # Writes matching lines to an output CSV file.
 
-    file_path = os.path.join(DATA_DIR, file)
+    file_path = os.path.join(RAW_DIR, file)
     output_csv_file = os.path.join(output_path, f"{file.split('.zst')[0]}.csv")
     
     buffer = []
@@ -222,7 +222,7 @@ def filter_keyword_parallel():
     # Group eligible raw files by requested (year, month)
     files_by_year_month = {}
 
-    for file in sorted(os.listdir(DATA_DIR)):
+    for file in sorted(os.listdir(RAW_DIR)):
         if not file.endswith(".zst"):
             continue
 

@@ -13,10 +13,14 @@ from utils import groups, validate_years, array_span_from_years
 dir_path = os.path.dirname(os.path.realpath(__file__))  # kept for backward-compat
 CODE_DIR = Path(__file__).resolve().parent              # absolute /code
 PROJECT_ROOT = CODE_DIR.parent                          # absolute project root
+DATA_DIR = PROJECT_ROOT / "data"
+RAW_DIR = DATA_DIR / "data_reddit_raw"
+MODELS_DIR = PROJECT_ROOT / "models"                    # models folder
+
 
 # Return a Slurm/log-file-safe slug.
 def _slug(value: str) -> str:
-    
+
     return re.sub(r"[^A-Za-z0-9._-]+", "-", str(value)).strip("-")
 
 # Build a descriptive Slurm job/log prefix from the selected CLI args.
@@ -50,7 +54,9 @@ def get_args(argv=None):
         'label_sentiment',
         'label_generalization',
         'label_emotion',
-        'label_location'
+        'label_location',
+        'organize_types',
+        'organize_anonymize'
     ]
 
     # Conditionally require --batchsize
@@ -83,10 +89,11 @@ def get_args(argv=None):
         type=str,
         choices=[
             'submissions',
-            'comments'
+            'comments',
+            'all',
         ],
         required=True,
-        help="Indicate the type of Reddit post (submission or comment) you want processed."
+        help="Indicate the type of Reddit post (submission, comment, or all) you want processed. 'all' is valid for train/organize resources."
     )
     argparser.add_argument(
         '-c', '--sample',
@@ -102,12 +109,12 @@ def get_args(argv=None):
             'filter_keywords', 'filter_language','filter_relevance', 'filter_keywords_adv', 'label_moralization',
             'label_generalization', 'label_sentiment', 'label_emotion', 'label_location'
         ],
-        help='Identifies the resource from whose outputs filter_sample is to extract a subset of documents. Only valid for filter and label resources.'
+        help='Identifies the resource from whose outputs filter_sample is to extract a subset of documents. Only applicable to filter and label resources.'
     )
     argparser.add_argument(
         '-i', '--input',
         type=str,
-        help="Optionally identify the input folder for the resource. If not provided, defaults to the order of resources indicated in the repository."
+        help="The input folder for the resource. Defaults to the order of resources indicated in the repository."
     )
     argparser.add_argument(
         '-o','--output',
@@ -120,10 +127,11 @@ def get_args(argv=None):
         choices=[
             'filter_keywords', 'filter_language', 'filter_sample',
             'filter_relevance', 'filter_keywords_adv', 'metrics_interrater', 'label_moralization',
-            'label_generalization', 'label_sentiment', 'label_emotion', 'label_location', 'train_relevance', 'train_location'
+            'label_generalization', 'label_sentiment', 'label_emotion', 'label_location',
+            'train_relevance', 'train_location', 'organize_types','organize_anonymize'
         ],
         required=True,
-        help="Indicate the type of processing needed. Labeling and metrics options require the output of filtering steps for the indicated years. Filtering should be done with consecutive commands in order: keywords, language, then relevance."
+        help="Indicate the type of processing needed (see repository). 'filter_keywords' should be run first. 'organize' resources depend on 'filter'/'label' processed data files."
     )
     argparser.add_argument(
         '-g', '--group',
@@ -183,8 +191,18 @@ def get_args(argv=None):
         type=int,
         help="Max month-radius around target month to consider while scanning (default 30)."
     )
+    argparser.add_argument(
+        "--input_2", "-2",
+        dest="input_2",
+        type=str,
+        help="The second input folder for organize_types. 'type' should be different between 'input' and 'input_2'. Defaults to the most advanced 'filter' or 'label' resource based on the repository's default pathing and resource order if not provided."
+    )
 
     args = argparser.parse_args(argv)
+
+    # Restrict -t all to the location training resources only.
+    if args.type == "all" and "train" not in args.resource and "organize" not in args.resource:
+        argparser.error("--type all is only valid for train/organize resources")
 
     # Validate group if required
     if args.resource in needs_group and not args.group:
@@ -248,7 +266,7 @@ if __name__ == "__main__":
             slurm_vars.append(f"sample={args.sample}")
         if args.target is not None:
             slurm_vars.append(f"target={args.target}")
-        
+
         # Location-labeling sampling controls (forwarded to label_location)
         if getattr(args, "maxitems", None) is not None:
             slurm_vars.append(f"maxitems={args.maxitems}")

@@ -127,8 +127,8 @@ def get_args(argv=None):
         choices=[
             'filter_keywords', 'filter_language', 'filter_sample',
             'filter_relevance', 'filter_keywords_adv', 'metrics_interrater', 'label_moralization',
-            'label_generalization', 'label_sentiment', 'label_emotion', 'label_location',
-            'train_relevance', 'train_location', 'organize_types','organize_anonymize'
+            'label_generalization', 'label_sentiment', 'label_emotion', 'label_location','organize_types','organize_anonymize',
+            'train_relevance', 'train_location_preprocess', 'train_location_training','train_location_weighting'
         ],
         required=True,
         help="Indicate the type of processing needed (see repository). 'filter_keywords' should be run first. 'organize' resources depend on 'filter'/'label' processed data files."

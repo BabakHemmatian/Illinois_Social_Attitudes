@@ -1,7 +1,7 @@
 ### Imports
 
 # import functions and objects
-from cli import get_args
+from cli import get_args, DATA_DIR, MODELS_DIR
 from utils import parse_range, headers, log_report, check_reqd_files, log_error
 
 # import Python packages
@@ -39,16 +39,13 @@ threshold = 0.6 # The confidence threshold for the rarest class. If the model's 
 ### Path Handling
 
 # set path variables
-dir_path = os.path.dirname(os.path.realpath(__file__))  # kept for backward-compat
-CODE_DIR = Path(__file__).resolve().parent              # absolute /code
-PROJECT_ROOT = CODE_DIR.parent                          # absolute project root
 
 # Survey the input files
 if args.input:
     input_path = os.path.abspath(args.input)
 else:
     input_path = os.path.join(
-        PROJECT_ROOT, "data", "data_reddit_curated", group, type_, "filtered_language"
+        DATA_DIR, "data_reddit_curated", group, type_, "filtered_language"
     )
 
 file_list = check_reqd_files(years, input_path, type_)
@@ -58,7 +55,7 @@ if args.output:
     output_path = os.path.abspath(args.output)
 else:
     output_path = os.path.join(
-        PROJECT_ROOT, "data", "data_reddit_curated", group, type_, "filtered_relevance"
+        DATA_DIR, "data_reddit_curated", group, type_, "filtered_relevance"
     )
 
 os.makedirs(output_path, exist_ok=True)
@@ -91,7 +88,7 @@ if array_index is not None:
     )
 
 # Load relevance model
-model_path = os.path.join(PROJECT_ROOT,"models",
+model_path = os.path.join(MODELS_DIR,
                           f"filter_relevance_{group}")
 tokenizer = RobertaTokenizerFast.from_pretrained(model_path)
 model = RobertaForSequenceClassification.from_pretrained(model_path).to(device)

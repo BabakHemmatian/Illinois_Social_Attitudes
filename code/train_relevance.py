@@ -1,7 +1,7 @@
 ### Imports
 
 ## helper functions, kept in a separate file for readability
-from cli import get_args, dir_path
+from cli import get_args, MODELS_DIR, DATA_DIR
 from utils import dataset_split, split_dataset_to_file, split_dataset_from_file, f1_calculator
 
 ## needed python packages and functions
@@ -22,7 +22,7 @@ from datetime import datetime
 import os
 from pathlib import Path
 
-## CLI args & basic configuration
+### Argument Handling
 args = get_args()
 group = args.group          # e.g. "race"
 type_ = args.type           # "comments" or "submissions"
@@ -44,18 +44,18 @@ training = False
 ## 3) Retrain (fine-tune) an already-trained model on additional data
 #    and evaluate on a held-out retraining test set.
 retraining = True
-retrain_trial = 3 # identifies the retraining run
+retrain_trial = 8 # identifies the retraining run
 
 ### Hyperparameters
 
 ## Training
 max_length = 512           # max tokens per document
 train_batch_size = 8       # batch size for original training
-retrain_batch_size = 4     # batch size for retraining
+retrain_batch_size = 8     # batch size for retraining
 epochs = 1                 # original training epochs
 custom_training = False    # use penalty for specific mistakes if True (see the next line)
 penalize_confusion = "0_to_1" # which direction in mistakes is more important to fix: [true label]_to_[wrong_classification]
-penalty_weight = 1.0       # only matters if custom_training is True
+penalty_weight = 0.5       # only matters if custom_training is True
 num_annot = 2              # number of annotators in original data
 
 ## Thresholding (used only at inference time)
@@ -67,12 +67,10 @@ threshold = 0.6            # probability threshold
 if training and retraining:
     raise ValueError("Set at most one of `training` or `retraining` to True.")
 
-## a function that records the parameters for logging purposes
+### Logging
+
+# records the parameters for logging purposes
 def collect_run_params():
-    """
-    Automatically collect all major run parameters for logging.
-    This avoids manual sync when new parameters are added.
-    """
     return {
         # Run identity
         "group": group,
@@ -101,32 +99,26 @@ def collect_run_params():
         "threshold": threshold,
     }
 
-### Model / paths
+### Path Handling
 
-model_name = "roberta-large" 
-# NOTE: roberta-base was used for skin tone, roberta-large for the rest in the original training
-
-CODE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CODE_DIR.parent
-DATA_DIR = PROJECT_ROOT / "data"
+# NOTE: Model loading assumes the default pathing.
+if group == "skin_tone":
+    model_name = "roberta-base"
+else:
+    model_name = "roberta-large" 
 
 model_path = os.path.join(
-    PROJECT_ROOT,
-    "models",
-    f"filter_relevance_{group}_{model_name}_{trial}",
+    MODELS_DIR,f"filter_relevance_{group}_{model_name}_{trial}",
 )
 
 retrain_path = os.path.join(
-    PROJECT_ROOT,
-    "models",
+    MODELS_DIR,
     f"retrain_relevance_{group}_{model_name}_{retrain_trial}",
 )
 
 # where to find the rated relevance samples
 ratings_path = DATA_DIR / "data_relevance_ratings" / type_
 reratings_path = DATA_DIR / "data_relevance_QAratings"
-
-
 
 ### Utilities
 
@@ -412,7 +404,8 @@ def get_prediction(
         return_tensors="pt",
     ).to(device)
 
-    outputs = model(**inputs)
+    with torch.no_grad():
+        outputs = model(**inputs)
     probs = outputs[0].softmax(1)[0]  # (2,) for binary classification
 
     if thresholding:
@@ -642,10 +635,10 @@ if retraining:
     # fine-tune the already-loaded model
     retrainer = make_weighted_trainer(
     model=model,
-    train_dataset=train_dataset,
-    eval_dataset=valid_dataset,
-    training_args=training_args,
-    class_weights=orig_weights,
+    train_dataset=retrain_dataset,
+    eval_dataset=revalid_dataset,
+    training_args=retraining_args,
+    class_weights=retrain_weights,
     custom_training=custom_training,
     penalty_weight=penalty_weight,
     penalize_confusion=penalize_confusion,
@@ -653,6 +646,7 @@ if retraining:
 
     # perform the retraining
     retrainer.train()
+    model.eval()
 
     # save retrained model
     os.makedirs(retrain_path, exist_ok=True)

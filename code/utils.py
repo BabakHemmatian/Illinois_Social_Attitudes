@@ -9,7 +9,7 @@ import time
 from datetime import datetime
 from collections import Counter
 from pathlib import Path
-from typing import List, Dict, Tuple, Optional, Any
+from typing import List, Dict, Literal, Tuple, Optional, Any
 import zstandard
 import io
 import json
@@ -29,6 +29,9 @@ groups = {
 
 # Information stored for each comment in ISAAC output files
 headers = ["id", "parent id", "text", "author", "time", "subreddit", "score", "matched patterns"]
+
+# default resource order
+default_resource = ["filtered_keywords","filtered_language","filtered_relevance","filtered_keywords_adv","labeled_moralization","labeled_sentiment","labeled_generalization","labeled_emotion","labeled_location"]
 
 # Basic parsing / validation helpers (used by multiple scripts)
 
@@ -150,42 +153,108 @@ def f1_calculator(labels,predictions):
 
     return precision, recall, F_1
 
-## File discovery helper
+## File discovery helpers
+
+FolderType = Literal["comments", "submissions"]
+def detect_reddit_folder_type(folder: str | Path) -> FolderType:
+    folder = Path(folder)
+
+    if not folder.is_dir():
+        raise ValueError(f"Not a directory: {folder}")
+
+    csv_files = [p.name for p in folder.iterdir() if p.is_file() and p.suffix == ".csv"]
+
+    has_rc = any(name.startswith("RC") for name in csv_files)
+    has_rs = any(name.startswith("RS") for name in csv_files)
+
+    if has_rc and has_rs:
+        raise ValueError(
+            f"Folder {folder} contains both RC and RS CSV files. Provide an unambiguous input folder."
+        )
+    if has_rc:
+        return "comments"
+    if has_rs:
+        return "submissions"
+
+    raise FileNotFoundError(
+        f"Folder {folder} contains no Reddit CSV files with RC or RS prefixes."
+    )
+
 def check_reqd_files(years: List[int], check_path: str | Path, type_: str) -> List[str]:
-    PREFIX_MAP = {"comments": "RC", "submissions": "RS"}
+    PREFIX_MAP = {
+        "comments": "RC",
+        "submissions": "RS",
+        "all": "ALL",
+    }
+
     prefix = PREFIX_MAP.get(type_)
     if not prefix:
         raise ValueError(f"Invalid type_: {type_}")
 
-    check_path = str(check_path)
-    all_files = [f for f in os.listdir(check_path) if f.endswith(".csv") and f.startswith(prefix)]
+    check_path = Path(check_path)
+    if not check_path.is_dir():
+        raise FileNotFoundError(f"Directory does not exist: {check_path}")
+
+    all_files = sorted(
+        p for p in check_path.iterdir()
+        if p.is_file() and p.suffix == ".csv" and p.name.startswith(prefix)
+    )
 
     matched_files: List[str] = []
     files_by_year: Dict[str, set] = {str(y): set() for y in years}
 
-    for f in sorted(all_files):
-        for y in years:
-            if str(y) in f:
-                matched_files.append(os.path.join(check_path, f))
+    for p in all_files:
+        m = re.search(r"(\d{4})-(\d{2})", p.name)
+        if not m:
+            continue
 
-        m = re.search(r"(\d{4})-(\d{2})", f)
-        if m:
-            year, month = m.groups()
-            if year in files_by_year:
-                files_by_year[year].add(month)
+        year, month = m.groups()
+
+        if year in files_by_year:
+            files_by_year[year].add(month)
+            matched_files.append(str(p))
 
     if not matched_files:
         raise FileNotFoundError(
             f"No files found in {check_path} for type_={type_} and years={years}"
         )
 
-    expected_months = set(f"{m:02d}" for m in range(1, 13))
+    expected_months = {f"{m:02d}" for m in range(1, 13)}
     for y in years:
         missing = expected_months - files_by_year.get(str(y), set())
         if missing:
             print(f"Warning: For {type_} year {y}, missing months: {sorted(missing)}")
 
     return matched_files
+
+def find_latest_resource_dir(base_dir: str | Path, default_resource: List[str]) -> Path:
+    base_dir = Path(base_dir)
+    if not base_dir.is_dir():
+        raise FileNotFoundError(f"Base curated directory does not exist: {base_dir}")
+
+    curated_folders = {p.name for p in base_dir.iterdir() if p.is_dir()}
+
+    for resource in reversed(default_resource):
+        if resource in curated_folders:
+            return base_dir / resource
+
+    raise ValueError(
+        f"No matching resource found in {base_dir}. "
+        f"Expected one of: {', '.join(default_resource)}"
+    )
+
+def validate_resource_dir(path: str | Path, default_resource: List[str]) -> Path:
+    path = Path(path)
+    if not path.is_dir():
+        raise ValueError(f"Input path is not a directory: {path}")
+
+    if path.name not in default_resource:
+        raise ValueError(
+            f"{path.name} does not correspond to a proper curated dataset. "
+            f"Choose from: {', '.join(default_resource)}"
+        )
+
+    return path
 
 ## Dataset splitting utilities
 
@@ -332,7 +401,6 @@ def add_features_for_row(
     text: str,
     subreddit: str,
     time_value: str,
-    include_hours: bool = True,
 ) -> None:
     for tok in tokenize(text):
         k = f"w:{tok}"
@@ -344,11 +412,10 @@ def add_features_for_row(
             k = f"s:{s}"
             counts[k] = counts.get(k, 0) + 1
 
-    if include_hours:
-        hr = parse_time_to_hour(time_value)
-        if hr is not None:
-            k = f"h:{hr:02d}"
-            counts[k] = counts.get(k, 0) + 1
+    hr = parse_time_to_hour(time_value)
+    if hr is not None:
+        k = f"h:{hr:02d}"
+        counts[k] = counts.get(k, 0) + 1
 
 # First pass over an input CSV: aggregate sparse features per author.
 def build_author_feature_map_from_csv(
@@ -357,7 +424,6 @@ def build_author_feature_map_from_csv(
     text_col: str = "text",
     subreddit_col: str = "subreddit",
     time_col: str = "time",
-    include_hours: bool = True,
 ) -> Dict[str, Dict[str, int]]:
     author_to_counts: Dict[str, Dict[str, int]] = {}
     with open(file_path, "r", encoding="utf-8-sig", errors="ignore") as f:
@@ -378,7 +444,6 @@ def build_author_feature_map_from_csv(
                 text=row.get(text_col, ""),
                 subreddit=row.get(subreddit_col, ""),
                 time_value=row.get(time_col, ""),
-                include_hours=include_hours,
             )
     return author_to_counts
 
@@ -409,7 +474,6 @@ def build_author_feature_map_from_raw_zst(
     target_authors: set[str],
     type_: str,
     max_items_per_author: int = 100,
-    include_hours: bool = True,
 ) -> Dict[str, Dict[str, int]]:
     """Wrapper returning only feature counts (without per-author seen counts)."""
     author_to_counts, _author_seen = build_author_feature_map_from_raw_zst_with_seen(
@@ -417,7 +481,6 @@ def build_author_feature_map_from_raw_zst(
         target_authors=target_authors,
         type_=type_,
         max_items_per_author=max_items_per_author,
-        include_hours=include_hours,
     )
     return author_to_counts
 
@@ -428,7 +491,6 @@ def build_author_feature_map_from_raw_zst_with_seen(
     target_authors: set[str],
     type_: str,
     max_items_per_author: int = 100,
-    include_hours: bool = True,
 ) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
     author_to_counts: Dict[str, Dict[str, int]] = {}
     author_seen: Dict[str, int] = {a: 0 for a in target_authors}
@@ -467,7 +529,6 @@ def build_author_feature_map_from_raw_zst_with_seen(
                 text=text,
                 subreddit=subreddit,
                 time_value=str(created_utc),
-                include_hours=include_hours,
             )
 
             author_seen[author] += 1

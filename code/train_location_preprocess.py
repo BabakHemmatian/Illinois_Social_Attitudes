@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import csv
 import json
 import math
@@ -22,29 +21,19 @@ from scipy.sparse import save_npz
 from sklearn.feature_extraction import DictVectorizer
 from sklearn.feature_extraction.text import TfidfTransformer
 
-from cli import get_args
-from utils import prepare_splits
+from utils import prepare_splits, resolve_word_feature_src
 
 ### Argument Handling
 
 # Extract and transform CLI arguments 
 args = get_args()
-type_ = "all" # the only valid type for this resource. Overrides CLI input
+type_ = args.type
 
 # Logging
 VERBOSITY = int(os.environ.get("VERBOSITY", "1"))
 def log(msg: str, level: int = 1, stream=None):
     if level <= VERBOSITY:
         print(msg, file=stream)
-
-### Argument Handling
-
-args = get_args()
-type_ = args.type
-array_index   = getattr(args, "array", None)
-if args.array is not None:
-    array = args.array
-files_per_job = getattr(args, "files_per_job", 1)
 
 ### Path Handling
 
@@ -88,11 +77,7 @@ MASK_TIER1_WORDS = os.environ.get("MASK_TIER1_WORDS", "1") == "1"
 
 # which "type" dataset the word features come from. Can be set via CLI.
 # NOTE: Only relevant for word features. subreddit and timestamp featurs automatically set to "all"
-
-DEFAULT_WORD_FEATURE_SRC = os.environ.get("WORD_FEATURE_SRC", "all").strip().lower()
-if DEFAULT_WORD_FEATURE_SRC not in {"comments", "submissions", "all"}:
-    raise ValueError("WORD_FEATURE_SRC must be one of: comments, submissions, all")
-WORD_FEATURE_SRC = DEFAULT_WORD_FEATURE_SRC
+WORD_FEATURE_SRC = resolve_word_feature_src(type_)
 
 # Word feature selection
 # NOTE: freq: tf-idf; mi: 
@@ -809,12 +794,6 @@ def build_label_arrays(
 
 ### Feature Cache
 # prevents re-generation of existing processed feature files. 
-
-def resolve_word_feature_src(type_arg: str) -> str:
-    src = (type_arg or DEFAULT_WORD_FEATURE_SRC).strip().lower()
-    if src not in {"comments", "submissions", "all"}:
-        raise ValueError("type / WORD_FEATURE_SRC must be one of: comments, submissions, all")
-    return src
 
 def _artifact_tag() -> str:
     return f"src-{WORD_FEATURE_SRC}"

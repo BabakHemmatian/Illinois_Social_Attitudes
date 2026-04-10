@@ -1,5 +1,7 @@
+### Imports
+
 # import functions and objects
-from cli import get_args, dir_path
+from cli import get_args, DATA_DIR
 from utils import parse_range, log_report, check_reqd_files
 import os
 import csv
@@ -12,12 +14,7 @@ import datetime
 import re
 from pathlib import Path
 
-# note the tool use order in the readme
-
-## Models:
-# VADER: to include a rule-based one focused on social media data
-# TextBlob: for a neural continuous measure (trained on movie reviews)
-# Stanza: for a neural categorical measure (broader training data)
+### Argument Handling
 
 # Extract and transform CLI arguments 
 args = get_args()
@@ -31,21 +28,35 @@ files_per_job = getattr(args, "files_per_job", 1)
 if files_per_job is None or files_per_job < 1:
     files_per_job = 1
 
-# set path variables
-CODE_DIR = Path(__file__).resolve().parent         
-PROJECT_ROOT = CODE_DIR.parent                     
-DATA_DIR = PROJECT_ROOT / "data"
+### Path Handling
 
-moralization_labeled_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_moralization"
-output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_sentiment"
+# set path variables
+
+if not args.input:
+    input_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_moralization"
+else:
+    input_path = args.input
+
+if not args.output:
+    output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_sentiment"
+else:
+    output_path = args.output
+
 output_path.mkdir(parents=True, exist_ok=True)
 
 # prepare the report file
-report_file_path = os.path.join(dir_path, f"report_label_sentiment.csv")
+report_file_path = os.path.join(output_path, f"report_label_sentiment.csv")
 log_report(report_file_path)
 
 # Build file_list organized by year and raise an error if an expected file is missing 
-file_list = check_reqd_files(years, moralization_labeled_path, type_)
+file_list = check_reqd_files(years, input_path, type_)
+
+### Main Functions
+
+## Model inclusion rationale:
+# VADER: to include a rule-based one focused on social media data
+# TextBlob: for a neural continuous measure (trained on movie reviews)
+# Stanza: for a neural categorical measure (broader training data)
 
 # generates labels for an entire month's worth of documents. It resumes labeling if it comes across incomplete output.
 def label_sentiment_file(file):
@@ -55,9 +66,7 @@ def label_sentiment_file(file):
     start_time = time.time()
 
     # Compute output path that mirrors input directory structure
-    relative_path = Path(file).relative_to(moralization_labeled_path)
-    output_file_path = output_path / relative_path
-    output_file_path.parent.mkdir(parents=True, exist_ok=True)
+    output_file_path = os.path.join(output_path, Path(file).name)
 
     # determine resume position from any existing output
     mode = "w"
@@ -215,61 +224,57 @@ def label_sentiment_file(file):
 
     return total_lines_written
 
-##########################################
-# Main execution: process each file and aggregate stats
-##########################################
-start_time = time.time()
-overall_docs = 0
+### Main execution
 
-# Process each file from the file_list (global mode)
+# process each file and aggregate stats
+if __name__ == "__main__":
 
-# create the analyzer objects
-nlp = stanza.Pipeline(lang='en', processors='tokenize,sentiment')
-analyzer = SentimentIntensityAnalyzer()
+    start_time = time.time()
+    overall_docs = 0
 
-# Process each file from the file_list (global mode)
-if args.array is not None: # for batch processing (Slurm array task)
-    start = array * files_per_job
-    end = min(start + files_per_job, len(file_list))
-    if start >= len(file_list):
-        raise RuntimeError(
-            f"Array index {array} out of range for {len(file_list)} files (files_per_job={files_per_job})."
-        )
-    for file in file_list[start:end]:
-        overall_docs += label_sentiment_file(file)
+    # Process each file from the file_list (global mode)
 
-else: # for sequential processing
-    for file in file_list:        
-        overall_docs += label_sentiment_file(file)
+    # create the analyzer objects
+    nlp = stanza.Pipeline(lang='en', processors='tokenize,sentiment')
+    analyzer = SentimentIntensityAnalyzer()
 
-    ##########################################
-    # ----- Check for missing monthly outputs -----
-    for year in years:
-        expected_months = set(f"{m:02d}" for m in range(1, 13))
-        processed_months = set()
-        for file in os.listdir(output_path):
-            m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
-            if m:
-                processed_months.add(m.group(1))
-        missing = expected_months - processed_months
-        if missing:
-            log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
-    ##########################################
+    # Process each file from the file_list (global mode)
+    if args.array is not None: # for batch processing (Slurm array task)
+        start = array * files_per_job
+        end = min(start + files_per_job, len(file_list))
+        if start >= len(file_list):
+            raise RuntimeError(
+                f"Array index {array} out of range for {len(file_list)} files (files_per_job={files_per_job})."
+            )
+        for file in file_list[start:end]:
+            overall_docs += label_sentiment_file(file)
 
-    overall_elapsed = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Sentiment labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+    else: # for sequential processing
+        for file in file_list:        
+            overall_docs += label_sentiment_file(file)
 
-    ##########################################
-    # ----- Aggregate overall statistics and save final summary report -----
-    final_report = [
-        ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
-        [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
-    ]
-    final_report_file = os.path.join(output_path, "final_report_label_sentiment.csv")
-    with open(final_report_file, "a+", encoding="utf-8", newline="") as rf:
-        writer = csv.writer(rf)
-        writer.writerows(final_report)
-    log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
-    ##########################################
+        # Check for missing monthly outputs
+        for year in years:
+            expected_months = set(f"{m:02d}" for m in range(1, 13))
+            processed_months = set()
+            for file in os.listdir(output_path):
+                m = re.search(r'RC_' + str(year) + r'-(\d{2})\.csv', file)
+                if m:
+                    processed_months.add(m.group(1))
+            missing = expected_months - processed_months
+            if missing:
+                log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
 
-    
+        overall_elapsed = (time.time() - start_time) / 60
+        log_report(report_file_path, f"Sentiment labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+
+        # Aggregate overall statistics and save final summary report 
+        final_report = [
+            ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
+            [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
+        ]
+        final_report_file = os.path.join(output_path, "final_report_label_sentiment.csv")
+        with open(final_report_file, "a+", encoding="utf-8", newline="") as rf:
+            writer = csv.writer(rf)
+            writer.writerows(final_report)
+        log_report(report_file_path, f"Final summary report saved to: {final_report_file}")

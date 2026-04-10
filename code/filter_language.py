@@ -1,7 +1,7 @@
 ### Imports
 
 # Import functions and objects
-from cli import get_args, dir_path
+from cli import get_args, MODELS_DIR, DATA_DIR
 from utils import parse_range, headers, check_reqd_files, log_report, log_error
 
 # Import Python packages
@@ -26,7 +26,7 @@ years = parse_range(args.years)
 ### Path Handling
 
 # Load the fastText language identification model
-model_path = Path(__file__).resolve().parent.parent / "models" / "filter_language.bin"
+model_path = os.path.join(MODELS_DIR,"filter_language.bin")
 model = fasttext.load_model(str(model_path))
 
 # Define a function that applies the fastText model to a given text
@@ -37,9 +37,7 @@ def detect_language(text):
 
 # Survey the input files and raise an error if an expected file within the requested range is missing
 if not args.input:
-    input_path = os.path.join(
-        Path(__file__).resolve().parent.parent,
-        "data", "data_reddit_curated", group, type_, "filtered_keywords"
+    input_path = os.path.join(DATA_DIR, "data_reddit_curated", group, type_, "filtered_keywords"
     )
 else:
     input_path = args.input
@@ -71,8 +69,7 @@ if array_index is not None:
 if args.output:
     output_path = args.output
 else:
-    output_path = os.path.join(
-        dir_path.replace("code", "data"),
+    output_path = os.path.join(DATA_DIR,
         "data_reddit_curated", group, type_, "filtered_language"
     )
 os.makedirs(output_path, exist_ok=True)

@@ -94,7 +94,7 @@ The scripts may be used without any changes to recreate the ISAAC corpus. To do 
 6. _```label_sentiment```_: Generates a range of sentiment labels for a post based on [Stanza](https://stanfordnlp.github.io/stanza/sentiment.html), [TextBlob](https://textblob.readthedocs.io/en/dev/quickstart.html) and [Vader](https://github.com/cjhutto/vaderSentiment) models. The combination of multiple models supports reliable inference.
 7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. 
 8. _```label_emotion```_: Generates a range of emotion labels for a post based on the neural network models found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
-9. _```label_location```_: Estimates a submission/comment author's home location down to the state-level for US users and to global region for non-US users based on Reddit posting history. This resource is inspired by the model [here](https://aclanthology.org/W18-6103.pdf), but thoroughly updated and adapted for scalability. This resource has its own command line arguments with default values.  
+9. _```label_location```_: Estimates a submission/comment author's home location down to the state-level for US users and to global region for non-US users based on Reddit posting history. This is the slowest resource, whose behavior can be managed using unique command line arguments.  
 10. ```organize_types```: Combines corresponding Reddit 'comment' and 'submissions' datasets into a single timestamp-organized dataset.
 11. ```organize_anonymize```: Replaces author usernames with persistent random IDs to safeguard Reddit users' privacy. 
 
@@ -106,7 +106,7 @@ All resources support batch processing on a supercomputing cluster by adding the
 
 _filter_ resources use CPU-based parallelization for extremely fast processing. 
 
-_label_ resources become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). These resources print out the "device" as part of their logging, which can be used to confirm the use of "cuda".
+_label_ resources, with the exception of ```label_location```, become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). These resources print out the "device" as part of their logging, which can be used to confirm the use of "cuda".
 
 ## Adaptations
 
@@ -127,4 +127,7 @@ If there are still many irrelevant posts in your dataset, you might want to cons
 If the social-psychological labels provided alongside ISAAC work well for your use case, you can apply ```label``` resources to generate them for your new corpus. 
 
 ### Training Location Model
-The ```train_location``` resource can be used to train a weighted mixture of logistic regressions for estimating user location from Reddit history (word usage, subreddits and timestamps). Note that using this resource requires ```jsonl``` files that contain word use, subreddit and timestamp frequencies for users, as well as user labels identified in a separate ```csv``` file. Due to data security considerations, we do not provide the data files used for training our own model. If you would like more information about how the files should be formatted for a model that you are training, please write to [Babak Hemmatian, Ph.D.](mailto:babak.hemmatian@gmail.com). 
+The ```train_location``` resources can be used to train a weighted mixture of logistic regressions for estimating user location from Reddit history (word usage, subreddits and timestamps). We found this modeling approach to be the most robust on Reddit data.
+1. Run ```train_location_preprocess``` twice with ```Feature_Set``` set to ```words``` and ```struct```, assigning ```TASK``` based on your training goal (```top```:US vs. non-US, ```state```: US states, ```region```: Europe, Asia_Oceania, Americas and Africa). This resource requires ```jsonl``` feature frequency files for users, as well a user label ```csv```. Due to data security considerations, we do not provide our training data. To learn more about dataset development and formatting per this resource, write [us](mailto:babak.hemmatian@gmail.com). 
+2. Train your ```TASK``` model on preprocessed ```words``` and ```struct``` feature sets using ```train_location_training```. 
+3. Run ```train_location_weighting``` to find the best mixture model for generalizable classification. 

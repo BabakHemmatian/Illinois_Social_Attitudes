@@ -1,10 +1,14 @@
+### Imports
+
 # import functions and objects
-from cli import get_args, dir_path
+from cli import get_args,DATA_DIR,MODELS_DIR
 from utils import parse_range, log_report, check_reqd_files
 
 # import Python packages
 import os
 import csv
+import sys
+csv.field_size_limit(sys.maxsize)
 import time
 import torch
 import datetime
@@ -12,7 +16,8 @@ import re
 from transformers import RobertaTokenizerFast, RobertaForSequenceClassification, DistilBertForSequenceClassification, DistilBertTokenizerFast
 from pathlib import Path
 
-# Extract and transform CLI arguments 
+### Argument Handling
+
 # Extract and transform CLI arguments 
 args = get_args()
 years = parse_range(args.years)
@@ -24,22 +29,31 @@ if args.array is not None:
     array = args.array
 files_per_job = getattr(args, "files_per_job", 1)
 
+### Path Handling
 
 # set path variables
-CODE_DIR = Path(__file__).resolve().parent         
-PROJECT_ROOT = CODE_DIR.parent                     
-MODELS_DIR = PROJECT_ROOT / "models"
-DATA_DIR = PROJECT_ROOT / "data"
 
-generalization_labeled_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_generalization"
-output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_emotion"
+if not args.input:
+    input_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_generalization"
+else:
+    input_path = args.input
+
+# Build file_list organized by year and raise an error if an expected file is missing 
+file_list = check_reqd_files(years, input_path, type_)
+
+if not args.output:
+    output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_emotion"
+else:
+    output_path = args.output
 output_path.mkdir(parents=True, exist_ok=True)
+
+# prepare the report file
+report_file_path = os.path.join(output_path, f"report_label_emotion.csv")
+
+### Model Preparation
 
 # Use CUDA if available
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-# prepare the report file
-report_file_path = os.path.join(dir_path, f"report_label_emotion.csv")
 log_report(report_file_path,f"Using device: {device}")
 
 # Load emotion models
@@ -64,11 +78,11 @@ model1.eval() # set model to evaluation mode
 model2.eval() # set model to evaluation mode
 model3.eval() # set model to evaluation mode
 
+### Main Functions
+
+# Tokenizes and encodes a batch of texts, then returns predicted labels.
 @torch.no_grad()
 def get_predictions(texts, tokenizer=None, model=None, max_length=512):
-    """
-    Tokenize and encode a batch of texts, then return predicted labels.
-    """
     inputs = tokenizer(
         texts,
         padding=True,
@@ -77,7 +91,7 @@ def get_predictions(texts, tokenizer=None, model=None, max_length=512):
         return_tensors="pt"
     ).to(device)
     
-    # this part uses mixed-precision classification for faster performance. 
+    # mixed-precision classification for faster performance. 
     with torch.no_grad():
         with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
             outputs = model(**inputs)
@@ -88,10 +102,6 @@ def get_predictions(texts, tokenizer=None, model=None, max_length=512):
 
     return predictions, probs
 
-
-# Build file_list organized by year and raise an error if an expected file is missing 
-file_list = check_reqd_files(years, generalization_labeled_path, type_)
-
 # generates labels for a month's worth of documents. Resumes labeling if it finds incomplete output files. 
 def label_emotion_file(file):
     
@@ -101,9 +111,7 @@ def label_emotion_file(file):
     start_time = time.time()
 
     # Mirror input directory structure for output path
-    relative_path = Path(file).relative_to(generalization_labeled_path)
-    output_file_path = output_path / relative_path
-    output_file_path.parent.mkdir(parents=True, exist_ok=True)
+    output_file_path = os.path.join(output_path, Path(file).name)
 
     # Determine resume position by reading 'source_row' column by name
     mode = "w"
@@ -234,49 +242,52 @@ def label_emotion_file(file):
 
     return total_lines
 
-# Main execution: process each file and aggregate stats
-start_time = time.time()
+### Main execution
 
-overall_docs = 0
+# process each file and aggregate stats
+if __name__ == "__main__":
+    start_time = time.time()
 
-if args.array is not None: # for batch processing (Slurm array task)
-    start = array * files_per_job
-    end = min(start + files_per_job, len(file_list))
-    if start >= len(file_list):
-        raise RuntimeError(
-            f"Array index {array} out of range for {len(file_list)} files (files_per_job={files_per_job})."
-        )
-    for file in file_list[start:end]:
-        overall_docs += label_emotion_file(file)
+    overall_docs = 0
 
-else: # for sequential processing
-    for file in file_list:        
-        overall_docs += label_emotion_file(file)
+    if args.array is not None: # for batch processing (Slurm array task)
+        start = array * files_per_job
+        end = min(start + files_per_job, len(file_list))
+        if start >= len(file_list):
+            raise RuntimeError(
+                f"Array index {array} out of range for {len(file_list)} files (files_per_job={files_per_job})."
+            )
+        for file in file_list[start:end]:
+            overall_docs += label_emotion_file(file)
 
-    # Check for missing monthly outputs
-    if not args.array:
-        prefix = "RC" if type_ == "comments" else "RS"
-        for year in years:
-            expected_months = set(f"{m:02d}" for m in range(1, 13))
-            processed_months = set()
-            for file in os.listdir(output_path):
-                m = re.search(rf"{prefix}_{year}-(\d{{2}})\.csv", file)
-                if m:
-                    processed_months.add(m.group(1))
-            missing = expected_months - processed_months
-            if missing:
-                log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
+    else: # for sequential processing
+        for file in file_list:        
+            overall_docs += label_emotion_file(file)
 
-        overall_elapsed = (time.time() - start_time) / 60
-        log_report(report_file_path, f"Emotion labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+        # Check for missing monthly outputs
+        if not args.array:
+            prefix = "RC" if type_ == "comments" else "RS"
+            for year in years:
+                expected_months = set(f"{m:02d}" for m in range(1, 13))
+                processed_months = set()
+                for file in os.listdir(output_path):
+                    m = re.search(rf"{prefix}_{year}-(\d{{2}})\.csv", file)
+                    if m:
+                        processed_months.add(m.group(1))
+                missing = expected_months - processed_months
+                if missing:
+                    log_report(report_file_path, f"Warning: For year {year}, missing output files for months: {sorted(list(missing))}")
 
-    # Aggregate overall statistics and save final summary report
-    final_report = [
-        ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
-        [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
-    ]
-    final_report_file = os.path.join(output_path, "final_report_label_emotion.csv")
-    with open(final_report_file, "a+", encoding="utf-8", newline="") as rf:
-        writer = csv.writer(rf)
-        writer.writerows(final_report)
-    log_report(report_file_path, f"Final summary report saved to: {final_report_file}")
+            overall_elapsed = (time.time() - start_time) / 60
+            log_report(report_file_path, f"Emotion labeling for the {group} social group for {args.years} finished in {overall_elapsed:.2f} minutes. Total processed rows: {overall_docs}")
+
+        # Aggregate overall statistics and save final summary report
+        final_report = [
+            ["Timestamp", "Social Group", "Years", "Total Processed Rows", "Total Elapsed Time (min)"],
+            [datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"), group, args.years, overall_docs, f"{overall_elapsed:.2f}"]
+        ]
+        final_report_file = os.path.join(output_path, "final_report_label_emotion.csv")
+        with open(final_report_file, "a+", encoding="utf-8", newline="") as rf:
+            writer = csv.writer(rf)
+            writer.writerows(final_report)
+        log_report(report_file_path, f"Final summary report saved to: {final_report_file}")

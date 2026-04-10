@@ -16,7 +16,8 @@ from scipy.sparse import load_npz, hstack
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
 
-from cli import get_args,MODELS_DIR
+from cli import get_args, MODELS_DIR
+from utils import resolve_word_feature_src
 
 # Logging
 VERBOSITY = int(os.environ.get("VERBOSITY", "1"))
@@ -28,7 +29,7 @@ def log(msg: str, level: int = 1, stream=None):
 ### Argument Handling
 
 args = get_args()
-type_ = "all" # the only valid value for this resource. Overrides CLI argument input.
+type_ = args.type
 
 ### Path Handling
 
@@ -121,12 +122,6 @@ def _subset_rows(X, idx: np.ndarray):
     return X[idx]
 
 ## Validate preprocessed data
-
-def resolve_word_feature_src(type_arg: str) -> str:
-    src = (type_arg or DEFAULT_WORD_FEATURE_SRC).strip().lower()
-    if src not in {"comments", "submissions", "all"}:
-        raise ValueError("type / WORD_FEATURE_SRC must be one of: comments, submissions, all")
-    return src
 
 def artifact_tag(word_feature_src: str) -> str:
     return f"src-{word_feature_src}"
@@ -708,10 +703,10 @@ def main():
         f"[config] solver={MODEL_SOLVER} C={MODEL_C} max_iter={MODEL_MAX_ITER} tol={MODEL_TOL} class_weight={MODEL_CLASS_WEIGHT}",
         1,
     )
-    log(f"Overriding any provided 'type' argument. Using both comment and submission data.", 1)
-
+    log(f"[config] word_feature_src={resolve_word_feature_src(type_)}", 1)
+    
     # locate saved preprocessed artifacts
-    word_feature_src = resolve_word_feature_src(args.type)
+    word_feature_src = resolve_word_feature_src(type_)
     artifact_paths = verify_preprocess_artifacts(PREPROC_PATH, FEATURE_SET, word_feature_src)
 
     log(f"[load] feature set requested: {FEATURE_SET}", 1)

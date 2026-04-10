@@ -16,7 +16,7 @@ from scipy.sparse import load_npz, hstack
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
 
-from cli import get_args
+from cli import get_args,MODELS_DIR
 
 # Logging
 VERBOSITY = int(os.environ.get("VERBOSITY", "1"))
@@ -32,13 +32,9 @@ type_ = "all" # the only valid value for this resource. Overrides CLI argument i
 
 ### Path Handling
 
-CODE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CODE_DIR.parent
-MODEL_PATH = PROJECT_ROOT / "models"
-
 # where the preprocessed feature sets are stored
 if not args.input: 
-    PREPROC_PATH = os.path.join(MODEL_PATH, "label_location", "preprocessed_streaming")
+    PREPROC_PATH = os.path.join(MODELS_DIR, "label_location", "preprocessed_streaming")
 else:
     PREPROC_PATH = args.input
 
@@ -46,7 +42,7 @@ else:
 if not args.output:
     MODEL_DIR = os.environ.get(
         "TRAIN_OUTPUT_DIR",
-        os.path.join(MODEL_PATH, "label_location", "trained_lr"),
+        os.path.join(MODELS_DIR, "label_location", "trained_lr"),
     )
 else:
     MODEL_DIR = args.output

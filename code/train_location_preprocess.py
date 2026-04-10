@@ -13,11 +13,10 @@ import time
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import asdict, dataclass
-from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 import numpy as np
-from cli import get_args
+from cli import get_args, DATA_DIR, MODELS_DIR
 from scipy import sparse
 from scipy.sparse import save_npz
 from sklearn.feature_extraction import DictVectorizer
@@ -49,32 +48,30 @@ files_per_job = getattr(args, "files_per_job", 1)
 
 ### Path Handling
 
-CODE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CODE_DIR.parent
-DATA_DIR = PROJECT_ROOT / "data"
-MODEL_PATH = PROJECT_ROOT / "models"
-
 # find the feature set input files
-SUBS_JSONL = os.path.join(DATA_DIR, "data_reddit_location", "subreddit_counts.jsonl")
-HOURS_JSONL = os.path.join(DATA_DIR, "data_reddit_location", "hour_counts.jsonl")
-VOCAB_FILE_COMMENTS = os.path.join(DATA_DIR, "data_reddit_location", "vocab_counts_comments.jsonl")
-VOCAB_FILE_SUBMISSIONS = os.path.join(DATA_DIR, "data_reddit_location", "vocab_counts_submissions.jsonl")
+if not args.input:
+    input_path = DATA_DIR / "data_reddit_location"
+else:
+    input_path = args.input
+SUBS_JSONL = os.path.join(input_path, "subreddit_counts.jsonl")
+HOURS_JSONL = os.path.join(input_path, "hour_counts.jsonl")
+VOCAB_FILE_COMMENTS = os.path.join(input_path, "vocab_counts_comments.jsonl")
+VOCAB_FILE_SUBMISSIONS = os.path.join(input_path, "vocab_counts_submissions.jsonl")
 
-if args.input:
-    log(f"[args] input override was provided ({args.input}) but this resource currently uses repository-configured raw input paths.", 1)
+# where the raw input files are
 
 # Output path handling
 if not args.output:
     PREPROC_PATH = os.environ.get(
         "PREPROC_PATH",
-        os.path.join(MODEL_PATH, "label_location", "preprocessed_streaming"),
+        os.path.join(MODELS_DIR, "label_location", "preprocessed_streaming"),
     )
 else:
     PREPROC_PATH = args.output
 os.makedirs(PREPROC_PATH, exist_ok=True)
 
 
-SPLIT_DIR = os.environ.get("SPLIT_DIR", os.path.join(MODEL_PATH, "train_location_data_split")) # where the train/valid/test data split is stored for reproducibility
+SPLIT_DIR = os.environ.get("SPLIT_DIR", os.path.join(MODELS_DIR, "train_location_data_split")) # where the train/valid/test data split is stored for reproducibility
 SAVE_PREPROCESSOR = os.environ.get("SAVE_PREPROCESSOR", "1") == "1"
 
 ### Preprocessing Hyperparameters
@@ -979,7 +976,7 @@ def preprocess_location_data():
     ## Label Processing
 
     # load the labeled user data
-    labels_csv = os.path.join(DATA_DIR, "data_reddit_location", "combined_geohash.csv")
+    labels_csv = os.path.join(input_path, "combined_geohash.csv")
 
     # cache check/use
     t0_all = time.time()

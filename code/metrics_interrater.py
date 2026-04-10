@@ -1,5 +1,7 @@
+### Imports
+
 # import functions and objects
-from cli import get_args,dir_path
+from cli import get_args,DATA_DIR
 
 # import python packages
 from sklearn.metrics import cohen_kappa_score
@@ -7,20 +9,26 @@ from scipy.stats import pearsonr
 import csv
 from pathlib import Path
 
+### Agreement Metric Hyperparameters
+
 num_annot = 2 # number of annotators
 # NOTE: This script currently only supports two annotators
+
+### Argument Handling
 
 args = get_args()
 group = args.group
 type_ = args.type
 
-# set path variables
-CODE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CODE_DIR.parent
-DATA_DIR = PROJECT_ROOT / "data"
+### Path Handling
 
 # where to find the rated relevance samples
-ratings_path = DATA_DIR / "data_relevance_ratings" / type_ 
+if not args.input:    
+    ratings_path = DATA_DIR / "data_relevance_ratings" / type_ 
+else:
+    ratings_path = args.input
+
+### Main Evaluation
 
 # start a dictionary for storing each annoator's ratings
 ratings = {i:{} for i in range(num_annot)}

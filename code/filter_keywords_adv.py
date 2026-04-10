@@ -1,17 +1,19 @@
+### Imports
+
 # Import functions and objects
-from cli import get_args, dir_path
+from cli import get_args, DATA_DIR, PROJECT_ROOT
 from utils import parse_range, log_report, log_error, load_terms, groups, check_reqd_files
 
 # Import Python packages
 import os, time
 import csv
+csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
 import hyperscan as hs
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 import re
 
-# Increase the field size limit to handle larger fields
-csv.field_size_limit(2**31 - 1)
+### Argument Handling
 
 # Extract and transform CLI arguments
 args = get_args()
@@ -23,28 +25,32 @@ if files_per_job is None or files_per_job < 1:
     files_per_job = 1
 array = args.array if args.array is not None else None
 
-# set path variables
-CODE_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = CODE_DIR.parent
-DATA_DIR = PROJECT_ROOT / "data"
+### Path Handling
 
-relevance_filtered_path = DATA_DIR / "data_reddit_curated" / group / type_ / "filtered_relevance"
-output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "filtered_keywords_adv"
-output_path.mkdir(parents=True, exist_ok=True)
+# set the input folder
+if not args.input:
+    input_path = DATA_DIR / "data_reddit_curated" / group / type_ / "filtered_relevance"
+else:
+    input_path = args.input
 
-# prepare the report file
-output_report_filename = "Report_filter_keywords_adv.csv"
-report_file_path = os.path.join(dir_path, output_report_filename)
-
-# Load social group keywords
-keyword_path = os.path.join(dir_path.replace("code", "keywords"))
+# Load social group advanced regular experession sets
+keyword_path = os.path.join(PROJECT_ROOT,"keywords")
 marginalized_words = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][0]}_adv.txt"))
 privileged_words   = load_terms(os.path.join(keyword_path, f"{group}_{groups[group][1]}_adv.txt"))
 all_words = marginalized_words + privileged_words
 
-# Build canonical ordered list of required monthly files.
-# This mirrors the Slurm-safe slicing pattern already used by later resources.
-file_list = check_reqd_files(years, relevance_filtered_path, type_)
+# set and survey the output folder
+if not args.output:
+    output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "filtered_keywords_adv"
+else:
+    output_path = args.output
+output_path.mkdir(parents=True, exist_ok=True)
+file_list = check_reqd_files(years, input_path, type_)
+
+# prepare the report file
+report_file_path = os.path.join(output_path, "Report_filter_keywords_adv.csv")
+
+### Filtering Hyperparameters/initializations
 
 # CSV header index assumptions:
 MATCHES_COL_INDEX = 7
@@ -59,6 +65,7 @@ db = None                  # Hyperscan/Chimera database
 id2label = None            # pattern_id -> "Category: term"
 compiled_re_by_id = None   # only for fallback: pattern_id -> Python re.Pattern
 
+### Helper Functions
 
 def _build_id2label(m_words, p_words, group_key):
     mapping = {}
@@ -108,7 +115,6 @@ def _compile_db(patterns):
     compiled_re_by_id = compiled
     return db_local
 
-
 # intialize the multiprocessing workers: load terms, build id2label, compile DB (Chimera or HS prefilter).
 def _worker_init(group_key, keyword_path):
     global db, id2label, marginalized_words, privileged_words, all_words
@@ -128,7 +134,6 @@ def _worker_init(group_key, keyword_path):
         return 0
 
     db.scan(b"warmup", _noop_cb, context=[])
-
 
 # Read a CSV file from input path, scan BODY_COL_INDEX with multi-regex, write matched rows to output_path.
 def filter_keyword_adv_file(file_name):
@@ -207,7 +212,6 @@ def filter_keyword_adv_file(file_name):
     )
     return total_lines, matched_lines
 
-
 def _select_files_for_this_run():
     if array is None:
         return file_list
@@ -229,6 +233,7 @@ def _select_files_for_this_run():
         log_report(report_file_path, f"Selected input file: {Path(selected_file).name}")
     return selected_files
 
+### Main Function
 
 def filter_keyword_adv_parallel():
     total_lines = 0
@@ -255,7 +260,7 @@ def filter_keyword_adv_parallel():
         expected_file_count = len(file_list)
         actual_file_count = sum(
             1 for f in os.listdir(output_path)
-            if f.endswith(".csv") and f != output_report_filename
+            if f.endswith(".csv") and f != Path(report_file_path).name
         )
         if actual_file_count != expected_file_count:
             log_report(
@@ -266,6 +271,7 @@ def filter_keyword_adv_parallel():
     log_report(report_file_path, f"Total lines processed: {total_lines}")
     log_report(report_file_path, f"Total matched lines: {matched_lines}")
 
+# Main Execution
 
 if __name__ == "__main__":
     overall_start_time = time.time()

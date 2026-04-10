@@ -256,6 +256,13 @@ def validate_resource_dir(path: str | Path, default_resource: List[str]) -> Path
 
     return path
 
+# for location model word features
+def resolve_word_feature_src(type_arg: str) -> str:
+    src = (type_arg or WORD_FEATURE_SRC).strip().lower()
+    if src not in {"comments", "submissions", "all"}:
+        raise ValueError("type / WORD_FEATURE_SRC must be one of: comments, submissions, all")
+    return src
+
 ## Dataset splitting utilities
 
 # splits data into train/test with given proportion

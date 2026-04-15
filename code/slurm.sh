@@ -65,6 +65,14 @@ if [[ -n "${target:-}" ]]; then
   ARGS+=( "-S" "${target}" )
 fi
 
+# Forward optional input/output overrides
+if [[ -n "${input:-}" ]]; then
+  ARGS+=( "-i" "${input}" )
+fi
+if [[ -n "${output:-}" ]]; then
+  ARGS+=( "-o" "${output}" )
+fi
+
 # Only pass --array if Slurm provided it
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   ARGS+=( "--array" "${SLURM_ARRAY_TASK_ID}" )

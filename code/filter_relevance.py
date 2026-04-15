@@ -231,9 +231,13 @@ def filter_relevance_file(file):
         passed_counter = 0
 
         # Determine resume position if output file already exists.
-        last_processed, resume_ok = get_last_processed_row(...)
+        last_processed = get_last_processed_row(
+        output_file_path,
+        report_file_path=report_file_path,
+        file_for_log=file,
+        )
 
-        if os.path.exists(output_file_path) and resume_ok:
+        if os.path.exists(output_file_path) and last_processed > 0:
             mode = "a"
         else:
             mode = "w"

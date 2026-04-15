@@ -3,7 +3,6 @@
 #SBATCH --mail-type=END,FAIL
 #SBATCH --time=48:00:00
 #SBATCH --mem=32G
-#SBATCH --gres=gpu:1
 # --cpus-per-task=8
 #SBATCH --export=ALL
 

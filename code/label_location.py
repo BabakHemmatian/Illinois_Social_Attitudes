@@ -34,11 +34,11 @@ from utils import (
 
 TOP_CONF_THRESHOLD = 0.60
 REG_CONF_MARGIN = 0.10
-STA_CONF_MARGIN = 0.05
+STA_CONF_MARGIN = 0.12
 UNKNOWN_LABEL = "UNK"
 
-MIN_SAMPLES_FOR_INFERENCE = 5
-MIN_SAMPLES_FOR_CACHE = 50
+MIN_SAMPLES_FOR_INFERENCE = 10
+MIN_SAMPLES_FOR_CACHE = 25
 
 regional_weights = {"words": 0.7, "struct": 0.3}
 top_weights = {"words": 0.55, "struct": 0.45}
@@ -56,7 +56,7 @@ if isinstance(years, int):
     years = [years]
 group = args.group
 max_items_per_author = getattr(args, "maxitems", None) or 25
-max_files_to_scan = getattr(args, "maxfiles", None) or 60
+max_files_to_scan = getattr(args, "maxfiles", None) or 24 # two years
 max_radius = getattr(args, "maxradius", None) or 30
 batch_size = max(1, int(getattr(args, "batchsize", DEFAULT_BATCH_SIZE) or DEFAULT_BATCH_SIZE))
 

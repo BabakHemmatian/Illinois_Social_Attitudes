@@ -8,14 +8,16 @@ import pickle
 import re
 import sqlite3
 import time
+import traceback
 from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
 from scipy import sparse
 
-from cli import get_args, MODELS_DIR
+from cli import get_args, MODELS_DIR, DATA_DIR
 from utils import (
     build_author_feature_map_from_raw_zst_with_seen,
     cache_get_locations,
@@ -53,9 +55,9 @@ years = parse_range(args.years)
 if isinstance(years, int):
     years = [years]
 group = args.group
-max_items_per_author = getattr(args, "maxitems", 25)
-max_files_to_scan = getattr(args, "maxfiles", 60)
-max_radius = getattr(args, "maxradius", 30)
+max_items_per_author = getattr(args, "maxitems", None) or 25
+max_files_to_scan = getattr(args, "maxfiles", None) or 60
+max_radius = getattr(args, "maxradius", None) or 30
 batch_size = max(1, int(getattr(args, "batchsize", DEFAULT_BATCH_SIZE) or DEFAULT_BATCH_SIZE))
 
 
@@ -82,6 +84,7 @@ else:
     input_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_emotion"
 
 file_list = check_reqd_files(years, input_path, type_)
+file_list = sorted(file_list, key=lambda p: Path(p).name)
 
 if args.output:
     output_path = Path(args.output)
@@ -326,9 +329,27 @@ def cache_put_location_details(db_path: str, details_by_author: Dict[str, Dict[s
 ### Model loading + inference
 
 
+@dataclass
+class SavedModel:
+    """Mirror of the SavedModel dataclass from the training script, needed for pickle deserialization."""
+    feature_set: str
+    task: str
+    classes_: list
+    model: object
+    metadata: dict
+
+
+class _RemappingUnpickler(pickle.Unpickler):
+    """Remap SavedModel to the local class regardless of which __main__ module it was saved from."""
+    def find_class(self, module, name):
+        if name == "SavedModel":
+            return SavedModel
+        return super().find_class(module, name)
+
+
 def load_pickle(path: str):
     with open(path, "rb") as f:
-        return pickle.load(f)
+        return _RemappingUnpickler(f).load()
 
 
 def _unwrap_saved_model(obj) -> Tuple[object, List[str], Dict[str, object]]:
@@ -906,7 +927,7 @@ def label_location_parallel() -> None:
         except Exception:
             log_report(report_file_path, f"[warn] invalid --array '{array_idx}', running full set")
 
-    max_workers = min(4, os.cpu_count() or 1)
+    max_workers = min(2, os.cpu_count() or 1)
     log_report(report_file_path, f"Using {max_workers} processes for parallel month processing.")
 
     total_rows = 0
@@ -943,7 +964,8 @@ def label_location_parallel() -> None:
                     total_authors += n_auth
                     total_raw += n_raw
                 except Exception as e:
-                    log_report(report_file_path, f"[error] month failed for {src}: {e}")
+                    tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+                    log_report(report_file_path, f"[error] month failed for {src}: {e}\n{tb}")
 
     log_report(report_file_path, f"[summary] total rows written: {total_rows:,} total authors: {total_authors:,} raw-scanned authors: {total_raw:,}")
 

@@ -6,6 +6,7 @@ import os
 import sys
 import re
 import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from collections import Counter
 from pathlib import Path
@@ -461,7 +462,7 @@ def iter_zst_json_lines(file_path: str | Path):
 
     file_path = str(file_path)
     with open(file_path, "rb") as fh:
-        dctx = zstandard.ZstdDecompressor(max_window_size=2 ** 31)  # 2GB window cap
+        dctx = zstandard.ZstdDecompressor(max_window_size=2 ** 31)
         stream_reader = dctx.stream_reader(fh, read_across_frames=True)
         text_stream = io.TextIOWrapper(stream_reader, encoding="utf-8")
         for line in text_stream:
@@ -491,31 +492,23 @@ def build_author_feature_map_from_raw_zst(
     )
     return author_to_counts
 
-# Stream one or more raw .zst files and build sparse features per author.
-# NOTE: Collects up to max_items_per_author items per author. Returns (author_to_counts, author_seen).
-def build_author_feature_map_from_raw_zst_with_seen(
-    raw_files: List[str | Path],
-    target_authors: set[str],
+# Process one contiguous chunk of raw .zst files, returning partial (counts, seen) dicts.
+# Used by the parallel scan path; no early-exit since chunks run concurrently.
+def _scan_raw_file_chunk(
+    file_chunk: List[str],
+    target_authors: set,
     type_: str,
-    max_items_per_author: int = 100,
+    max_items_per_author: int,
 ) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
-    author_to_counts: Dict[str, Dict[str, int]] = {}
-    author_seen: Dict[str, int] = {a: 0 for a in target_authors}
-
-    if not target_authors:
-        return author_to_counts, author_seen
-
-    remaining = len(target_authors)
-
-    for rf in raw_files:
+    local_counts: Dict[str, Dict[str, int]] = {}
+    local_seen: Dict[str, int] = {}
+    for rf in file_chunk:
         for obj in iter_zst_json_lines(rf):
             author = (obj.get("author") or "").strip()
-            if not author or author not in author_seen:
+            if not author or author not in target_authors:
                 continue
-            if author_seen[author] >= max_items_per_author:
+            if local_seen.get(author, 0) >= max_items_per_author:
                 continue
-
-            # Extract fields by type
             if type_ == "comments":
                 text = (obj.get("body") or "")
                 subreddit = (obj.get("subreddit") or "")
@@ -524,20 +517,81 @@ def build_author_feature_map_from_raw_zst_with_seen(
                 body = (obj.get("selftext") or "")
                 text = (title + "\n" + body).strip()
                 subreddit = (obj.get("subreddit") or "")
+            created_utc = obj.get("created_utc", "")
+            counts = local_counts.get(author)
+            if counts is None:
+                counts = {}
+                local_counts[author] = counts
+            add_features_for_row(counts, text=text, subreddit=subreddit, time_value=str(created_utc))
+            local_seen[author] = local_seen.get(author, 0) + 1
+    return local_counts, local_seen
 
+
+# Stream one or more raw .zst files and build sparse features per author.
+# NOTE: Collects up to max_items_per_author items per author. Returns (author_to_counts, author_seen).
+# NOTE: n_scan_workers > 1 splits files across threads (zstd decompression releases the GIL).
+#       Use only in single-process contexts (SLURM array tasks); not for multi-process local runs.
+def build_author_feature_map_from_raw_zst_with_seen(
+    raw_files: List[str | Path],
+    target_authors: set[str],
+    type_: str,
+    max_items_per_author: int = 100,
+    n_scan_workers: int = 1,
+) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
+    author_to_counts: Dict[str, Dict[str, int]] = {}
+    author_seen: Dict[str, int] = {a: 0 for a in target_authors}
+
+    if not target_authors:
+        return author_to_counts, author_seen
+
+    raw_files = [str(f) for f in raw_files]
+
+    if n_scan_workers > 1 and len(raw_files) > 1:
+        n_workers = min(n_scan_workers, len(raw_files))
+        chunks = [raw_files[i::n_workers] for i in range(n_workers)]
+
+        def scan_chunk(chunk):
+            return _scan_raw_file_chunk(chunk, target_authors, type_, max_items_per_author)
+
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            results = list(pool.map(scan_chunk, chunks))
+
+        for local_counts, local_seen in results:
+            for author, counts in local_counts.items():
+                merged = author_to_counts.get(author)
+                if merged is None:
+                    author_to_counts[author] = dict(counts)
+                else:
+                    for k, v in counts.items():
+                        merged[k] = merged.get(k, 0) + v
+            for author, seen in local_seen.items():
+                author_seen[author] = min(author_seen.get(author, 0) + seen, max_items_per_author)
+
+        return author_to_counts, author_seen
+
+    # Sequential path with early-exit (used locally and in multi-process mode)
+    remaining = len(target_authors)
+    for rf in raw_files:
+        for obj in iter_zst_json_lines(rf):
+            author = (obj.get("author") or "").strip()
+            if not author or author not in author_seen:
+                continue
+            if author_seen[author] >= max_items_per_author:
+                continue
+            if type_ == "comments":
+                text = (obj.get("body") or "")
+                subreddit = (obj.get("subreddit") or "")
+            else:
+                title = (obj.get("title") or "")
+                body = (obj.get("selftext") or "")
+                text = (title + "\n" + body).strip()
+                subreddit = (obj.get("subreddit") or "")
             created_utc = obj.get("created_utc", "")
             counts = author_to_counts.get(author)
             if counts is None:
                 counts = {}
                 author_to_counts[author] = counts
-
-            add_features_for_row(
-                counts,
-                text=text,
-                subreddit=subreddit,
-                time_value=str(created_utc),
-            )
-
+            add_features_for_row(counts, text=text, subreddit=subreddit, time_value=str(created_utc))
             author_seen[author] += 1
             if author_seen[author] == max_items_per_author:
                 remaining -= 1

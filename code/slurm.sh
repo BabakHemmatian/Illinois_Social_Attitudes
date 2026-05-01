@@ -11,6 +11,12 @@ set -euo pipefail
 export PYTHONUNBUFFERED=TRUE
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# Configure GPUs if allocated by Slurm
+if [[ -n "${SLURM_GPUS:-}" ]]; then
+  export CUDA_VISIBLE_DEVICES="${SLURM_GPUS_ON_NODE:-0}"
+  echo "[slurm.sh] GPU allocation detected: CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}"
+fi
+
 requires_years=("filter_keywords" "filter_language" "filter_relevance" "filter_keywords_adv" "filter_sample" "label_moralization" "label_sentiment" "label_generalization" "label_emotion" "label_location" "organize_types" "organize_anonymize")
 requires_batch=("filter_relevance" "label_moralization" "label_generalization" "label_emotion" "label_sentiment" "label_location")
 
@@ -132,7 +138,8 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
   fi
 
   job_name="$(IFS=__ ; echo "${name_parts[*]}")"
-  scontrol update JobId="${SLURM_JOB_ID}" JobName="${job_name}" >/dev/null 2>&1 || true
+  # NOTE: The scontrol command was hanging on the particular cluster we used, hence the commenting out.
+  # scontrol update JobId="${SLURM_JOB_ID}" JobName="${job_name}" >/dev/null 2>&1 || true
 fi
 
 echo "Running: python ${ARGS[*]}"

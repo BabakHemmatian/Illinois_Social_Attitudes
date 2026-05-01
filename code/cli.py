@@ -23,6 +23,12 @@ gpu_resources = {
     "label_emotion",
 }
 
+# Per-resource SLURM resource overrides (override slurm.sh defaults at submission time).
+# GPU resources inherit --mem=50G from slurm.sh; CPU-only resources that need less are listed here.
+RESOURCE_SLURM_RESOURCES = {
+    "label_location": {"mem": "16G", "cpus-per-task": 4},
+}
+
 ### Global Path Handling
 
 dir_path = os.path.dirname(os.path.realpath(__file__))  # kept for backward-compat
@@ -319,6 +325,12 @@ if __name__ == "__main__":
 
         if args.resource in gpu_resources and use_gpu:
             cmd_parts.extend(["--gres", "gpu:1"])
+
+        slurm_res = RESOURCE_SLURM_RESOURCES.get(args.resource, {})
+        if "mem" in slurm_res:
+            cmd_parts.extend(["--mem", str(slurm_res["mem"])])
+        if "cpus-per-task" in slurm_res:
+            cmd_parts.extend(["--cpus-per-task", str(slurm_res["cpus-per-task"])])
 
         if array_flag:
             cmd_parts.extend(["--array", array_flag])

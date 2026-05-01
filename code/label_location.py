@@ -56,9 +56,13 @@ if isinstance(years, int):
     years = [years]
 group = args.group
 max_items_per_author = getattr(args, "maxitems", None) or 25
-max_files_to_scan = getattr(args, "maxfiles", None) or 24 # two years
+max_files_to_scan = getattr(args, "maxfiles", None) or 24
 max_radius = getattr(args, "maxradius", None) or 30
 batch_size = max(1, int(getattr(args, "batchsize", DEFAULT_BATCH_SIZE) or DEFAULT_BATCH_SIZE))
+# Parallel file scan: enabled only for SLURM array tasks (single-process); falls back to 1 locally
+# and in multi-process mode to avoid compounding memory with ProcessPoolExecutor workers.
+_slurm_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", 0))
+n_scan_workers = _slurm_cpus if (_slurm_cpus > 0 and getattr(args, "array", None) is not None) else 1
 
 
 ### Path Handling
@@ -860,6 +864,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         target_authors=set(remaining_authors),
         type_=type_,
         max_items_per_author=max_items_per_author,
+        n_scan_workers=n_scan_workers,
     )
     log_report(
         report_file_path,
@@ -927,7 +932,8 @@ def label_location_parallel() -> None:
         except Exception:
             log_report(report_file_path, f"[warn] invalid --array '{array_idx}', running full set")
 
-    max_workers = min(2, os.cpu_count() or 1)
+    _slurm_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", 0))
+    max_workers = _slurm_cpus if _slurm_cpus > 0 else min(2, os.cpu_count() or 1)
     log_report(report_file_path, f"Using {max_workers} processes for parallel month processing.")
 
     total_rows = 0

@@ -1,4 +1,6 @@
-<img src="ISAAC_Logo_1.png" alt="ISAAC Logo" width="300">
+<p align="center">
+  <img src="ISAAC_Logo_1.png" alt="ISAAC Logo" width="300">
+</p>
 
 # Illinois Social Attitudes Aggregate Corpus (ISAAC)
 

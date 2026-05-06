@@ -584,20 +584,29 @@ def _fmt_prob(value: Optional[float]) -> str:
 
 
 def unknown_result(top_scores: Optional[List[Tuple[str, float]]] = None, seen_count: int = 0, reason: str = "unknown") -> Dict[str, object]:
-    contender_label = ""
-    contender_prob = None
-    if top_scores and len(top_scores) >= 2:
-        contender_label = top_scores[1][0]
-        contender_prob = float(top_scores[1][1])
+    top1_label = ""
+    top1_prob: Optional[float] = None
+    top2_label = ""
+    top2_prob: Optional[float] = None
+    if top_scores:
+        top1_label = top_scores[0][0]
+        top1_prob = float(top_scores[0][1])
+        if len(top_scores) >= 2:
+            top2_label = top_scores[1][0]
+            top2_prob = float(top_scores[1][1])
+    # When the final label is UNK, the contender exposes the rejected best guess
+    # (top-1) so the field consistently means "best candidate not chosen as the
+    # label" across UNK and labeled rows. The top_contender_* fields keep the
+    # top-level classifier's raw runner-up.
     return {
         "location": UNKNOWN_LABEL,
         "location_prob": None,
-        "contender_location": contender_label,
-        "contender_location_prob": contender_prob,
-        "top_location": top_scores[0][0] if top_scores else "",
-        "top_location_prob": float(top_scores[0][1]) if top_scores else None,
-        "top_contender_location": contender_label,
-        "top_contender_location_prob": contender_prob,
+        "contender_location": top1_label,
+        "contender_location_prob": top1_prob,
+        "top_location": top1_label,
+        "top_location_prob": top1_prob,
+        "top_contender_location": top2_label,
+        "top_contender_location_prob": top2_prob,
         "tier": reason,
         "seen_count": seen_count,
     }

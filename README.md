@@ -2,7 +2,7 @@
 
 # Illinois Social Attitudes Aggregate Corpus (ISAAC)
 
-This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, sentiment, generalizations and emotions. The resources also support user location estimation.
+This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, generalization, sentiment, emotions and state-level US location mapping. 
 
 **Corpus size (comments): 554,464,184 posts**
 
@@ -13,7 +13,7 @@ This repository contains tools for the development and evaluation of the **Illin
 
 ## Corpus Access
 
-A coding-free website for convenient access to the full comment corpus or samples of it can be found [here](http://141.142.219.201/). Submissions will be integrated into the same dataset soon.
+A coding-free website for convenient access to the full comment corpus or samples of it can be found [here](isaac.psychology.illinois.edu). Submissions will be integrated into the same dataset soon.
 
 ## Corpus Interpretation
 
@@ -25,7 +25,7 @@ This repository contains the scripts that allow you to rebuild ISAAC from scratc
 - Filtering Reddit content by keywords and the use of English language. 
 - Applying pre-trained neural networks and complex pattern matching to prune irrelevant content picked up by keywords (e.g., "Black" in a context other than race). 
 - Generating generalized language (e.g., genericity), moralization, sentiment and emotion labels for the pruned corpus.
-- Estimate user location down roughly to the county-level based on Reddit activity history.
+- Estimate user location down to US state based on Reddit activity history.
 
 The scripts were designed to be easily adapted for developing other Reddit corpora. See the **Adaptations** section below for more information.
 
@@ -37,13 +37,13 @@ If you use this repository in your work, please cite us as follows:
 
 ### APA Format
 ```
-Hemmatian, B., Hadjarab, S., Yu, R. (2025). The Illinois Social Attitudes Aggregate Corpus [Computer software]. GitHub. [https://github.com/BabakHemmatian/Illinois_Social_Attitudes](https://github.com/BabakHemmatian/Illinois_Social_Attitudes)
+Hemmatian, B., Kurdi, B. (2025). The Illinois Social Attitudes Aggregate Corpus [Computer software]. GitHub. [https://github.com/BabakHemmatian/Illinois_Social_Attitudes](https://github.com/BabakHemmatian/Illinois_Social_Attitudes)
 ```
 ### BibTex Format
 ```
 **BibTex: **
 @misc{Hemmatian2025,
-  author       = {Hemmatian, Babak and Hadjarab, Sarah and Yu, Rui},
+  author       = {Hemmatian, Babak and Kurdi, Benedek},
   title        = {Illinois_Social_Attitudes},
   year         = {2025},
   publisher    = {GitHub},
@@ -131,3 +131,6 @@ The ```train_location``` resources can be used to train a weighted mixture of lo
 1. Run ```train_location_preprocess``` twice with ```Feature_Set``` set to ```words``` and ```struct```, assigning ```TASK``` based on your training goal (```top```:US vs. non-US, ```state```: US states, ```region```: Europe, Asia_Oceania, Americas and Africa). This resource requires ```jsonl``` feature frequency files for users, as well a user label ```csv```. Due to data security considerations, we do not provide our training data. To learn more about dataset development and formatting per this resource, write [us](mailto:babak.hemmatian@gmail.com). 
 2. Train your ```TASK``` model on preprocessed ```words``` and ```struct``` feature sets using ```train_location_training```. 
 3. Run ```train_location_weighting``` to find the best mixture model for generalizable classification. This script reports performance on both regular and masked dataset variants to help researchers ensure model generalizability.
+
+## Acknowledgments
+We thank Sarah Hadjarab, Jessica Chen and Rui Yu for their help with script and data development. 

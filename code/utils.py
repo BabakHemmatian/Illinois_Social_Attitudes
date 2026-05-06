@@ -616,8 +616,32 @@ def find_raw_month_files(raw_dir: str | Path, type_: str, year: int, month: str)
 
 ## Persistent author -> location cache (SQLite)
 
-# Initialize the SQLite cache for author->location mapping. 
+# Run a no-arg callable, retrying on sqlite3.OperationalError 'database is
+# locked' with exponential backoff and small jitter. SQLite's busy_timeout
+# already handles most lock contention, but startup bursts of many array tasks
+# briefly hammer the DB during table-touching reads/writes; this gives those
+# operations a few extra chances before they surface as a fatal error. Returns
+# the callable's result; non-lock OperationalErrors and other exceptions
+# propagate immediately.
+def _sqlite_retry_on_locked(operation, *, max_attempts: int = 8, base_delay: float = 0.5, max_delay: float = 8.0):
+    last_err: Optional[sqlite3.OperationalError] = None
+    for attempt in range(max_attempts):
+        try:
+            return operation()
+        except sqlite3.OperationalError as e:
+            if "locked" not in str(e).lower():
+                raise
+            last_err = e
+            delay = min(max_delay, base_delay * (2 ** attempt)) + random.uniform(0.0, 0.5)
+            time.sleep(delay)
+    if last_err is not None:
+        raise last_err
+
+# Initialize the SQLite cache for author->location mapping.
 # NOTE: Uses WAL journal mode for better concurrent read/write behavior.
+# NOTE: location_prob is stored alongside location to support confidence-aware
+#       overwrite in cache_put_locations (only replace cached rows when the new
+#       prob beats the cached prob).
 def init_location_cache(db_path: str) -> None:
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=60)
@@ -630,6 +654,7 @@ def init_location_cache(db_path: str) -> None:
             CREATE TABLE IF NOT EXISTS author_location (
                 author TEXT PRIMARY KEY,
                 location TEXT NOT NULL,
+                location_prob REAL,
                 updated_at INTEGER NOT NULL
             );
             """
@@ -638,37 +663,94 @@ def init_location_cache(db_path: str) -> None:
     finally:
         conn.close()
 
-# Fetch cached locations for a set of authors.
-def cache_get_locations(db_path: str, authors: set[str]) -> Dict[str, str]:
-    if not authors:
-        return {}
+# Initialize the detail table (per-author top/contender labels with probs and tier).
+# NOTE: Pre-create alongside init_location_cache from a single process before launching
+# parallel Slurm array tasks to avoid "database is locked" races on first WAL setup.
+def init_location_detail_cache(db_path: str) -> None:
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=60)
     try:
         cur = conn.cursor()
-        out: Dict[str, str] = {}
-        # sqlite has a variable limit; chunk in 900s to be safe
-        author_list = list(authors)
-        for i in range(0, len(author_list), 900):
-            chunk = author_list[i:i+900]
-            qmarks = ",".join(["?"] * len(chunk))
-            cur.execute(f"SELECT author, location FROM author_location WHERE author IN ({qmarks})", chunk)
-            for a, loc in cur.fetchall():
-                out[a] = loc
-        return out
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS author_location_detail (
+                author TEXT PRIMARY KEY,
+                location TEXT NOT NULL,
+                location_prob REAL,
+                contender_location TEXT,
+                contender_location_prob REAL,
+                top_location TEXT,
+                top_location_prob REAL,
+                top_contender_location TEXT,
+                top_contender_location_prob REAL,
+                tier TEXT,
+                seen_count INTEGER,
+                updated_at INTEGER NOT NULL
+            );
+            """
+        )
+        conn.commit()
     finally:
         conn.close()
 
-# Upsert many author->location mappings.
-def cache_put_locations(db_path: str, author_to_loc: Dict[str, str]) -> None:
-    if not author_to_loc:
+# Fetch cached locations for a set of authors. Wrapped in a retry loop because
+# concurrent Slurm array tasks can briefly contend on schema-touching writes
+# at startup, occasionally surfacing 'database is locked' on reads despite WAL.
+def cache_get_locations(db_path: str, authors: set[str]) -> Dict[str, str]:
+    if not authors:
+        return {}
+    def _do() -> Dict[str, str]:
+        conn = sqlite3.connect(db_path, timeout=60)
+        try:
+            cur = conn.cursor()
+            out: Dict[str, str] = {}
+            # sqlite has a variable limit; chunk in 900s to be safe
+            author_list = list(authors)
+            for i in range(0, len(author_list), 900):
+                chunk = author_list[i:i+900]
+                qmarks = ",".join(["?"] * len(chunk))
+                cur.execute(f"SELECT author, location FROM author_location WHERE author IN ({qmarks})", chunk)
+                for a, loc in cur.fetchall():
+                    out[a] = loc
+            return out
+        finally:
+            conn.close()
+    return _sqlite_retry_on_locked(_do)
+
+# Upsert many author->location mappings with confidence-aware overwrite.
+# Each detail dict must contain at least 'location' (str) and 'location_prob'
+# (float | None). Cached rows are atomically overwritten only when the new
+# location_prob is strictly greater than the cached one (or the cached one is
+# NULL); a new prob of None never overwrites an existing labeled row.
+def cache_put_locations(db_path: str, details_by_author: Dict[str, Dict[str, Any]]) -> None:
+    if not details_by_author:
         return
     conn = sqlite3.connect(db_path, timeout=60)
     try:
         cur = conn.cursor()
         now = int(time.time())
-        rows = [(a, loc, now) for a, loc in author_to_loc.items() if a and loc]
+        rows = []
+        for author, d in details_by_author.items():
+            if not author:
+                continue
+            location = d.get("location")
+            if not location:
+                continue
+            rows.append((author, str(location), d.get("location_prob"), now))
+        if not rows:
+            return
         cur.executemany(
-            "INSERT OR REPLACE INTO author_location(author, location, updated_at) VALUES (?,?,?)",
+            """
+            INSERT INTO author_location(author, location, location_prob, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(author) DO UPDATE SET
+                location = excluded.location,
+                location_prob = excluded.location_prob,
+                updated_at = excluded.updated_at
+            WHERE excluded.location_prob IS NOT NULL
+              AND (author_location.location_prob IS NULL
+                   OR excluded.location_prob > author_location.location_prob)
+            """,
             rows,
         )
         conn.commit()

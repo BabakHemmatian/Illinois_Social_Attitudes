@@ -1,6 +1,7 @@
 ### Imports
 
 import csv
+csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
 import os
 import re
 import secrets
@@ -62,7 +63,8 @@ if not args.input:
 else:
     input_path = validate_resource_dir(args.input, default_resource)
 
-file_list = [Path(p) for p in check_reqd_files(years, input_path, type_)]
+file_list = check_reqd_files(years=years, type_=type_, check_path=input_path)
+file_list = sorted(file_list, key=lambda p: Path(p).name)
 
 # parse the output path
 if not args.output:

@@ -16,6 +16,7 @@ from utils import (
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"] = "TRUE"  # to prevent MKL crash with Torch
 import csv
+csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
 import time
 from datetime import datetime
 import re
@@ -104,11 +105,13 @@ if input_comments.name != input_submissions.name:
 
 # generate input file lists
 input_comments_file_list = check_reqd_files(years, input_comments, "comments")
+input_comments = sorted(input_comments, key=lambda p: Path(p).name)
 input_submissions_file_list = check_reqd_files(years, input_submissions, "submissions")
+input_submissions = sorted(input_submissions, key=lambda p: Path(p).name)
 
 # parse the output path
 if not args.output:
-    output_path = PROJECT_ROOT / "data" / "data_reddit_curated" / group / "all" / Path(input_comments).name
+    output_path = DATA_DIR / "data_reddit_curated" / group / "all" / Path(input_comments).name
 else:
     output_path = Path(args.output)
 

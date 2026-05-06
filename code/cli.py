@@ -9,7 +9,13 @@ from pathlib import Path
 import subprocess
 import sys
 
-from utils import groups, validate_years, array_span_from_years
+from utils import (
+    array_span_from_years,
+    groups,
+    init_location_cache,
+    init_location_detail_cache,
+    validate_years,
+)
 
 ### Run Knobs
 use_gpu = True # whether the slurm cluster version requests GPUs based on the resource type
@@ -252,6 +258,19 @@ def get_args(argv=None):
 # evaluate the entered arguments based on requirements and whether the 'slurm' flag is raised
 if __name__ == "__main__":
     args = get_args()
+
+    # Pre-initialize the SQLite caches once from this single process so that
+    # parallel Slurm array tasks (or local ProcessPoolExecutor workers) do not
+    # race on the first WAL-mode setup, which can raise "database is locked".
+    # The cache is per-type and group-global (shared across all six social
+    # groups within a type) so that authors cross-pollinated by different
+    # groups don't trigger redundant raw scans.
+    if args.resource == "label_location":
+        location_cache_dir = DATA_DIR / "data_reddit_curated" / "data_reddit_location"
+        location_cache_dir.mkdir(parents=True, exist_ok=True)
+        location_cache_db_path = str(location_cache_dir / f"author_location_cache_{args.type}.sqlite")
+        init_location_cache(location_cache_db_path)
+        init_location_detail_cache(location_cache_db_path)
 
     if args.slurm:
         slurm_vars = [f"resource={args.resource}", f"type={args.type}"]

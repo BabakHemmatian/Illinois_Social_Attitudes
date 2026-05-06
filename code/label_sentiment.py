@@ -5,6 +5,7 @@ from cli import get_args, DATA_DIR
 from utils import parse_range, log_report, check_reqd_files
 import os
 import csv
+csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 import stanza
 from textblob import TextBlob
@@ -50,6 +51,7 @@ log_report(report_file_path)
 
 # Build file_list organized by year and raise an error if an expected file is missing 
 file_list = check_reqd_files(years, input_path, type_)
+file_list = sorted(file_list, key=lambda p: Path(p).name)
 
 ### Main Functions
 
@@ -61,7 +63,8 @@ file_list = check_reqd_files(years, input_path, type_)
 # generates labels for an entire month's worth of documents. It resumes labeling if it comes across incomplete output.
 def label_sentiment_file(file):
 
-    missing_lines_count = 0  
+    missing_lines_count = 0
+    first_error_logged = False
     log_report(report_file_path, f"Started labeling {Path(file).name} from the {group} social group for sentiment.")
     start_time = time.time()
 
@@ -168,10 +171,24 @@ def label_sentiment_file(file):
                         tb.sentiment.polarity, tb.sentiment.subjectivity
                     ]
                     out_rows.append(out_row)
-                except Exception:
-                    # Count and skip any bad line, but keep going
-                    nonlocal missing_lines_count
+                except Exception as e:
+                    # Count and skip any bad line, but keep going. Log the first
+                    # failure of the file with traceback + source-row context so
+                    # silent counts don't hide a systemic problem.
+                    nonlocal missing_lines_count, first_error_logged
                     missing_lines_count += 1
+                    if not first_error_logged:
+                        first_error_logged = True
+                        try:
+                            src_id = line[source_row_in_idx]
+                        except Exception:
+                            src_id = "?"
+                        import traceback as _tb
+                        tb = "".join(_tb.format_exception(type(e), e, e.__traceback__))
+                        log_report(
+                            report_file_path,
+                            f"[warn] {Path(file).name}: first sentiment-batch failure at source_row={src_id}: {e}\n{tb}",
+                        )
 
             if out_rows:
                 writer.writerows(out_rows)
@@ -181,11 +198,17 @@ def label_sentiment_file(file):
             batch_lines.clear()
             batch_input_rows.clear()
 
-        # Iterate the input, skip header 
-        for row in reader:
+        # Iterate the input, skip header
+        for row_idx, row in enumerate(reader, start=2):  # start=2 because header is row 1
             # Guard against short/blank lines (expect at least 3 columns given usage of row[2] for text)
             if len(row) < 3:
                 missing_lines_count += 1
+                if not first_error_logged:
+                    first_error_logged = True
+                    log_report(
+                        report_file_path,
+                        f"[warn] {Path(file).name}: first malformed row at line {row_idx} (only {len(row)} columns); skipping",
+                    )
                 continue
 
             # Use the input's source_row to decide skipping/resume

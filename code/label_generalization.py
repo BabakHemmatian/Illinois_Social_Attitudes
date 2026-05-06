@@ -8,6 +8,7 @@ from utils import parse_range, log_report, check_reqd_files
 import os
 os.environ["KMP_DUPLICATE_LIB_OK"]="TRUE" # to prevent MKL crash with Torch
 import csv
+csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
 import time
 import torch
 from transformers import RobertaTokenizerFast, AutoModelForTokenClassification, RobertaForSequenceClassification
@@ -45,6 +46,7 @@ else:
 
 # Build file_list organized by year and raise an error if an expected file is missing 
 file_list = check_reqd_files(years, input_path, type_)
+file_list = sorted(file_list, key=lambda p: Path(p).name)
 
 if not args.output:
     output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_generalization"

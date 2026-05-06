@@ -42,6 +42,7 @@ if not args.input:
 else:
     input_path = args.input
 file_list = check_reqd_files(years=years, type_=type_, check_path=input_path)
+file_list = sorted(file_list, key=lambda p: Path(p).name)
 
 # Allow each Slurm array task to process only its assigned slice of files
 array_index = getattr(args, "array", None)

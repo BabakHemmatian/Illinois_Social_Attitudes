@@ -61,8 +61,10 @@ if type_ == "comments":
     prefix = "RC"
 elif type_ == "submissions":
     prefix = "RS"
+elif type_ == "all":
+    prefix = "ALL"
 else:
-    raise Exception("Wrong data type specified. Choose from comments and submissions.")
+    raise Exception("Wrong data type specified. Choose from [comments, submissions, all].")
 for year in years:
     for month in range(1, 13):
         path_ = os.path.join(sample_path, f"{prefix}_{year}-{month:02d}.csv")
@@ -124,9 +126,6 @@ def filter_sample_year(year, file_list_for_year):
 
     total_docs = 0  # How many docs processed for this year
 
-    # Local set to track document ids for this year
-    year_seen_ids = set()
-
     # Iterate through each file for this year
     for file in file_list_for_year:
         print(f"Sampling from {Path(file).name}")
@@ -140,14 +139,13 @@ def filter_sample_year(year, file_list_for_year):
                     try:
                         # Basic row validation: must have at least 3 columns for text
                         if line and len(line) > 2 and line[2].strip():
+                            
                             # Extract original_id from first column
                             original_id = line[0].strip()
-                            # Skip if this document has already been processed in this year
-                            if original_id in year_seen_ids:
+                            if original_id in seen_ids:
                                 continue
-                            year_seen_ids.add(original_id)
+
                             seen_ids.add(original_id)
-                            
                             text = line[2].strip().replace("\n", " ")
                             
                             # If there's a keywords column (index 7), parse it
@@ -229,12 +227,26 @@ def filter_sample_year(year, file_list_for_year):
 
 # After processing all years, write output
 def filter_sample_write(all_samples):
-    years_tag = args.years.replace("-", "_to_")
-    run_tag = f"{target}_n{sample_size}_{years_tag}"
 
+    # use numbered tags to prevent overwriting previous samples
+    tag = 0
+    while True:
+        paths_exist = False
+        for annot in range(num_annot):
+            sample_file_path = os.path.join(output_dir, f"filter_sample_{annot}_v{tag}.csv")
+            sample_key_file_path = os.path.join(output_dir, f"filter_sample_{annot}_v{tag}_key.csv")
+            if os.path.isfile(sample_file_path) or os.path.isfile(sample_key_file_path):
+                paths_exist = True
+                break
+        if not paths_exist:
+            break
+        tag += 1
+
+    # write all annotator files using the same tag
     for annot in range(num_annot):
-        sample_file_path = os.path.join(output_dir, f"filter_sample_{run_tag}_annot{annot}.csv")
-        sample_key_file_path = os.path.join(output_dir, f"filter_sample_{run_tag}_annot{annot}_key.csv")
+        sample_file_path = os.path.join(output_dir, f"filter_sample_{annot}_v{tag}.csv")
+        sample_key_file_path = os.path.join(output_dir, f"filter_sample_{annot}_v{tag}_key.csv")
+
         with open(sample_file_path, "w", encoding='utf-8', newline='') as sample_file, \
              open(sample_key_file_path, "w", encoding='utf-8', newline='') as sample_file_key:
             

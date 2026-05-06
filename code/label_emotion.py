@@ -40,6 +40,7 @@ else:
 
 # Build file_list organized by year and raise an error if an expected file is missing 
 file_list = check_reqd_files(years, input_path, type_)
+file_list = sorted(file_list, key=lambda p: Path(p).name)
 
 if not args.output:
     output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_emotion"

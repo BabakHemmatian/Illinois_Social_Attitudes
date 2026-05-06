@@ -3,6 +3,7 @@
 # package imports
 import os
 import csv
+csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
 import json
 import time
 from datetime import datetime
@@ -94,11 +95,22 @@ def get_target_months(years_list, array_idx=None, files_per_job=1):
         return all_months
 
     start_idx = array_idx * files_per_job
+    # Without this guard, an out-of-range array index silently slices to []
+    # and the Slurm task exits 0 having processed nothing — looks like success.
+    if start_idx >= len(all_months):
+        raise IndexError(
+            f"--array {array_idx} with files-per-job {files_per_job} maps to "
+            f"start_idx {start_idx}, which is out of range for {len(all_months)} requested months"
+        )
     end_idx = start_idx + files_per_job
     return all_months[start_idx:end_idx]
 
 files_per_job = getattr(args, "files_per_job", 1) or 1
-target_months = get_target_months(years, args.array, files_per_job)
+try:
+    target_months = get_target_months(years, args.array, files_per_job)
+except IndexError as e:
+    log_report(report_file_path, f"[error] {e}; aborting")
+    raise SystemExit(2)
 target_month_set = set(target_months)
 
 ### Main resource functions

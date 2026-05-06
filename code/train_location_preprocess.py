@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
 import json
 import math
 import os
@@ -361,6 +362,8 @@ def build_masked_word_count_matrix(
     t0 = time.time()
     matched = 0
     total_masked_nnz = 0
+    n_bad_int = 0
+    first_bad_sample: Optional[str] = None
     for uid, raw in iter_vocab_rows_by_source(set(users), WORD_FEATURE_SRC):
         row = user_index.get(uid)
         if row is None:
@@ -374,7 +377,10 @@ def build_masked_word_count_matrix(
                 continue
             try:
                 iv = int(v)
-            except Exception:
+            except Exception as e:
+                n_bad_int += 1
+                if first_bad_sample is None:
+                    first_bad_sample = f"uid={uid!r} key={k!r} value={v!r}: {e}"
                 continue
             if iv <= 0:
                 continue
@@ -394,6 +400,8 @@ def build_masked_word_count_matrix(
     )
     X.sum_duplicates()
     X.sort_indices()
+    if n_bad_int:
+        log(f"[words_masked] skipped {n_bad_int:,} non-integer count values; first: {first_bad_sample}", 1)
     log(
         f"[words_masked] raw sparse matrix shape={X.shape} nnz={X.nnz:,} masked_terms_removed={total_masked_nnz:,} "
         f"elapsed={(time.time() - t0)/60:.2f} min",
@@ -465,6 +473,8 @@ def summarize_split(name: str, users: List[str], top_labels: List[str]):
 def load_subreddit_counts(path: str, users_set: Set[str]) -> Dict[str, Dict[str, int]]:
     log("[subs] loading subreddit counts", 1)
     subs: Dict[str, Dict[str, int]] = {}
+    n_bad_int = 0
+    first_bad_sample: Optional[str] = None
     with open(path, "rb") as f:
         for i, line in enumerate(f):
             obj = _json_loads(line)
@@ -477,19 +487,26 @@ def load_subreddit_counts(path: str, users_set: Set[str]) -> Dict[str, Dict[str,
                 for k, v in raw.items():
                     try:
                         iv = int(v)
-                    except Exception:
+                    except Exception as e:
+                        n_bad_int += 1
+                        if first_bad_sample is None:
+                            first_bad_sample = f"line={i} uid={uid!r} key={k!r} value={v!r}: {e}"
                         continue
                     if iv > 0:
                         norm[str(k)] = iv
             subs[uid] = norm
             if i and i % 50000 == 0:
                 log(f"[subs] scanned {i:,} lines | matched {len(subs):,}", 1)
+    if n_bad_int:
+        log(f"[subs] skipped {n_bad_int:,} non-integer count values; first: {first_bad_sample}", 1)
     log(f"[subs] matched users: {len(subs):,}", 1)
     return subs
 
 def load_hour_counts(path: str, users_set: Set[str]) -> Dict[str, Dict[str, int]]:
     log("[hours] loading hour counts", 1)
     hours: Dict[str, Dict[str, int]] = {}
+    n_bad_int = 0
+    first_bad_sample: Optional[str] = None
     with open(path, "rb") as f:
         for i, line in enumerate(f):
             obj = _json_loads(line)
@@ -503,13 +520,18 @@ def load_hour_counts(path: str, users_set: Set[str]) -> Dict[str, Dict[str, int]
                     try:
                         hk = int(k)
                         iv = int(v)
-                    except Exception:
+                    except Exception as e:
+                        n_bad_int += 1
+                        if first_bad_sample is None:
+                            first_bad_sample = f"line={i} uid={uid!r} key={k!r} value={v!r}: {e}"
                         continue
                     if 0 <= hk <= 23 and iv > 0:
                         norm[f"{hk:02d}"] = iv
             hours[uid] = norm
             if i and i % 50000 == 0:
                 log(f"[hours] scanned {i:,} lines | matched {len(hours):,}", 1)
+    if n_bad_int:
+        log(f"[hours] skipped {n_bad_int:,} non-integer hour/count pairs; first: {first_bad_sample}", 1)
     log(f"[hours] matched users: {len(hours):,}", 1)
     return hours
 
@@ -536,16 +558,23 @@ def iter_vocab_rows_by_source(users_set: Set[str], word_feature_src: str):
         return
     if word_feature_src == "all":
         tmp: Dict[str, Dict[str, int]] = {}
+        n_bad_int = 0
+        first_bad_sample: Optional[str] = None
         for path in (VOCAB_FILE_COMMENTS, VOCAB_FILE_SUBMISSIONS):
             for uid, raw in iter_vocab_rows(path, users_set):
                 tgt = tmp.setdefault(uid, {})
                 for k, v in raw.items():
                     try:
                         iv = int(v)
-                    except Exception:
+                    except Exception as e:
+                        n_bad_int += 1
+                        if first_bad_sample is None:
+                            first_bad_sample = f"path={os.path.basename(path)} uid={uid!r} key={k!r} value={v!r}: {e}"
                         continue
                     if iv > 0:
                         tgt[str(k)] = tgt.get(str(k), 0) + iv
+        if n_bad_int:
+            log(f"[vocab_all] skipped {n_bad_int:,} non-integer count values; first: {first_bad_sample}", 1)
         for uid, raw in tmp.items():
             yield uid, raw
         return
@@ -626,6 +655,8 @@ def select_word_vocabulary(
     n_train_docs = 0
 
     t0 = time.time()
+    n_bad_int = 0
+    first_bad_sample: Optional[str] = None
     for uid, raw in iter_vocab_rows_by_source(train_users_set, WORD_FEATURE_SRC):
         label = train_user_to_state.get(uid)
         if label is None:
@@ -636,7 +667,10 @@ def select_word_vocabulary(
         for k, v in raw.items():
             try:
                 iv = int(v)
-            except Exception:
+            except Exception as e:
+                n_bad_int += 1
+                if first_bad_sample is None:
+                    first_bad_sample = f"uid={uid!r} key={k!r} value={v!r}: {e}"
                 continue
             if iv <= 0:
                 continue
@@ -648,6 +682,8 @@ def select_word_vocabulary(
                 seen_words.add(word)
         if n_train_docs and n_train_docs % 25000 == 0:
             log(f"[words] pass1 processed {n_train_docs:,} training users", 1)
+    if n_bad_int:
+        log(f"[words] skipped {n_bad_int:,} non-integer count values during vocab pass; first: {first_bad_sample}", 1)
 
     stat_counter = df_counts if WORD_STAT == "df" else total_counts
     candidates: List[str] = []
@@ -705,6 +741,8 @@ def build_word_count_matrix(
 
     t0 = time.time()
     matched = 0
+    n_bad_int = 0
+    first_bad_sample: Optional[str] = None
     for uid, raw in iter_vocab_rows_by_source(set(users), WORD_FEATURE_SRC):
         row = user_index.get(uid)
         if row is None:
@@ -716,7 +754,10 @@ def build_word_count_matrix(
                 continue
             try:
                 iv = int(v)
-            except Exception:
+            except Exception as e:
+                n_bad_int += 1
+                if first_bad_sample is None:
+                    first_bad_sample = f"uid={uid!r} key={k!r} value={v!r}: {e}"
                 continue
             if iv > 0:
                 rows.append(row)
@@ -728,6 +769,8 @@ def build_word_count_matrix(
     X = sparse.csr_matrix((np.asarray(data, dtype=np.float32), (rows, cols)), shape=(len(users), len(selected_words)), dtype=np.float32)
     X.sum_duplicates()
     X.sort_indices()
+    if n_bad_int:
+        log(f"[words] skipped {n_bad_int:,} non-integer count values during pass2; first: {first_bad_sample}", 1)
     log(f"[words] raw sparse matrix shape={X.shape} nnz={X.nnz:,} elapsed={(time.time() - t0)/60:.2f} min", 1)
     return X
 

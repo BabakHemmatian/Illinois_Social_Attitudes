@@ -15,6 +15,7 @@ from transformers import (
 )
 import numpy as np
 import csv
+csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
 import random
 from sklearn.utils import compute_class_weight
 from collections import Counter
@@ -31,7 +32,7 @@ type_ = args.type           # "comments" or "submissions"
 
 # NOTE: Exactly one of these three should be active at a time:
 
-trial = 2   # identifies the original training run
+trial = 2   # identifies training run trial number. Used for loading the correct model if retraining or simply evaluating.
 
 ## 1) Train a model from the original data and evaluate on original test set
 training = False
@@ -117,7 +118,7 @@ retrain_path = os.path.join(
 )
 
 # where to find the rated relevance samples
-ratings_path = DATA_DIR / "data_relevance_ratings" / type_
+ratings_path = DATA_DIR / "samples" / group / type_
 reratings_path = DATA_DIR / "data_relevance_QAratings"
 
 ### Utilities
@@ -157,7 +158,7 @@ def load_main_annotations(ratings_path, group: str, num_annot: int):
     for rater in range(num_annot):
         fname = os.path.join(
             ratings_path,
-            f"relevance_sample_{group}_{rater}_rated.csv"
+            f"filter_sample_{rater}_rated.csv"
         )
         with open(fname, "r", encoding="utf-8", errors="ignore") as f:
             reader = csv.reader(f)

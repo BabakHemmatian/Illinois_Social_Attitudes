@@ -17,14 +17,18 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import numpy as np
 from scipy import sparse
 
+csv.field_size_limit(2**31 - 1)  # match the other resources; some curated rows have very large text fields
+
 from cli import get_args, MODELS_DIR, DATA_DIR
 from utils import (
+    _sqlite_retry_on_locked,
     build_author_feature_map_from_raw_zst_with_seen,
     cache_get_locations,
     cache_put_locations,
     check_reqd_files,
     find_raw_month_files,
     init_location_cache,
+    init_location_detail_cache,
     log_report,
     parse_range,
 )
@@ -34,11 +38,17 @@ from utils import (
 
 TOP_CONF_THRESHOLD = 0.60
 REG_CONF_MARGIN = 0.10
-STA_CONF_MARGIN = 0.12
+STA_CONF_MARGIN = 0.05
 UNKNOWN_LABEL = "UNK"
 
 MIN_SAMPLES_FOR_INFERENCE = 10
 MIN_SAMPLES_FOR_CACHE = 25
+# When an author has at least this many items in the curated (group-filtered)
+# input for the current month, the local seed features dominate the inference
+# enough that any cross-group cached label is least trustworthy. Skip the cache
+# lookup for these authors and re-infer; the cache write step still updates the
+# cached row if the freshly-inferred prob beats the cached one.
+LOCAL_SEEN_BIAS_THRESHOLD = 40
 
 regional_weights = {"words": 0.7, "struct": 0.3}
 top_weights = {"words": 0.55, "struct": 0.45}
@@ -55,8 +65,8 @@ years = parse_range(args.years)
 if isinstance(years, int):
     years = [years]
 group = args.group
-max_items_per_author = getattr(args, "maxitems", None) or 25
-max_files_to_scan = getattr(args, "maxfiles", None) or 24
+max_items_per_author = getattr(args, "maxitems", None) or 50
+max_files_to_scan = getattr(args, "maxfiles", None) or 60
 max_radius = getattr(args, "maxradius", None) or 30
 batch_size = max(1, int(getattr(args, "batchsize", DEFAULT_BATCH_SIZE) or DEFAULT_BATCH_SIZE))
 # Parallel file scan: enabled only for SLURM array tasks (single-process); falls back to 1 locally
@@ -98,7 +108,11 @@ output_path.mkdir(parents=True, exist_ok=True)
 
 processed_stems = {Path(f).stem for f in os.listdir(output_path) if f.endswith(".csv")}
 
-CACHE_DB_PATH = str(output_path / "author_location_cache.sqlite")
+# Per-type, group-global location cache. Comments and submissions stay separate
+# because their feature distributions differ enough that the model behaves
+# differently on each; all six social groups within a type share one cache.
+CACHE_DIR = DATA_DIR / "data_reddit_curated" / "data_reddit_location"
+CACHE_DB_PATH = str(CACHE_DIR / f"author_location_cache_{type_}.sqlite")
 init_location_cache(CACHE_DB_PATH)
 report_file_path = os.path.join(output_path, "report_label_location.csv")
 
@@ -219,76 +233,55 @@ def month_spiral(year: int, month: int, max_files_to_scan: int = 60, max_radius:
 ### Cache detail helpers
 
 
-def _init_location_detail_cache(db_path: str) -> None:
-    conn = sqlite3.connect(db_path, timeout=60)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS author_location_detail (
-                author TEXT PRIMARY KEY,
-                location TEXT NOT NULL,
-                location_prob REAL,
-                contender_location TEXT,
-                contender_location_prob REAL,
-                top_location TEXT,
-                top_location_prob REAL,
-                top_contender_location TEXT,
-                top_contender_location_prob REAL,
-                tier TEXT,
-                seen_count INTEGER,
-                updated_at INTEGER NOT NULL
-            );
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
-
-
-_init_location_detail_cache(CACHE_DB_PATH)
+init_location_detail_cache(CACHE_DB_PATH)
 
 
 def cache_get_location_details(db_path: str, authors: Sequence[str]) -> Dict[str, Dict[str, object]]:
     if not authors:
         return {}
-    conn = sqlite3.connect(db_path, timeout=60)
-    try:
-        cur = conn.cursor()
-        out: Dict[str, Dict[str, object]] = {}
-        author_list = list(authors)
-        for i in range(0, len(author_list), 900):
-            chunk = author_list[i:i + 900]
-            qmarks = ",".join(["?"] * len(chunk))
-            cur.execute(
-                f"""
-                SELECT author, location, location_prob, contender_location, contender_location_prob,
-                       top_location, top_location_prob, top_contender_location, top_contender_location_prob,
-                       tier, seen_count
-                FROM author_location_detail
-                WHERE author IN ({qmarks})
-                """,
-                chunk,
-            )
-            for row in cur.fetchall():
-                out[row[0]] = {
-                    "location": row[1],
-                    "location_prob": row[2],
-                    "contender_location": row[3],
-                    "contender_location_prob": row[4],
-                    "top_location": row[5],
-                    "top_location_prob": row[6],
-                    "top_contender_location": row[7],
-                    "top_contender_location_prob": row[8],
-                    "tier": row[9],
-                    "seen_count": row[10],
-                }
-        return out
-    finally:
-        conn.close()
+    def _do() -> Dict[str, Dict[str, object]]:
+        conn = sqlite3.connect(db_path, timeout=60)
+        try:
+            cur = conn.cursor()
+            out: Dict[str, Dict[str, object]] = {}
+            author_list = list(authors)
+            for i in range(0, len(author_list), 900):
+                chunk = author_list[i:i + 900]
+                qmarks = ",".join(["?"] * len(chunk))
+                cur.execute(
+                    f"""
+                    SELECT author, location, location_prob, contender_location, contender_location_prob,
+                           top_location, top_location_prob, top_contender_location, top_contender_location_prob,
+                           tier, seen_count
+                    FROM author_location_detail
+                    WHERE author IN ({qmarks})
+                    """,
+                    chunk,
+                )
+                for row in cur.fetchall():
+                    out[row[0]] = {
+                        "location": row[1],
+                        "location_prob": row[2],
+                        "contender_location": row[3],
+                        "contender_location_prob": row[4],
+                        "top_location": row[5],
+                        "top_location_prob": row[6],
+                        "top_contender_location": row[7],
+                        "top_contender_location_prob": row[8],
+                        "tier": row[9],
+                        "seen_count": row[10],
+                    }
+            return out
+        finally:
+            conn.close()
+    return _sqlite_retry_on_locked(_do)
 
 
 def cache_put_location_details(db_path: str, details_by_author: Dict[str, Dict[str, object]]) -> None:
+    """Upsert per-author detail rows with confidence-aware overwrite. An existing
+    cached row is atomically replaced only when the new location_prob is
+    strictly greater than the cached one (or the cached one is NULL); a new
+    prob of None never overwrites a labeled row."""
     if not details_by_author:
         return
     conn = sqlite3.connect(db_path, timeout=60)
@@ -315,13 +308,30 @@ def cache_put_location_details(db_path: str, details_by_author: Dict[str, Dict[s
                     now,
                 )
             )
+        if not rows:
+            return
         cur.executemany(
             """
-            INSERT OR REPLACE INTO author_location_detail(
+            INSERT INTO author_location_detail(
                 author, location, location_prob, contender_location, contender_location_prob,
                 top_location, top_location_prob, top_contender_location, top_contender_location_prob,
                 tier, seen_count, updated_at
             ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(author) DO UPDATE SET
+                location = excluded.location,
+                location_prob = excluded.location_prob,
+                contender_location = excluded.contender_location,
+                contender_location_prob = excluded.contender_location_prob,
+                top_location = excluded.top_location,
+                top_location_prob = excluded.top_location_prob,
+                top_contender_location = excluded.top_contender_location,
+                top_contender_location_prob = excluded.top_contender_location_prob,
+                tier = excluded.tier,
+                seen_count = excluded.seen_count,
+                updated_at = excluded.updated_at
+            WHERE excluded.location_prob IS NOT NULL
+              AND (author_location_detail.location_prob IS NULL
+                   OR excluded.location_prob > author_location_detail.location_prob)
             """,
             rows,
         )
@@ -816,7 +826,17 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     cached_details = cache_get_location_details(CACHE_DB_PATH, list(authors))
 
     detail_by_author: Dict[str, Dict[str, object]] = {}
+    n_skipped_bias = 0
     for author in authors:
+        # For authors whose curated-input footprint is large, the local seed
+        # features dominate inference enough that any cross-group cached label
+        # is least trustworthy. Skip the lookup so they get re-inferred from
+        # this group's full feature mix; the cache write step still updates
+        # the cached row if the new prob beats the existing one.
+        if int(local_seen.get(author, 0)) >= LOCAL_SEEN_BIAS_THRESHOLD:
+            if author in cached_locations or author in cached_details:
+                n_skipped_bias += 1
+            continue
         if author in cached_locations or author in cached_details:
             detail_by_author[author] = _details_from_cache_or_label(author, cached_details, cached_locations)
 
@@ -851,9 +871,10 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
 
     log_report(
         report_file_path,
-        f"[start] {stem}: authors={n_total:,} cached={n_cached:,} need_raw={len(remaining_authors):,} "
-        f"scan_months={len(scan_months)} months_with_files={months_with_files} raw_files={len(raw_files)} "
-        f"samples_per_author={max_items_per_author} batch_size={batch_size} max_files_to_scan={max_files_to_scan} max_radius={max_radius}",
+        f"[start] {stem}: authors={n_total:,} cached={n_cached:,} cache_skipped_bias={n_skipped_bias:,} "
+        f"need_raw={len(remaining_authors):,} scan_months={len(scan_months)} months_with_files={months_with_files} raw_files={len(raw_files)} "
+        f"samples_per_author={max_items_per_author} batch_size={batch_size} max_files_to_scan={max_files_to_scan} max_radius={max_radius} "
+        f"local_seen_bias_threshold={LOCAL_SEEN_BIAS_THRESHOLD}",
     )
 
     bundle = get_worker_bundle()
@@ -873,7 +894,6 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
 
     author_to_counts, author_seen = _merge_feature_maps(local_counts, local_seen, raw_counts, raw_seen, remaining_authors)
 
-    to_cache_labels: Dict[str, str] = {}
     to_cache_details: Dict[str, Dict[str, object]] = {}
     n_cache_confident = 0
     n_cache_skipped_lowconf = 0
@@ -894,12 +914,11 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
             if detail.get("location") == UNKNOWN_LABEL:
                 n_cache_skipped_lowconf += 1
                 continue
-            to_cache_labels[author] = str(detail["location"])
             to_cache_details[author] = detail
             n_cache_confident += 1
 
-    if to_cache_labels:
-        cache_put_locations(CACHE_DB_PATH, to_cache_labels)
+    if to_cache_details:
+        cache_put_locations(CACHE_DB_PATH, to_cache_details)
         cache_put_location_details(CACHE_DB_PATH, to_cache_details)
 
     log_report(
@@ -927,10 +946,25 @@ def label_location_parallel() -> None:
     if array_idx is not None:
         try:
             idx = int(array_idx)
+        except (ValueError, TypeError):
+            log_report(report_file_path, f"[error] --array '{array_idx}' is not an integer; aborting")
+            raise SystemExit(2)
+        if not (0 <= idx < len(file_list)):
+            log_report(
+                report_file_path,
+                f"[error] --array {idx} out of range (file_list size={len(file_list)}); aborting",
+            )
+            raise SystemExit(2)
+        try:
             label_location_month(file_list[idx])
-            return
-        except Exception:
-            log_report(report_file_path, f"[warn] invalid --array '{array_idx}', running full set")
+        except Exception as e:
+            tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+            log_report(
+                report_file_path,
+                f"[error] task {idx} ({Path(file_list[idx]).name}) failed: {e}\n{tb}",
+            )
+            raise
+        return
 
     _slurm_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", 0))
     max_workers = _slurm_cpus if _slurm_cpus > 0 else min(2, os.cpu_count() or 1)

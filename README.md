@@ -4,7 +4,7 @@
 
 <h1 align="center">Illinois Social Attitudes Aggregate Corpus</h1>
 
-This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, generalization, sentiment, emotions and state-level US location mapping. The resources are designed to be easily adapted for developing similar datasets targeting other distinctions (see the Adaptations). 
+This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, generalization, sentiment, emotions and state-level US location mapping. The resources are designed to be easily adapted for developing similar datasets targeting other distinctions (see [Adaptations](#adaptations)). 
 
 **Corpus size (comments): 554,464,184 posts**
 
@@ -19,7 +19,7 @@ A coding-free website for convenient access to the full comment corpus or sample
 
 ## Corpus Interpretation
 
-You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). We are currently in the process of adding social-psychological and location labels to the uploaded version of the corpus, but users can find plug-and-play scripts in this repository for extracting them themselves. 
+You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). We are currently adding social-psychological and location labels to the uploaded version of the corpus, but users can find plug-and-play scripts in this repository for extracting them themselves. 
 
 ## The Current Repository
 
@@ -29,7 +29,7 @@ This repository contains the scripts that allow you to rebuild ISAAC from scratc
 - Generating generalized language (e.g., genericity), moralization, sentiment and emotion labels for the pruned corpus.
 - Estimate user location down to US state based on Reddit activity history.
 
-The scripts were designed to be easily adapted for developing other Reddit corpora. See the **Adaptations** section below for more information.
+The scripts were designed to be easily adapted for developing other Reddit corpora. See the [Adaptations](#adaptations) section.
 
 **Note:**
 - The scripts were developed on Windows 11, then tested on Ubuntu. However, cross-platform compatibility is not guaranteed.
@@ -60,7 +60,7 @@ Install [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) on 
 
 Download [this folder](https://drive.google.com/drive/folders/1TqxjRRMZ3LTGWRCMkK6_tnIo_Zg1vms1?usp=sharing) into the newly created ```Illinois_Social_Attitudes``` folder.
 
-The raw Reddit data that the ```filter_keywords``` resource requires can be found and downloaded [here](https://academictorrents.com/details/ba051999301b109eab37d16f027b3f49ade2de13). The functions currently assume Reddit Comments as the type of data, with the relevant .zst files for a given timeframe to be placed in ```data/data_reddit_raw/comments/```. 
+The raw Reddit data that the ```filter_keywords``` resource requires can be found and downloaded [here](https://academictorrents.com/details/ba051999301b109eab37d16f027b3f49ade2de13). The relevant .zst files for a given timeframe are to be placed in ```data/data_reddit_raw/comments/``` or ```data/data_reddit_raw/submissions/``` depending on the type of Reddit post you running the command for. 
 
 ### Virtual Environment Setup
 Follow the steps [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html) to install the desired version of Anaconda. 
@@ -68,17 +68,17 @@ Follow the steps [here](https://docs.conda.io/projects/conda/en/latest/user-guid
 Once finished, navigate to ```Illinois_Social_attitudes``` on the command line and enter ```conda create --name ISAAC python=3.11 pip```. Answer 'y' to the question. When finished, run ```conda activate ISAAC```. Once the environment is activated, run the following command to install the necessary packages: ```pip install -r requirements.txt```. 
 
 ### Commands
-You can now use command line arguments to make use of the resources. Use ```--help``` to receive more information about the available options. 
+You can now use command line arguments to make use of the resources. Use ```python ./code/cli.py --help``` to receive more information about the available options. 
 
 **Example:**
 ```
 python ./code/cli.py --type comments --resource filter_keywords --group sexuality --years 2007-2009
 ```
-This example command will use the appropriate keyword lists from this repository to identify comments in the complete Pushshift dataset that are potentially related to sexuality, and which come from 2007-2009. 
+This example command will use the appropriate keyword lists from this repository to identify comments in the complete Pushshift-format dataset that are potentially related to sexuality, and which come from 2007-2009. 
 
-**NOTE:** ```filter_keywords``` should always be the first resource called, as it is the only resource interfacing with the raw reddit data. 
+**NOTE:** ```filter_keywords``` should always be the first resource called as the only resource interfacing with raw reddit data. If you would like to apply the remaining resources to a dataset from sources other than the Reddit data dump indicated above, simply edit this resource as needed to properly read in the month-by-month input rows. The resulting ISAAC-compatible output can then be directly fed to the later resources.
 
-**NOTE:** _label_ resources require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 200 and 4096 were used based on the resource and system parameters while developing ISAAC. Parallelization and GPU acceleration are recommended for these more resource-intensive resources (see below).
+**NOTE:** _label_ resources require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 200 and 4096 were used based on the resource and system parameters while developing ISAAC. Parallelization and GPU acceleration are recommended for these more resource-intensive resources (see [CPU and GPU Acceleration](#cpu-and-gpu-acceleration)).
 
 #### Custom Resource Use Order
 
@@ -108,7 +108,7 @@ All resources support batch processing on a supercomputing cluster by adding the
 
 _filter_ resources use CPU-based parallelization for extremely fast processing. 
 
-_label_ resources, with the exception of ```label_location```, become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). These resources print out the "device" as part of their logging, which can be used to confirm the use of "cuda".
+_label_ resources, with the exception of the CPU-only ```label_location```, become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). These resources print out the "device" as part of their logging, which can be used to confirm the use of "cuda".
 
 ## Adaptations
 
@@ -120,7 +120,7 @@ To search the entirety of Reddit for posts potentially relevant to your dimensio
 ### Training New Relevance Classifiers
 The ```filter_sample``` resource can be used to extract stratified samples from filtered or labeled datasets to be annotated for the training of new relevance classifiers. The script assumes two annotators and by default aims for ~200 documents per rater equally distributed across the indicated years. Note that the default pathing only distinguishes samples based on ```group``` (e.g., sexuality) and ```type``` (comments, submissions or all). Move files between runs to prevent overwriting the previous samples.
 
-Use the ```metrics_interrater``` resource with the correct ```--group``` argument to evaluate interrater agreement. No ```--years``` argument is needed for this resource. Once sufficient interrater agreement is reached, use the ```train_relevance``` resource to train new relevance filtering neural networks. Adjust the social ```--group``` argument to your target and change the training hyperparameters as needed. No ```--years``` argument is required for this resource.
+Use the ```metrics_interrater``` resource with the correct ```--type``` and ```--group``` arguments to evaluate interrater agreement. Once sufficient interrater agreement is reached, use the ```train_relevance``` resource to train new relevance filtering neural networks. Adjust the social ```--group``` argument to your target and change the training hyperparameters as needed. No ```--years``` argument is required for either resource.
 
 ### Complex Pattern Matching
 If there are still many irrelevant posts in your dataset, you might want to consider using complex regular expression patterns to filter them out. You can see examples of the sets created for ISAAC in the keywords folder, distinguished with ```_adv``` for "advanced" in the file names. Replace these sets with regular expressions that fit your use case and call the ```filter_keywords_adv``` resource to use the patterns for rapidly filtering your dataset based on a parallelized version of the highly-optimized hyperscan engine. 
@@ -130,7 +130,7 @@ If the social-psychological labels provided alongside ISAAC work well for your u
 
 ### Training Location Model
 The ```train_location``` resources can be used to train a weighted mixture of logistic regressions for estimating user location from Reddit history (word usage, subreddits and timestamps). We found this modeling approach to be the most robust on Reddit data.
-1. Run ```train_location_preprocess``` twice with ```Feature_Set``` set to ```words``` and ```struct```, assigning ```TASK``` based on your training goal (```top```:US vs. non-US, ```state```: US states, ```region```: Europe, Asia_Oceania, Americas and Africa). This resource requires ```jsonl``` feature frequency files for users, as well a user label ```csv```. Due to data security considerations, we do not provide our training data. To learn more about dataset development and formatting per this resource, write [us](mailto:babak.hemmatian@gmail.com). 
+1. Run ```train_location_preprocess``` twice, once with ```Feature_Set``` set to ```words```, and a second time to ```struct```, assigning ```TASK``` based on your training goal (```top```:US vs. non-US, ```state```: US states, ```region```: Europe, Asia_Oceania, Americas and Africa). This resource requires ```jsonl``` feature frequency files for users, as well a user label ```csv```. Due to data security considerations, we do not provide our training data. To learn more about dataset development and formatting per this resource, write [us](mailto:babak.hemmatian@gmail.com). 
 2. Train your ```TASK``` model on preprocessed ```words``` and ```struct``` feature sets using ```train_location_training```. 
 3. Run ```train_location_weighting``` to find the best mixture model for generalizable classification. This script reports performance on both regular and masked dataset variants to help researchers ensure model generalizability.
 

@@ -191,6 +191,18 @@ def get_args(argv=None):
         help="The cap on the number of simultaneous jobs spawned if the slurm flag is raised."
     )
     argparser.add_argument(
+        "--mem",
+        dest='mem',
+        type=str,
+        help="Override per-task memory for the Slurm submission (e.g. '8G', '16000M'). Falls back to the per-resource default in RESOURCE_SLURM_RESOURCES, then to slurm.sh."
+    )
+    argparser.add_argument(
+        "--cpus-per-task",
+        dest='cpus_per_task',
+        type=int,
+        help="Override per-task CPU count for the Slurm submission. Falls back to the per-resource default in RESOURCE_SLURM_RESOURCES, then to slurm.sh."
+    )
+    argparser.add_argument(
         "--files-per-job",
         type=int,
         default=1,
@@ -346,10 +358,12 @@ if __name__ == "__main__":
             cmd_parts.extend(["--gres", "gpu:1"])
 
         slurm_res = RESOURCE_SLURM_RESOURCES.get(args.resource, {})
-        if "mem" in slurm_res:
-            cmd_parts.extend(["--mem", str(slurm_res["mem"])])
-        if "cpus-per-task" in slurm_res:
-            cmd_parts.extend(["--cpus-per-task", str(slurm_res["cpus-per-task"])])
+        mem = args.mem if args.mem is not None else slurm_res.get("mem")
+        cpus_per_task = args.cpus_per_task if args.cpus_per_task is not None else slurm_res.get("cpus-per-task")
+        if mem is not None:
+            cmd_parts.extend(["--mem", str(mem)])
+        if cpus_per_task is not None:
+            cmd_parts.extend(["--cpus-per-task", str(cpus_per_task)])
 
         if array_flag:
             cmd_parts.extend(["--array", array_flag])

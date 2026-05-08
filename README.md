@@ -15,7 +15,7 @@ This repository contains tools for the development and evaluation of the **Illin
 
 ## Corpus Access
 
-A coding-free website for convenient access to the full comment corpus or samples of it can be found [here](isaac.psychology.illinois.edu). Submissions will be integrated into the same dataset soon.
+A coding-free website for convenient access to the full comment corpus or samples of it can be found [here](https://isaac.psychology.illinois.edu). Submissions will be integrated into the same dataset soon.
 
 ## Corpus Interpretation
 

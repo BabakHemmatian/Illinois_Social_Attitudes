@@ -75,6 +75,9 @@ fi
 if [[ -n "${input:-}" ]]; then
   ARGS+=( "-i" "${input}" )
 fi
+if [[ -n "${input_2:-}" ]]; then
+  ARGS+=( "-2" "${input_2}" )
+fi
 if [[ -n "${output:-}" ]]; then
   ARGS+=( "-o" "${output}" )
 fi

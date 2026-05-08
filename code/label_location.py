@@ -27,6 +27,7 @@ from utils import (
     cache_put_locations,
     check_reqd_files,
     find_raw_month_files,
+    get_last_source_row,
     init_location_cache,
     init_location_detail_cache,
     log_report,
@@ -105,8 +106,6 @@ if args.output:
 else:
     output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_location"
 output_path.mkdir(parents=True, exist_ok=True)
-
-processed_stems = {Path(f).stem for f in os.listdir(output_path) if f.endswith(".csv")}
 
 # Per-type, group-global location cache. Comments and submissions stay separate
 # because their feature distributions differ enough that the model behaves
@@ -788,10 +787,18 @@ def _details_from_cache_or_label(author: str, cached_details: Dict[str, Dict[str
     }
 
 
-def _write_output_csv(header: Sequence[str], rows: Sequence[Sequence[str]], author_idx: int, detail_by_author: Dict[str, Dict[str, object]], out_file: Path) -> None:
-    with open(out_file, "w", encoding="utf-8", newline="", errors="ignore") as fo:
+def _write_output_csv(
+    header: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    author_idx: int,
+    detail_by_author: Dict[str, Dict[str, object]],
+    out_file: Path,
+    mode: str = "w",
+) -> None:
+    with open(out_file, mode, encoding="utf-8", newline="", errors="ignore") as fo:
         writer = csv.writer(fo)
-        writer.writerow(list(header) + ["location", "location_prob", "contender_location", "contender_location_prob"])
+        if mode == "w":
+            writer.writerow(list(header) + ["location", "location_prob", "contender_location", "contender_location_prob"])
         for r in rows:
             author = r[author_idx].strip() if len(r) > author_idx else ""
             detail = detail_by_author.get(author, {"location": UNKNOWN_LABEL})
@@ -810,10 +817,6 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     curated_csv_path = str(curated_csv_path)
     stem = Path(curated_csv_path).stem
 
-    if stem in processed_stems:
-        log_report(report_file_path, f"[skip] output already exists for {stem}")
-        return (stem, 0, 0, 0)
-
     ym = _extract_year_month_from_name(curated_csv_path)
     if ym is None:
         log_report(report_file_path, f"[warn] could not parse year-month from {curated_csv_path}; skipping")
@@ -821,6 +824,14 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     year, month_int = ym
 
     start = time.time()
+
+    out_file = output_path / f"{stem}.csv"
+    last_processed = get_last_source_row(
+        out_file,
+        report_file_path=report_file_path,
+        file_for_log=curated_csv_path,
+    )
+    write_mode = "a" if last_processed >= 0 else "w"
 
     try:
         header, rows, authors, local_counts, local_seen, idx_map = _read_month_rows_and_seed_features(curated_csv_path)
@@ -831,12 +842,40 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         log_report(report_file_path, f"[warn] {stem}: no authors found")
         return (stem, 0, 0, 0)
 
-    cached_locations = cache_get_locations(CACHE_DB_PATH, authors)
-    cached_details = cache_get_location_details(CACHE_DB_PATH, list(authors))
+    # Filter to rows still needing inference + write; restrict authors to
+    # those that appear in the remaining rows so we don't waste raw-zst
+    # scans on authors whose rows have already been written.
+    src_idx = header.index("source_row") if "source_row" in header else -1
+    if last_processed >= 0 and src_idx >= 0:
+        remaining_rows: List[List[str]] = []
+        for r in rows:
+            if len(r) <= src_idx:
+                continue
+            sval = r[src_idx].strip()
+            try:
+                if int(sval) > last_processed:
+                    remaining_rows.append(r)
+            except ValueError:
+                continue
+        if not remaining_rows:
+            log_report(report_file_path, f"[skip-complete] {stem}: all rows already processed (last_source_row={last_processed})")
+            return (stem, len(rows), len(authors), 0)
+        author_idx_for_filter = idx_map["author"]
+        target_row_authors = {
+            r[author_idx_for_filter].strip() for r in remaining_rows
+            if len(r) > author_idx_for_filter and r[author_idx_for_filter].strip() and r[author_idx_for_filter].strip() != "[deleted]"
+        }
+    else:
+        remaining_rows = list(rows)
+        target_row_authors = set(authors)
+
+    # Cache lookups are restricted to authors that still need a row written.
+    cached_locations = cache_get_locations(CACHE_DB_PATH, target_row_authors)
+    cached_details = cache_get_location_details(CACHE_DB_PATH, list(target_row_authors))
 
     detail_by_author: Dict[str, Dict[str, object]] = {}
     n_skipped_bias = 0
-    for author in authors:
+    for author in target_row_authors:
         # For authors whose curated-input footprint is large, the local seed
         # features dominate inference enough that any cross-group cached label
         # is least trustworthy. Skip the lookup so they get re-inferred from
@@ -849,16 +888,15 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         if author in cached_locations or author in cached_details:
             detail_by_author[author] = _details_from_cache_or_label(author, cached_details, cached_locations)
 
-    remaining_authors = sorted(a for a in authors if a not in detail_by_author)
+    remaining_authors = sorted(a for a in target_row_authors if a not in detail_by_author)
     n_cached = len(detail_by_author)
     n_total = len(authors)
 
     if not remaining_authors:
-        out_file = output_path / f"{stem}.csv"
-        _write_output_csv(header, rows, idx_map["author"], detail_by_author, out_file)
+        _write_output_csv(header, remaining_rows, idx_map["author"], detail_by_author, out_file, mode=write_mode)
         elapsed = (time.time() - start) / 60
-        log_report(report_file_path, f"[done-cache] {stem}: rows={len(rows):,} authors={n_total:,} cached={n_cached:,} minutes={elapsed:.2f}")
-        return (stem, len(rows), n_total, 0)
+        log_report(report_file_path, f"[done-cache] {stem}: rows={len(remaining_rows):,} authors={len(target_row_authors):,} cached={n_cached:,} minutes={elapsed:.2f}")
+        return (stem, len(remaining_rows), len(target_row_authors), 0)
 
     scan_months = month_spiral(year, month_int, max_files_to_scan=max_files_to_scan, max_radius=max_radius)
     raw_files: List[str] = []
@@ -872,11 +910,10 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     if not raw_files:
         for author in remaining_authors:
             detail_by_author[author] = unknown_result(seen_count=local_seen.get(author, 0), reason="no_raw_files")
-        out_file = output_path / f"{stem}.csv"
-        _write_output_csv(header, rows, idx_map["author"], detail_by_author, out_file)
+        _write_output_csv(header, remaining_rows, idx_map["author"], detail_by_author, out_file, mode=write_mode)
         elapsed = (time.time() - start) / 60
         log_report(report_file_path, f"[warn] {stem}: no raw files in scan window; wrote UNKNOWN for {len(remaining_authors):,}. minutes={elapsed:.2f}")
-        return (stem, len(rows), n_total, len(remaining_authors))
+        return (stem, len(remaining_rows), n_total, len(remaining_authors))
 
     log_report(
         report_file_path,
@@ -937,17 +974,16 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         f"top_conf>={TOP_CONF_THRESHOLD} reg_margin>={REG_CONF_MARGIN} state_margin>={STA_CONF_MARGIN} min_samples_cache={MIN_SAMPLES_FOR_CACHE}",
     )
 
-    out_file = output_path / f"{stem}.csv"
-    _write_output_csv(header, rows, idx_map["author"], detail_by_author, out_file)
+    _write_output_csv(header, remaining_rows, idx_map["author"], detail_by_author, out_file, mode=write_mode)
 
     elapsed = (time.time() - start) / 60
     covered = sum(1 for a in remaining_authors if author_seen.get(a, 0) > 0)
     log_report(
         report_file_path,
-        f"[done] {stem}: rows={len(rows):,} authors={n_total:,} cached={n_cached:,} scanned_raw={len(remaining_authors):,} "
+        f"[done] {stem}: rows={len(remaining_rows):,} authors={n_total:,} cached={n_cached:,} scanned_raw={len(remaining_authors):,} "
         f"covered={covered:,} minutes={elapsed:.2f}",
     )
-    return (stem, len(rows), n_total, len(remaining_authors))
+    return (stem, len(remaining_rows), n_total, len(remaining_authors))
 
 
 def label_location_parallel() -> None:

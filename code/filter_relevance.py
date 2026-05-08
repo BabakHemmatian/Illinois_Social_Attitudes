@@ -2,7 +2,7 @@
 
 # import functions and objects
 from cli import get_args, DATA_DIR, MODELS_DIR
-from utils import parse_range, headers, log_report, check_reqd_files, log_error
+from utils import parse_range, headers, log_report, check_reqd_files, log_error, get_last_source_row, detect_source_row
 
 # import Python packages
 import os
@@ -132,85 +132,8 @@ def get_predictions(texts, threshold_class=threshold_class, threshold=threshold,
 
     return predictions
 
-# If the output file already exists, we check the last processed row number and resume from there.
-def get_last_processed_row(output_file_path, report_file_path=None, file_for_log=None):
-    if not os.path.exists(output_file_path):
-        return 0
-
-    try:
-        # Read header only to locate the source_row column by name
-        with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore", newline="") as existing_file:
-            reader_existing = csv.reader(existing_file)
-            header = next(reader_existing, None)
-
-        if not header:
-            return 0
-
-        try:
-            source_idx = header.index("source_row")
-        except ValueError:
-            if report_file_path and file_for_log:
-                log_report(
-                    report_file_path,
-                    f"Warning: Could not find 'source_row' column in existing output "
-                    f"for {Path(file_for_log).name}. Restarting from beginning."
-                )
-            return 0
-
-        # Read the last non-empty physical line efficiently
-        last_line = None
-        with open(output_file_path, "rb") as f:
-            f.seek(0, os.SEEK_END)
-            position = f.tell()
-
-            if position == 0:
-                return 0  # empty file
-
-            buffer = bytearray()
-
-            while position > 0:
-                position -= 1
-                f.seek(position)
-                byte = f.read(1)
-
-                if byte == b"\n":
-                    if buffer:
-                        last_line = buffer[::-1].decode("utf-8", errors="ignore").strip()
-                        if last_line:
-                            break
-                        buffer = bytearray()
-                else:
-                    buffer.extend(byte)
-
-            if buffer and not last_line:
-                last_line = buffer[::-1].decode("utf-8", errors="ignore").strip()
-
-        if not last_line:
-            return 0
-
-        last_row = next(csv.reader([last_line]))
-
-        if source_idx >= len(last_row):
-            if report_file_path and file_for_log:
-                log_report(
-                    report_file_path,
-                    f"Warning: 'source_row' column index out of range in last row of "
-                    f"{Path(file_for_log).name}. Restarting from beginning."
-                )
-            return 0
-
-        return int(last_row[source_idx])
-
-    except Exception as e:
-        if report_file_path and file_for_log:
-            log_report(
-                report_file_path,
-                f"Warning: Could not determine resume position for {Path(file_for_log).name}. "
-                f"Restarting from beginning. Error: {e}"
-            )
-        return 0
-
-# For each input file, we add an extra column "source_row" to record the input file row number.
+# Propagate `source_row` from input when present; generate it from the input
+# row index when absent (legacy filter_language outputs).
 def filter_relevance_file(file):
     function_name = "filter_relevance_file"
     log_report(
@@ -222,26 +145,17 @@ def filter_relevance_file(file):
         start_time = time.time()
         output_file_path = os.path.join(output_path, Path(file).name)
 
-        # New header includes extra column "source_row"
-        new_headers = headers + ["source_row"]
-        keywords_idx = new_headers.index("matched patterns")
-
         error_counter = 0
         evaluated_counter = 0
         passed_counter = 0
 
         # Determine resume position if output file already exists.
-        last_processed = get_last_processed_row(
-        output_file_path,
-        report_file_path=report_file_path,
-        file_for_log=file,
+        last_processed = get_last_source_row(
+            output_file_path,
+            report_file_path=report_file_path,
+            file_for_log=file,
         )
-
-        if os.path.exists(output_file_path) and last_processed > 0:
-            mode = "a"
-        else:
-            mode = "w"
-            last_processed = 0
+        mode = "a" if last_processed >= 0 else "w"
 
         with open(file, "r", encoding="utf-8-sig", errors="ignore") as input_file, \
              open(output_file_path, mode, encoding="utf-8-sig", errors="ignore", newline="") as output_file:
@@ -249,8 +163,22 @@ def filter_relevance_file(file):
             reader = csv.reader((line.replace('\x00', '') for line in input_file))
             writer = csv.writer(output_file)
 
+            try:
+                in_header = next(reader)
+            except StopIteration:
+                return 0, 0, 0
+
+            src_idx_in, has_input_source_row = detect_source_row(in_header)
+            keywords_idx = in_header.index("matched patterns") if "matched patterns" in in_header else headers.index("matched patterns")
+
+            # Output header: propagate input header verbatim if it already has
+            # source_row; otherwise append source_row so downstream resources
+            # can resume.
             if mode == "w":
-                writer.writerow(new_headers)
+                if has_input_source_row:
+                    writer.writerow(in_header)
+                else:
+                    writer.writerow(list(in_header) + ["source_row"])
 
             batch_lines = []
             relevant_lines = []
@@ -274,17 +202,31 @@ def filter_relevance_file(file):
                     writer.writerows(relevant_lines)
                     relevant_lines.clear()
 
-            for id_, line in enumerate(reader):
-                if id_ == 0:
-                    continue  # skip input header
-                if id_ <= last_processed:
-                    continue  # resume mode
-
+            for id_, line in enumerate(reader, start=1):
                 try:
                     if len(line) < 3:
                         raise IndexError(f"insufficient columns ({len(line)} found)")
 
-                    batch_lines.append(line + [id_])
+                    # Determine source_row for this row (for resume + output).
+                    if has_input_source_row:
+                        src_val = line[src_idx_in].strip() if len(line) > src_idx_in else ""
+                        try:
+                            src_num = int(src_val)
+                        except ValueError:
+                            src_num = None
+                    else:
+                        src_num = id_
+
+                    # Resume: skip already-processed rows.
+                    if src_num is not None and src_num <= last_processed:
+                        continue
+
+                    # Append source_row only if input lacked it; otherwise the
+                    # input row already carries it through.
+                    if has_input_source_row:
+                        batch_lines.append(line)
+                    else:
+                        batch_lines.append(list(line) + [id_])
                     evaluated_counter += 1
 
                     if len(batch_lines) == batch_size:

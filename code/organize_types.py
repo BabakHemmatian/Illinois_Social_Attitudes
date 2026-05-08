@@ -104,14 +104,18 @@ if input_comments.name != input_submissions.name:
     )
 
 # generate input file lists
-input_comments_file_list = check_reqd_files(years, input_comments, "comments")
-input_comments = sorted(input_comments, key=lambda p: Path(p).name)
-input_submissions_file_list = check_reqd_files(years, input_submissions, "submissions")
-input_submissions = sorted(input_submissions, key=lambda p: Path(p).name)
+input_comments_file_list = sorted(
+    check_reqd_files(years, input_comments, "comments"),
+    key=lambda p: Path(p).name,
+)
+input_submissions_file_list = sorted(
+    check_reqd_files(years, input_submissions, "submissions"),
+    key=lambda p: Path(p).name,
+)
 
 # parse the output path
 if not args.output:
-    output_path = DATA_DIR / "data_reddit_curated" / group / "all" / Path(input_comments).name
+    output_path = DATA_DIR / "data_reddit_curated" / group / "all" / input_comments.name
 else:
     output_path = Path(args.output)
 
@@ -202,6 +206,8 @@ def next_row(reader: csv.DictReader) -> Optional[Dict[str, str]]:
 # NOTE: If a comment and a submission are posted at the exact same time, the submission is written first
 
 # Stream-merge two CSVs by ascending 'time', writing an added 'type' column.
+# Writes to <output>.tmp first, then atomically renames to <output> on success.
+# A crashed run leaves a .tmp behind, which the caller cleans up on startup.
 def merge_comment_and_submission_file(
     comment_file: str | Path,
     submission_file: str | Path,
@@ -210,13 +216,14 @@ def merge_comment_and_submission_file(
     comment_file = Path(comment_file)
     submission_file = Path(submission_file)
     output_file = Path(output_file)
+    tmp_file = output_file.with_suffix(output_file.suffix + ".tmp")
 
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
     with (
         open(comment_file, "r", encoding="utf-8", errors="ignore", newline="") as comment_input,
         open(submission_file, "r", encoding="utf-8", errors="ignore", newline="") as submission_input,
-        open(output_file, "w", encoding="utf-8", newline="") as out_f,
+        open(tmp_file, "w", encoding="utf-8", newline="") as out_f,
     ):
         comment_reader = csv.DictReader(comment_input)
         submission_reader = csv.DictReader(submission_input)
@@ -258,6 +265,9 @@ def merge_comment_and_submission_file(
             row_out["type"] = "submission"
             writer.writerow(row_out)
             submission_row = next_row(submission_reader)
+
+    # Atomic publish: rename only after the merge has streamed to the end.
+    os.replace(tmp_file, output_file)
 
 
 # Worker wrapper so the parent process can log cleanly.
@@ -348,6 +358,17 @@ def get_target_jobs(
 
 def organize_types_parallel() -> None:
     start_time = time.time()
+
+    # Clean up any .tmp files left behind by a crashed prior run before we
+    # build the processed_files set; otherwise their stems would falsely look
+    # complete to build_merge_jobs.
+    for f in os.listdir(output_path):
+        if f.endswith(".csv.tmp"):
+            try:
+                (output_path / f).unlink()
+                log_report(report_file_path, f"Removed stale temp file from prior crashed run: {f}")
+            except OSError as e:
+                log_report(report_file_path, f"Warning: could not remove stale temp file {f}: {e}")
 
     # Track already-produced month files by stem, e.g. ALL_2012-01
     processed_files = {

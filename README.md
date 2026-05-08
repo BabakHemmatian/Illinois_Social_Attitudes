@@ -84,6 +84,12 @@ This example command will use the appropriate keyword lists from this repository
 
 ```filter_keywords``` must be used first. ```organize``` resources need ```filtered``` or ```labeled``` outputs to work. Otherwise, the resources can be used in customized order by adding ```--input``` and ```--output``` path arguments to a command pointing to the desired input/output directories. If not provided, the paths default to the resource order indicated below.
 
+#### Resumable Runs and the `source_row` Column
+
+Every per-month CSV produced by ```filter_keywords``` carries a `source_row` column whose value is the 1-indexed line number of the post inside the original ```.zst``` file. Every later resource (```filter_language```, ```filter_relevance```, ```filter_keywords_adv```, all ```label_*```, and ```organize_anonymize```) propagates `source_row` unchanged through to its own output and uses it to resume an interrupted run by skipping rows whose `source_row` value has already been written. ```organize_types```, which merges two time-sorted streams, instead writes to a `<output>.csv.tmp` file and atomically renames on success, so a crashed run is detected and re-done from scratch on the next invocation.
+
+If you slot a custom resource into the pipeline, preserve the `source_row` column in your output to keep downstream resume working. Older outputs that predate this column continue to work — when a resource's input lacks `source_row`, it falls back to generating one from the input's row index.
+
 ### Default Resource Use Order
 
 The scripts may be used without any changes to recreate the ISAAC corpus. To do so, call the resources without ```--input``` and ```--output``` path arguments in the following order for a given social group and year range:

@@ -2,7 +2,7 @@
 
 # Import functions and objects
 from cli import get_args, DATA_DIR, PROJECT_ROOT
-from utils import parse_range, log_report, log_error, load_terms, groups, check_reqd_files
+from utils import parse_range, log_report, log_error, load_terms, groups, check_reqd_files, get_last_source_row, detect_source_row
 
 # Import Python packages
 import os, time
@@ -31,7 +31,7 @@ array = args.array if args.array is not None else None
 if not args.input:
     input_path = DATA_DIR / "data_reddit_curated" / group / type_ / "filtered_relevance"
 else:
-    input_path = args.input
+    input_path = Path(args.input)
 
 # Load social group advanced regular experession sets
 keyword_path = os.path.join(PROJECT_ROOT,"keywords")
@@ -43,7 +43,7 @@ all_words = marginalized_words + privileged_words
 if not args.output:
     output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "filtered_keywords_adv"
 else:
-    output_path = args.output
+    output_path = Path(args.output)
 output_path.mkdir(parents=True, exist_ok=True)
 file_list = check_reqd_files(years, input_path, type_)
 
@@ -149,25 +149,56 @@ def filter_keyword_adv_file(file_name):
         context.append(pattern_id)
         return 0
 
+    # Resume: skip rows already written under a prior run.
+    last_processed = get_last_source_row(
+        output_csv_file,
+        report_file_path=report_file_path,
+        file_for_log=str(input_path),
+    )
+    mode = "a" if last_processed >= 0 else "w"
+
     try:
         with open(input_path, "r", encoding="utf-8-sig", errors="ignore", newline="") as inp, \
-             open(output_csv_file, "w", encoding="utf-8", newline="") as outp:
+             open(output_csv_file, mode, encoding="utf-8", newline="") as outp:
 
             reader = csv.reader(inp)
             writer = csv.writer(outp)
 
-            header_written = False
+            try:
+                in_header = next(reader)
+            except StopIteration:
+                # Empty input: still emit the expected fallback header on a fresh write.
+                if mode == "w":
+                    writer.writerow(["id", "parent_id", "body", "author", "created_utc", "subreddit", "score", "matches"])
+                return 0, 0
 
-            for row_idx, row in enumerate(reader):
-                if row_idx == 0:
-                    # pass through the header
-                    writer.writerow(row)
-                    header_written = True
-                    continue
+            src_idx_in, has_input_source_row = detect_source_row(in_header)
 
+            # Pass through input header verbatim if it has source_row;
+            # otherwise append source_row so downstream resources can resume.
+            if mode == "w":
+                if has_input_source_row:
+                    writer.writerow(in_header)
+                else:
+                    writer.writerow(list(in_header) + ["source_row"])
+
+            for row_idx, row in enumerate(reader, start=1):
                 total_lines += 1
                 try:
                     if len(row) <= BODY_COL_INDEX:
+                        continue
+
+                    # Determine source_row for resume + output.
+                    if has_input_source_row:
+                        src_val = row[src_idx_in].strip() if len(row) > src_idx_in else ""
+                        try:
+                            src_num = int(src_val)
+                        except ValueError:
+                            src_num = None
+                    else:
+                        src_num = row_idx
+
+                    if src_num is not None and src_num <= last_processed:
                         continue
 
                     text_str = row[BODY_COL_INDEX]
@@ -192,14 +223,13 @@ def filter_keyword_adv_file(file_name):
 
                     if match_ids:
                         matched_lines += 1
-                        writer.writerow(row)
+                        if has_input_source_row:
+                            writer.writerow(row)
+                        else:
+                            writer.writerow(list(row) + [row_idx])
 
                 except Exception as e:
                     log_error("filter_keyword_adv_file", str(input_path), total_lines, row, e)
-
-            if not header_written:
-                # if input was empty, still emit the expected header
-                writer.writerow(["id", "parent_id", "body", "author", "created_utc", "subreddit", "score", "matches"])
 
     except Exception as e:
         log_report(report_file_path, f"Error filtering by advanced keywords in file {input_path.name}: {e}")

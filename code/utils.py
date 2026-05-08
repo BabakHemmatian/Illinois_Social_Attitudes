@@ -89,6 +89,128 @@ def load_terms(file_path: str) -> List[str]:
     with open(file_path, "r", encoding="utf-8") as f:
         return [line.lower().rstrip("\r\n") for line in f if line.strip()]
 
+## Resume helpers (used by all filter_/label_/organize_ resources)
+
+# Read the last fully-written row of a CSV efficiently (seek-from-end), and
+# return the integer in its `source_row` column. Returns -1 if:
+#   - file doesn't exist
+#   - file is empty / has only a header
+#   - header lacks a `source_row` column
+#   - last data row is malformed / source_row not parseable
+# Returns -1 (not 0) so callers can distinguish "no resume point" from
+# "first data row already processed" (source_row=0). Callers should resume
+# by skipping rows whose source_row <= returned value.
+#
+# As a side-effect, truncates any partial trailing data after the last
+# newline (which would otherwise corrupt the file when an append-mode
+# writer concatenates a new row onto it). This handles the realistic crash
+# pattern where a writer was killed mid-row.
+def get_last_source_row(output_file_path: str | Path,
+                        report_file_path: Optional[str] = None,
+                        file_for_log: Optional[str] = None) -> int:
+    output_file_path = str(output_file_path)
+    if not os.path.exists(output_file_path):
+        return -1
+
+    try:
+        with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+            reader = csv.reader(f)
+            header = next(reader, None)
+
+        if not header:
+            return -1
+
+        try:
+            source_idx = header.index("source_row")
+        except ValueError:
+            if report_file_path and file_for_log:
+                log_report(
+                    report_file_path,
+                    f"Warning: Could not find 'source_row' column in existing output "
+                    f"for {Path(file_for_log).name}. Restarting from beginning."
+                )
+            return -1
+
+        # Open r+b so we can truncate a partial trailing row in place.
+        last_line = None
+        with open(output_file_path, "r+b") as f:
+            f.seek(0, os.SEEK_END)
+            file_end = f.tell()
+            if file_end == 0:
+                return -1
+
+            # If the file does not end in a newline, the writer was killed
+            # mid-row. Walk back to the last newline and truncate everything
+            # after it before reading the last complete line.
+            f.seek(file_end - 1)
+            if f.read(1) != b"\n":
+                pos = file_end - 1
+                while pos > 0:
+                    pos -= 1
+                    f.seek(pos)
+                    if f.read(1) == b"\n":
+                        f.truncate(pos + 1)
+                        break
+                else:
+                    # No newline anywhere: the whole file is a partial single
+                    # line (corrupt header); no usable resume point.
+                    return -1
+
+            f.seek(0, os.SEEK_END)
+            position = f.tell()
+            if position == 0:
+                return -1
+
+            buffer = bytearray()
+            while position > 0:
+                position -= 1
+                f.seek(position)
+                byte = f.read(1)
+                if byte == b"\n":
+                    if buffer:
+                        last_line = buffer[::-1].decode("utf-8", errors="ignore").strip()
+                        if last_line:
+                            break
+                        buffer = bytearray()
+                else:
+                    buffer.extend(byte)
+
+            if buffer and not last_line:
+                last_line = buffer[::-1].decode("utf-8", errors="ignore").strip()
+
+        if not last_line:
+            return -1
+
+        last_row = next(csv.reader([last_line]))
+
+        if source_idx >= len(last_row):
+            return -1
+
+        try:
+            return int(last_row[source_idx])
+        except (ValueError, TypeError):
+            return -1
+
+    except Exception as e:
+        if report_file_path and file_for_log:
+            log_report(
+                report_file_path,
+                f"Warning: Could not determine resume position for {Path(file_for_log).name}. "
+                f"Restarting from beginning. Error: {e}"
+            )
+        return -1
+
+
+# Inspect an input CSV header. Returns (source_row_idx, has_source_row).
+# When has_source_row is True, callers should propagate values from input
+# instead of generating their own.
+def detect_source_row(in_header: List[str]) -> Tuple[int, bool]:
+    try:
+        return in_header.index("source_row"), True
+    except ValueError:
+        return -1, False
+
+
 ## Logging helpers (used by multiple scripts)
 
 def log_report(report_file_path: Optional[str] = None, message: Optional[str] = None) -> None:

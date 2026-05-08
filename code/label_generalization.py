@@ -2,7 +2,7 @@
 
 # import functions and objects
 from cli import get_args, DATA_DIR, MODELS_DIR
-from utils import parse_range, log_report, check_reqd_files
+from utils import parse_range, log_report, check_reqd_files, get_last_source_row
 
 # import Python packages
 import os
@@ -278,25 +278,13 @@ def label_generalization_file(file):
     # Build output file path using the relative part from the input file.
     output_file_path = os.path.join(output_path, Path(file).name)
 
-    # Determine resume position by reading 'source_row' column
-    mode = "w"
-    last_processed = -1
-    if os.path.exists(output_file_path):
-        with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore") as existing_file:
-            out_rows = list(csv.reader(existing_file))
-            if len(out_rows) > 1:
-                out_header = out_rows[0]
-                try:
-                    src_idx_out = out_header.index("source_row")
-                    for r in reversed(out_rows[1:]):
-                        if len(r) > src_idx_out and r[src_idx_out].strip():
-                            last_processed = int(r[src_idx_out])
-                            break
-                    mode = "a"
-                except ValueError:
-                    # Output header missing source_row; safest is to rewrite from scratch.
-                    mode = "w"
-                    last_processed = -1
+    # Determine resume position from existing output (if any).
+    last_processed = get_last_source_row(
+        output_file_path,
+        report_file_path=report_file_path,
+        file_for_log=file,
+    )
+    mode = "a" if last_processed >= 0 else "w"
 
     # Open input & output
     with open(file, "r", encoding="utf-8-sig", errors="ignore") as input_file, \

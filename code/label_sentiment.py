@@ -2,7 +2,7 @@
 
 # import functions and objects
 from cli import get_args, DATA_DIR
-from utils import parse_range, log_report, check_reqd_files
+from utils import parse_range, log_report, check_reqd_files, get_last_source_row
 import os
 import csv
 csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
@@ -72,29 +72,12 @@ def label_sentiment_file(file):
     output_file_path = os.path.join(output_path, Path(file).name)
 
     # determine resume position from any existing output
-    mode = "w"
-    last_processed = -1  # nothing processed yet
-    out_header = None
-    source_row_out_idx = None
-
-    if os.path.exists(output_file_path):
-        # Read header + last data row to find the last processed source_row
-        with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore") as f_out:
-            out_rows = list(csv.reader(f_out))
-            if len(out_rows) > 1:
-                out_header = out_rows[0]
-                try:
-                    source_row_out_idx = out_header.index("source_row")
-                    # Walk backwards to find last non-empty source_row
-                    for r in reversed(out_rows[1:]):
-                        if len(r) > source_row_out_idx and r[source_row_out_idx].strip():
-                            last_processed = int(r[source_row_out_idx])
-                            break
-                    mode = "a"  # append 
-                except ValueError:
-                    # Output exists but somehow lacks 'source_row' in header; start fresh.
-                    mode = "w"
-                    last_processed = -1
+    last_processed = get_last_source_row(
+        output_file_path,
+        report_file_path=report_file_path,
+        file_for_log=file,
+    )
+    mode = "a" if last_processed >= 0 else "w"
 
     # sentiment tools
     try:

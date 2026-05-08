@@ -331,6 +331,8 @@ if __name__ == "__main__":
         # Forward optional path overrides to slurm.sh
         if args.input:
             slurm_vars.append(f"input={args.input}")
+        if args.input_2:
+            slurm_vars.append(f"input_2={args.input_2}")
         if args.output:
             slurm_vars.append(f"output={args.output}")
 
@@ -406,6 +408,8 @@ if __name__ == "__main__":
         # Forward optional path overrides when running locally
         if args.input:
             cmd_parts.extend(["-i", args.input])
+        if args.input_2:
+            cmd_parts.extend(["-2", args.input_2])
         if args.output:
             cmd_parts.extend(["-o", args.output])
 

@@ -19,6 +19,7 @@ from utils import (
     log_report,
     find_latest_resource_dir,
     validate_resource_dir,
+    get_last_source_row,
 )
 
 ### Argument Handling
@@ -115,7 +116,7 @@ def select_target_files(
     for p in all_files:
         ym = month_from_filename(p)
         if ym in target_month_set:
-            out.append(p)
+            out.append(Path(p))
 
     return sorted(out, key=lambda p: p.name)
 
@@ -245,6 +246,7 @@ def should_preserve_author(author_value: str) -> bool:
 ### Main Anonymization Functions
 
 # Stream one CSV to another while anonymizing the 'author' column. Returns (rows_written, new_ids_created_in_this_file).
+# Resumes from the last source_row already written to the output if any.
 def anonymize_one_file(
     input_file: str | Path,
     output_file: str | Path,
@@ -254,6 +256,9 @@ def anonymize_one_file(
     output_file = Path(output_file)
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
+    last_processed = get_last_source_row(output_file)
+    mode = "a" if last_processed >= 0 else "w"
+
     conn = open_cache(db_path)
     local_cache: Dict[str, str] = {}
     rows_written = 0
@@ -262,7 +267,7 @@ def anonymize_one_file(
     try:
         with (
             open(input_file, "r", encoding="utf-8-sig", errors="ignore", newline="") as in_f,
-            open(output_file, "w", encoding="utf-8", newline="") as out_f,
+            open(output_file, mode, encoding="utf-8", newline="") as out_f,
         ):
             reader = csv.DictReader((line.replace("\x00", "") for line in in_f))
             if reader.fieldnames is None:
@@ -271,10 +276,22 @@ def anonymize_one_file(
             if "author" not in reader.fieldnames:
                 raise ValueError(f"Input file {input_file.name} does not contain an 'author' column.")
 
+            has_source_row = "source_row" in reader.fieldnames
+
             writer = csv.DictWriter(out_f, fieldnames=reader.fieldnames)
-            writer.writeheader()
+            if mode == "w":
+                writer.writeheader()
 
             for row in reader:
+                # Resume: skip rows already anonymized in a prior run.
+                if has_source_row and last_processed >= 0:
+                    sval = (row.get("source_row") or "").strip()
+                    try:
+                        if int(sval) <= last_processed:
+                            continue
+                    except ValueError:
+                        pass
+
                 author = row.get("author", "")
 
                 if not should_preserve_author(author):
@@ -335,14 +352,6 @@ def organize_anonymize() -> None:
 
     for input_file in target_files:
         output_file = output_path / input_file.name
-
-        if output_file.exists():
-            skipped += 1
-            log_report(
-                report_file_path,
-                f"Skipping {input_file.name}: output already exists at {output_file}"
-            )
-            continue
 
         try:
             rows_written, new_ids_created = anonymize_one_file(

@@ -2,7 +2,7 @@
 
 # Import functions and objects
 from cli import get_args, MODELS_DIR, DATA_DIR
-from utils import parse_range, headers, check_reqd_files, log_report, log_error
+from utils import parse_range, headers, check_reqd_files, log_report, log_error, get_last_source_row, detect_source_row
 
 # Import Python packages
 import fasttext 
@@ -85,12 +85,22 @@ def filter_language_file(file):
 
     function_name = "filter_language_file"
     log_report(report_file_path, f"Started language filtering for {Path(file).name}")
-    
+
     try:
         output_file_path = os.path.join(output_path, Path(file).name)
 
+        # Resume: pick up from the last source_row already written to the output.
+        # If there's no resume point (no output yet, or it lacks source_row),
+        # last_processed = -1 and we open in 'w' mode for a fresh start.
+        last_processed = get_last_source_row(
+            output_file_path,
+            report_file_path=report_file_path,
+            file_for_log=file,
+        )
+        mode = "a" if last_processed >= 0 else "w"
+
         with open(file, "r", encoding='utf-8-sig', errors='ignore') as input_file, \
-             open(output_file_path, "w", encoding='utf-8', errors='ignore', newline='') as output_file:
+             open(output_file_path, mode, encoding='utf-8', errors='ignore', newline='') as output_file:
             start_time = time.time()
 
             error_counter = 0
@@ -101,29 +111,60 @@ def filter_language_file(file):
             reader = csv.reader((line.replace('\0', '') for line in input_file))
             writer = csv.writer(output_file)
 
-            for id_, line in enumerate(reader):
-                if id_ == 0:
-                    writer.writerow(headers)
+            try:
+                in_header = next(reader)
+            except StopIteration:
+                return 0, 0, 0
+
+            src_idx_in, has_input_source_row = detect_source_row(in_header)
+
+            # Output header: pass through input header (which already has
+            # source_row when produced by an updated upstream resource).
+            # If input lacks source_row, generate it from the input row index
+            # so downstream resources can still resume.
+            if mode == "w":
+                if has_input_source_row:
+                    writer.writerow(in_header)
                 else:
-                    try:
-                        line[2] = line[2].strip().replace("\n", " ")
-                        if detect_language(line[2]) == 'en':
-                            writer.writerow(line)
-                            passed_counter += 1
-                    except IndexError as e:
-                        # Log the error and continue with the next line
-                        log_error(
-                            function_name,
-                            file,
-                            id_ + 1,
-                            str(line),
-                            e,
-                            report_file_path=report_file_path,
-                            output_path=output_path,
-                        )
-                        error_counter += 1
+                    writer.writerow(list(in_header) + ["source_row"])
+
+            for id_, line in enumerate(reader, start=1):
+                try:
+                    # Determine this row's source_row (for both the resume check
+                    # and the value we'll write).
+                    if has_input_source_row:
+                        src_val = line[src_idx_in].strip() if len(line) > src_idx_in else ""
+                        try:
+                            src_num = int(src_val)
+                        except ValueError:
+                            src_num = None
+                    else:
+                        src_num = id_
+
+                    # Resume: skip rows we've already written.
+                    if src_num is not None and src_num <= last_processed:
                         continue
-                    filtered_counter += 1
+
+                    line[2] = line[2].strip().replace("\n", " ")
+                    if detect_language(line[2]) == 'en':
+                        if has_input_source_row:
+                            writer.writerow(line)
+                        else:
+                            writer.writerow(list(line) + [id_])
+                        passed_counter += 1
+                except IndexError as e:
+                    log_error(
+                        function_name,
+                        file,
+                        id_ + 1,
+                        str(line),
+                        e,
+                        report_file_path=report_file_path,
+                        output_path=output_path,
+                    )
+                    error_counter += 1
+                    continue
+                filtered_counter += 1
 
             elapsed = (time.time() - start_time) / 60
             msg = (f"Finished language filtering {Path(file).name} in {elapsed:.2f} minutes. "

@@ -16,7 +16,7 @@ from pathlib import Path
 
 # Import functions and objects from local modules
 from cli import get_args, PROJECT_ROOT,RAW_DIR, DATA_DIR
-from utils import load_terms, groups, headers, parse_range, log_report, log_error
+from utils import load_terms, groups, headers, parse_range, log_report, log_error, get_last_source_row
 
 ### Argument handling
 
@@ -61,12 +61,10 @@ os.makedirs(output_path, exist_ok=True)
 output_report_filename = "Report_filter_keywords.csv"
 report_file_path = os.path.join(output_path, output_report_filename)
 
-# Track already-produced month files by stem, e.g. RC_2012-01
-processed_files = {
-    Path(f).stem
-    for f in os.listdir(output_path)
-    if f.endswith(".csv") and f != output_report_filename
-}
+# Output schema: canonical headers + source_row (the 1-indexed JSON-line index
+# inside the source .zst file). source_row is the canonical resume key for
+# every downstream resource.
+out_headers = headers + ["source_row"]
 
 # Setup the report file (tab-separated format)
 if not os.path.exists(report_file_path):
@@ -123,27 +121,55 @@ def filter_keyword_file(file):
 
     file_path = os.path.join(RAW_DIR, file)
     output_csv_file = os.path.join(output_path, f"{file.split('.zst')[0]}.csv")
-    
+
     buffer = []
     buffer_size = 20
     total_lines = 0
     matched_lines = 0
     start_time = time.time()
 
+    # Resume support: if a partial output exists with a source_row column,
+    # pick up from the last source_row written. Legacy outputs without
+    # source_row are skipped with a warning so we don't silently overwrite
+    # them — the user can delete to force a clean re-run.
+    last_processed = -1
+    if os.path.exists(output_csv_file):
+        last_processed = get_last_source_row(
+            output_csv_file,
+            report_file_path=report_file_path,
+            file_for_log=file,
+        )
+        if last_processed < 0:
+            with open(output_csv_file, "r", encoding="utf-8-sig", errors="ignore", newline="") as existing:
+                hdr = next(csv.reader(existing), None)
+            if hdr and "source_row" not in hdr:
+                log_report(
+                    report_file_path,
+                    f"Skipping {Path(file).name}: existing output lacks source_row column "
+                    f"(legacy file). Delete to force re-run."
+                )
+                return 0, 0
+
+    mode = "a" if last_processed >= 0 else "w"
+
     try:
         with open(file_path, 'rb') as fh, \
-            open(output_csv_file, 'w', newline='', encoding='utf-8') as csv_file:
-            
+            open(output_csv_file, mode, newline='', encoding='utf-8') as csv_file:
+
             writer = csv.writer(csv_file)
-            writer.writerow(headers)
-            
+            if mode == "w":
+                writer.writerow(out_headers)
+
             dctx = zstandard.ZstdDecompressor(max_window_size=2 ** 31)
             stream_reader = dctx.stream_reader(fh, read_across_frames=True)
             text_stream = io.TextIOWrapper(stream_reader, encoding='utf-8')
 
-            
+
             for line in text_stream:
                 total_lines += 1
+                # Resume: skip JSON lines we've already processed in a prior run.
+                if total_lines <= last_processed:
+                    continue
                 try:
                     contents = json.loads(line)
                     if type_ == "comments":
@@ -172,7 +198,8 @@ def filter_keyword_file(file):
                             datetime.fromtimestamp(int(contents.get("created_utc", 0))).strftime('%Y-%m-%d %H:%M:%S'),
                             contents.get("subreddit", ""),
                             contents.get("score", ""),
-                            ', '.join(list(set(matches)))
+                            ', '.join(list(set(matches))),
+                            total_lines,
                         ])
 
                         if len(buffer) >= buffer_size:
@@ -190,7 +217,7 @@ def filter_keyword_file(file):
                     output_path=output_path,
                 )
 
-                
+
 
             if buffer:
                 writer.writerows(buffer)
@@ -235,10 +262,6 @@ def filter_keyword_parallel():
 
     for file in sorted(os.listdir(RAW_DIR)):
         if not file.endswith(".zst"):
-            continue
-
-        stem = file.split(".zst")[0]
-        if stem in processed_files:
             continue
 
         # Simple parse based on existing filename convention

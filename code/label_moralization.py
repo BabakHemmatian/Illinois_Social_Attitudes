@@ -2,7 +2,7 @@
 
 # import functions and objects
 from cli import get_args, MODELS_DIR, DATA_DIR
-from utils import parse_range, log_report, check_reqd_files
+from utils import parse_range, log_report, check_reqd_files, get_last_source_row
 
 # import Python packages
 import os, sys
@@ -102,26 +102,13 @@ def label_moralization_file(file):
     # Build output file path using the relative part from the input file.
     output_file_path = os.path.join(output_path, Path(file).name)
 
-    # If the output file already exists, we check the last processed row number and resume from there.
-    mode = "w"
-    last_processed = -1
-    if os.path.exists(output_file_path):
-        with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore") as existing_file:
-            rows = list(csv.reader(existing_file))
-            if len(rows) > 1:
-                header_out = rows[0]
-                try:
-                    src_idx_out = header_out.index("source_row")
-                    # find the last non-empty source_row from the bottom
-                    for r in reversed(rows[1:]):
-                        if len(r) > src_idx_out and r[src_idx_out].strip():
-                            last_processed = int(r[src_idx_out])
-                            break
-                    mode = "a"
-                except ValueError:
-                    # Output exists but header lacks source_row? Safer to overwrite.
-                    mode = "w"
-                    last_processed = -1
+    # Resume from the last source_row in the existing output (if any).
+    last_processed = get_last_source_row(
+        output_file_path,
+        report_file_path=report_file_path,
+        file_for_log=file,
+    )
+    mode = "a" if last_processed >= 0 else "w"
 
     with open(file, "r", encoding="utf-8-sig", errors="ignore") as input_file, \
          open(output_file_path, mode, encoding="utf-8-sig", errors="ignore", newline="") as output_file:

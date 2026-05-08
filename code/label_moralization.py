@@ -38,7 +38,7 @@ model_path = MODELS_DIR / "label_moralization"
 if not args.input:
     input_path = DATA_DIR / "data_reddit_curated" / group / type_ / "filtered_keywords_adv"
 else:
-    input_path = args.input
+    input_path = Path(args.input)
 
 # Build file_list organized by year and raise an error if an expected file is missing
 file_list = check_reqd_files(years, input_path, type_)
@@ -47,7 +47,7 @@ file_list = sorted(file_list, key=lambda p: Path(p).name)
 if not args.output:
     output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_moralization"
 else:
-    output_path = args.output
+    output_path = Path(args.output)
 output_path.mkdir(parents=True, exist_ok=True)
 
 # prepare the report file

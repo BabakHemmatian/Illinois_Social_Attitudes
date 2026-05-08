@@ -36,12 +36,12 @@ if files_per_job is None or files_per_job < 1:
 if not args.input:
     input_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_moralization"
 else:
-    input_path = args.input
+    input_path = Path(args.input)
 
 if not args.output:
     output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_sentiment"
 else:
-    output_path = args.output
+    output_path = Path(args.output)
 
 output_path.mkdir(parents=True, exist_ok=True)
 

@@ -36,16 +36,16 @@ files_per_job = getattr(args, "files_per_job", 1)
 if not args.input:
     input_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_generalization"
 else:
-    input_path = args.input
+    input_path = Path(args.input)
 
-# Build file_list organized by year and raise an error if an expected file is missing 
+# Build file_list organized by year and raise an error if an expected file is missing
 file_list = check_reqd_files(years, input_path, type_)
 file_list = sorted(file_list, key=lambda p: Path(p).name)
 
 if not args.output:
     output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_emotion"
 else:
-    output_path = args.output
+    output_path = Path(args.output)
 output_path.mkdir(parents=True, exist_ok=True)
 
 # prepare the report file

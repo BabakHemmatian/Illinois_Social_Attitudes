@@ -4,8 +4,20 @@
 from cli import get_args, MODELS_DIR, DATA_DIR
 from utils import parse_range, headers, check_reqd_files, log_report, log_error, get_last_source_row, detect_source_row
 
+# fasttext-wheel 0.9.2 calls np.array(probs, copy=False) inside its predict()
+# path, which raises ValueError under numpy 2.x. Patch np.array to fall back
+# to np.asarray when copy=False is requested. Must run BEFORE `import fasttext`
+# so the patched function is in place when fasttext binds it later.
+import numpy as _np
+_orig_np_array = _np.array
+def _np_array_copy_false_compat(obj, dtype=None, *, copy=True, **kw):
+    if copy is False:
+        return _np.asarray(obj, dtype=dtype, **kw)
+    return _orig_np_array(obj, dtype=dtype, copy=copy, **kw)
+_np.array = _np_array_copy_false_compat
+
 # Import Python packages
-import fasttext 
+import fasttext
 import os
 import csv
 csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields

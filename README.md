@@ -141,4 +141,4 @@ The ```train_location``` resources can be used to train a weighted mixture of lo
 3. Run ```train_location_weighting``` to find the best mixture model for generalizable classification. This script reports performance on both regular and masked dataset variants to help researchers ensure model generalizability.
 
 ## Acknowledgments
-We thank Sarah Hadjarab, Jessica Chen and Rui Yu for their help with script and data development. 
+We thank Sarah Hadjarab, Jessica Chen and Rui Yu for their help with script and data development. Claude Code was used in final stages of development to stress-test the repository.

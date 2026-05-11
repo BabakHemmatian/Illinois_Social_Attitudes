@@ -60,6 +60,13 @@ RAW_END_YM = (2023, 12)
 DEFAULT_BATCH_SIZE = 256
 PROGRESS_HEARTBEAT_SECONDS = 30 * 60
 
+# Source of the raw zst feature scan, independent of the curated input type.
+# >90% of the location model's training data comes from comments, so author
+# features should always be drawn from the comment archive even when labeling
+# a submissions-side curated file. Override via the LABEL_LOCATION_RAW_TYPE env
+# var (e.g. "submissions") only if you have a specific reason to deviate.
+RAW_TYPE = os.environ.get("LABEL_LOCATION_RAW_TYPE", "comments").strip() or "comments"
+
 args = get_args()
 type_ = args.type
 years = parse_range(args.years)
@@ -91,7 +98,7 @@ TOP_STRUCT_MODEL = str(MODEL_DIR / f"lr__struct__top__{PREPROC_TAG}.pkl")
 REG_STRUCT_MODEL = str(MODEL_DIR / f"lr__struct__region__{PREPROC_TAG}.pkl")
 STA_STRUCT_MODEL = str(MODEL_DIR / f"lr__struct__state__{PREPROC_TAG}.pkl")
 
-RAW_DIR = DATA_DIR / "data_reddit_raw" / type_
+RAW_DIR = DATA_DIR / "data_reddit_raw" / RAW_TYPE
 
 if args.input:
     input_path = Path(args.input)
@@ -107,11 +114,12 @@ else:
     output_path = DATA_DIR / "data_reddit_curated" / group / type_ / "labeled_location"
 output_path.mkdir(parents=True, exist_ok=True)
 
-# Per-type, group-global location cache. Comments and submissions stay separate
-# because their feature distributions differ enough that the model behaves
-# differently on each; all six social groups within a type share one cache.
+# Group-global location cache, keyed by the raw feature source rather than the
+# curated input type. Since author features come from RAW_TYPE (comments by
+# default), submissions and comments runs share the same cache and all six
+# social groups within a raw type share one cache.
 CACHE_DIR = DATA_DIR / "data_reddit_curated" / "data_reddit_location"
-CACHE_DB_PATH = str(CACHE_DIR / f"author_location_cache_{type_}.sqlite")
+CACHE_DB_PATH = str(CACHE_DIR / f"author_location_cache_{RAW_TYPE}.sqlite")
 init_location_cache(CACHE_DB_PATH)
 report_file_path = os.path.join(output_path, "report_label_location.csv")
 
@@ -902,7 +910,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     raw_files: List[str] = []
     months_with_files = 0
     for y, mstr in scan_months:
-        files = find_raw_month_files(RAW_DIR, type_, y, mstr)
+        files = find_raw_month_files(RAW_DIR, RAW_TYPE, y, mstr)
         if files:
             raw_files.extend(files)
             months_with_files += 1
@@ -918,7 +926,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     log_report(
         report_file_path,
         f"[start] {stem}: authors={n_total:,} cached={n_cached:,} cache_skipped_bias={n_skipped_bias:,} "
-        f"need_raw={len(remaining_authors):,} scan_months={len(scan_months)} months_with_files={months_with_files} raw_files={len(raw_files)} "
+        f"need_raw={len(remaining_authors):,} raw_type={RAW_TYPE} scan_months={len(scan_months)} months_with_files={months_with_files} raw_files={len(raw_files)} "
         f"samples_per_author={max_items_per_author} batch_size={batch_size} max_files_to_scan={max_files_to_scan} max_radius={max_radius} "
         f"local_seen_bias_threshold={LOCAL_SEEN_BIAS_THRESHOLD}",
     )
@@ -929,7 +937,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     raw_counts, raw_seen = build_author_feature_map_from_raw_zst_with_seen(
         raw_files=raw_files,
         target_authors=set(remaining_authors),
-        type_=type_,
+        type_=RAW_TYPE,
         max_items_per_author=max_items_per_author,
         n_scan_workers=n_scan_workers,
     )

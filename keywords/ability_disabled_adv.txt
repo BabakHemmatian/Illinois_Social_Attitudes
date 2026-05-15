@@ -10,14 +10,14 @@ Defective
 Cripple
 Handicap
 Paretic
-\bblind(?!er\b|ly\b|ing\b|age\b|side\b|fold\b|\s+(?:guardian|with)\b)
+\bblind(?!er\b|ly\b|ing\b|age\b|side\b|fold\b|\s+(?:guardian|with|review|trial|pick|controlled)\b)
 Deaf
 visually-impaired
 Paraly[sz]e
 Diabet
 Cerebral Palsy
 \bCP\b
-\babnormal(?!\s+(?:amount|circumstances|way)|ly|cy|i[sz]e)
+\babnormal(?!\s+(?:amount|circumstances|way|draft|version|monster|horde|enemy)|ly|cy|i[sz]e)
 Epilep
 Cancer
 Carcin

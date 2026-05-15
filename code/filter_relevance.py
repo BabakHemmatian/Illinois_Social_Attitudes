@@ -96,6 +96,18 @@ if torch.cuda.device_count() > 1: # if more than one GPU is available
     model = torch.nn.DataParallel(model) # parallelize
 model.eval() # set model to evaluation mode
 
+# Log GPU memory usage
+def log_gpu_memory():
+    if device.type == "cuda":
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device=device)
+        used_bytes = total_bytes - free_bytes
+        log_report(
+            report_file_path,
+            f"GPU memory: {used_bytes / (1024 ** 3):.2f} GiB / {total_bytes / (1024 ** 3):.2f} GiB used"
+        )
+
+log_gpu_memory()
+
 ### Main functions
 
 # Define function to infer labels for a batch of documents
@@ -269,6 +281,7 @@ def filter_relevance_file(file):
             f"Finished relevance filtering {Path(file).name} in {elapsed_minutes:.2f} minutes. "
             f"# of evaluations: {evaluated_counter}, # of relevant posts: {passed_counter}, # of errors: {error_counter}"
         )
+        log_gpu_memory()
 
         return evaluated_counter, passed_counter, error_counter
 

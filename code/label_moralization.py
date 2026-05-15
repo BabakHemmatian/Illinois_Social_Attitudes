@@ -14,6 +14,8 @@ from transformers import BertTokenizerFast, BertForSequenceClassification
 import datetime
 import re
 from pathlib import Path
+import threading
+from queue import Queue
 
 ### Argument Handling
 
@@ -70,27 +72,43 @@ if torch.cuda.device_count() > 1:  # if more than one GPU is available
     model = torch.nn.DataParallel(model)  # parallelize
 model.eval()  # set model to evaluation mode
 
+# Log GPU memory usage
+def log_gpu_memory():
+    if device.type == "cuda":
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device=device)
+        used_bytes = total_bytes - free_bytes
+        log_report(
+            report_file_path,
+            f"GPU memory: {used_bytes / (1024 ** 3):.2f} GiB / {total_bytes / (1024 ** 3):.2f} GiB used"
+        )
+
+log_gpu_memory()
+
 ### Main Functions
 
-# Define function to infer labels for a batch of documents
-@torch.no_grad()
-def get_predictions(texts, max_length=512):
-    """
-    Tokenize and encode a batch of texts, then return predicted labels.
-    """
-    inputs = tokenizer(
+# CPU-side tokenization (runs on the producer thread).
+def tokenize_texts(texts, max_length=512):
+    enc = tokenizer(
         texts,
         padding=True,
         truncation=True,
         max_length=max_length,
-        return_tensors="pt"
-    ).to(device)
+        return_tensors="pt",
+    )
+    if device.type == "cuda":
+        enc = {k: v.pin_memory() for k, v in enc.items()}
+    else:
+        enc = {k: v for k, v in enc.items()}
+    return enc
 
-    with torch.no_grad():
-        with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
-            outputs = model(**inputs)
-            probs = torch.nn.functional.softmax(outputs.logits, dim=1)
-            predictions = probs.argmax(dim=1).tolist()
+# GPU-side inference on an already-tokenized batch.
+@torch.no_grad()
+def predict_tokenized(tokenized):
+    inputs = {k: v.to(device, non_blocking=True) for k, v in tokenized.items()}
+    with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
+        outputs = model(**inputs)
+        probs = torch.nn.functional.softmax(outputs.logits, dim=1)
+        predictions = probs.argmax(dim=1).tolist()
     return predictions
 
 def label_moralization_file(file):
@@ -132,47 +150,102 @@ def label_moralization_file(file):
             new_headers = in_header + ["Moralization"]
             writer.writerow(new_headers)
 
-        batch_lines = []
-        relevant_lines = []
-        total_lines = 0
+        # Producer/consumer with length-bucketing. See filter_relevance.py for
+        # design notes. Producer accumulates BUCKET_MULTIPLIER * batch_size
+        # rows, sorts by est. token length, and packs into sub-batches under a
+        # fixed token-slot budget. Consumer sorts outputs back to input-row
+        # order per bucket before writing, preserving resume safety.
+        BUCKET_MULTIPLIER = 8
+        bucket_target = batch_size * BUCKET_MULTIPLIER
+        MAX_LENGTH = 512
+        token_budget = batch_size * MAX_LENGTH
 
-        for _, line in enumerate(reader):
-            # skip obvious bad rows
-            if len(line) < 3:
-                missing_lines_count += 1
-                continue
+        batch_queue: "Queue" = Queue(maxsize=2)
+        SENTINEL = object()
+        producer_state = {"total_lines": 0, "missing_lines_count": 0}
 
-            # Use the INPUT row's source_row to decide resume/skip
-            src_val = line[src_idx_in].strip()
-            src_num = int(src_val) if src_val.isdigit() else None
-            if src_num is not None and src_num <= last_processed:
-                continue
+        def flush_bucket(buf):
+            if not buf:
+                return
+            buf.sort(key=lambda t: t[2])
+            sub_batches = []
+            current = []
+            current_max = 0
+            for triple in buf:
+                length = triple[2]
+                new_max = max(current_max, length)
+                if current and (len(current) + 1) * new_max > token_budget:
+                    sub_batches.append(current)
+                    current = [triple]
+                    current_max = length
+                else:
+                    current.append(triple)
+                    current_max = new_max
+            if current:
+                sub_batches.append(current)
 
-            batch_lines.append(line)
-            total_lines += 1
+            for i, sb in enumerate(sub_batches):
+                is_last = (i == len(sub_batches) - 1)
+                lines = [t[1] for t in sb]
+                ids = [t[0] for t in sb]
+                texts = [l[2].strip().replace("\n", " ") for l in lines]
+                tokenized = tokenize_texts(texts)
+                batch_queue.put((ids, lines, tokenized, is_last))
 
-            # get labels for the full batch
-            if len(batch_lines) == batch_size:
-                texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
-                predictions = get_predictions(texts)
-                for idx, pred in enumerate(predictions):
-                    row_out = batch_lines[idx] + ["Moralized" if pred else "Non-Moralized"]
-                    relevant_lines.append(row_out)
-                if relevant_lines:
-                    writer.writerows(relevant_lines)
-                    relevant_lines.clear()
-                batch_lines.clear()
+        def producer():
+            pending_pairs = []
+            try:
+                for id_, line in enumerate(reader, start=1):
+                    if len(line) < 3:
+                        producer_state["missing_lines_count"] += 1
+                        continue
 
-        # Flush final batch
-        if batch_lines:
-            texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
-            predictions = get_predictions(texts)
+                    src_val = line[src_idx_in].strip()
+                    src_num = int(src_val) if src_val.isdigit() else None
+                    if src_num is not None and src_num <= last_processed:
+                        continue
+
+                    est_len = min(MAX_LENGTH, max(1, len(line[2]) // 4 + 1))
+                    pending_pairs.append((id_, line, est_len))
+                    producer_state["total_lines"] += 1
+
+                    if len(pending_pairs) >= bucket_target:
+                        flush_bucket(pending_pairs)
+                        pending_pairs = []
+
+                if pending_pairs:
+                    flush_bucket(pending_pairs)
+                    pending_pairs = []
+            finally:
+                batch_queue.put(SENTINEL)
+
+        producer_thread = threading.Thread(target=producer, daemon=True)
+        producer_thread.start()
+
+        pending_writes = []  # (input_id, output_row) within current bucket
+        while True:
+            item = batch_queue.get()
+            if item is SENTINEL:
+                break
+            ids, batch_lines, tokenized, is_last = item
+            predictions = predict_tokenized(tokenized)
             for idx, pred in enumerate(predictions):
                 row_out = batch_lines[idx] + ["Moralized" if pred else "Non-Moralized"]
-                relevant_lines.append(row_out)
-            if relevant_lines:
-                writer.writerows(relevant_lines)
-                relevant_lines.clear()
+                pending_writes.append((ids[idx], row_out))
+
+            if is_last and pending_writes:
+                pending_writes.sort(key=lambda x: x[0])
+                writer.writerows([row for _, row in pending_writes])
+                pending_writes.clear()
+
+        producer_thread.join()
+        if pending_writes:
+            pending_writes.sort(key=lambda x: x[0])
+            writer.writerows([row for _, row in pending_writes])
+            pending_writes.clear()
+
+        total_lines = producer_state["total_lines"]
+        missing_lines_count = producer_state["missing_lines_count"]
 
     # generate processing report
     end_time = time.time()
@@ -182,6 +255,7 @@ def label_moralization_file(file):
         f"Finished labeling moralization for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. "
         f"Processed rows: {total_lines}"
     )
+    log_gpu_memory()
 
     if missing_lines_count:
         missing_records_file = os.path.join(output_path, 'missing_records.csv')

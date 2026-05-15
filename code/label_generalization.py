@@ -18,6 +18,8 @@ import spacy
 import numpy as np
 from copy import deepcopy
 from pathlib import Path
+import threading
+from queue import Queue
 
 ### Argument Handling
 
@@ -79,6 +81,18 @@ if torch.cuda.device_count() > 1: # if more than one GPU is available
 clause_model.eval() # set model to evaluation mode
 generalization_model.eval() # set model to evaluation mode
 
+# Log GPU memory usage
+def log_gpu_memory():
+    if device.type == "cuda":
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device=device)
+        used_bytes = total_bytes - free_bytes
+        log_report(
+            report_file_path,
+            f"GPU memory: {used_bytes / (1024 ** 3):.2f} GiB / {total_bytes / (1024 ** 3):.2f} GiB used"
+        )
+
+log_gpu_memory()
+
 # define the mapping between clause labels and each of the three composing features
 labels2attrs = {
     "##BOUNDED EVENT (SPECIFIC)": ("specific", "dynamic", "episodic"),
@@ -128,22 +142,31 @@ def auto_split(text):
 
 ### Main Function
 
-# Runs the segmentation + generalization pipeline on a batch of texts. Takes str or list of str as input
-def run_pipeline(texts, model_batch_size=32, max_length=max_length):
-
+# CPU-side prep: spaCy auto_split + word-level tokenization. Pulled out so the
+# producer thread can run it in parallel with GPU work on a prior batch.
+def prepare_pipeline_inputs(texts):
     if isinstance(texts, str):
-        texts = [texts]  # wrap single string into list
+        texts = [texts]
 
-    # Split each text into snippets
     all_snippets = []
-    snippet_map = []  # keep track of which text each snippet came from
+    snippet_map = []
     for doc_id, text in enumerate(texts):
         snippets = auto_split(text)
         all_snippets.extend(snippets)
         snippet_map.extend([doc_id] * len(snippets))
 
-    # Tokenize snippets into words for segmentation
     tokenized_snippets = [s.strip().split() for s in all_snippets]
+    return texts, all_snippets, snippet_map, tokenized_snippets
+
+# Runs the segmentation + generalization pipeline on a batch of texts. Takes str or list of str as input.
+# When `prepared` is provided (the tuple returned by prepare_pipeline_inputs),
+# the spaCy step is skipped — used by the producer/consumer fast path.
+def run_pipeline(texts, model_batch_size=32, max_length=max_length, prepared=None):
+
+    if prepared is None:
+        texts, all_snippets, snippet_map, tokenized_snippets = prepare_pipeline_inputs(texts)
+    else:
+        texts, all_snippets, snippet_map, tokenized_snippets = prepared
 
     # Predict segmentation labels in batch
     all_labels = get_pred_clause_labels(
@@ -183,9 +206,17 @@ def run_pipeline(texts, model_batch_size=32, max_length=max_length):
 # extracts generalization labels from clause-segmented input
 @torch.no_grad()
 def get_pred_generalization_labels(clauses, model_batch_size=32, max_length=256):
-    clause2labels = []
-    for i in range(0, len(clauses), model_batch_size):
-        batch_examples = clauses[i : i + model_batch_size]
+    if not clauses:
+        return []
+
+    # Length-bucket: sort indices by clause length so each mini-batch contains
+    # clauses of similar length, minimizing padding waste. Unsort at the end.
+    order = sorted(range(len(clauses)), key=lambda i: len(clauses[i]))
+    sorted_clauses = [clauses[i] for i in order]
+
+    sorted_labels = [None] * len(sorted_clauses)
+    for i in range(0, len(sorted_clauses), model_batch_size):
+        batch_examples = sorted_clauses[i : i + model_batch_size]
 
         model_inputs = tokenizer(
             batch_examples,
@@ -195,26 +226,37 @@ def get_pred_generalization_labels(clauses, model_batch_size=32, max_length=256)
             return_tensors="pt",
         ).to(device)
 
-        with torch.no_grad():
+        with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
             outputs = generalization_model(**model_inputs)
             logits = outputs[0] if isinstance(outputs, tuple) else outputs.logits
 
         pred_labels = logits.argmax(-1).cpu().numpy()
         pred_labels = [index2label[l] for l in pred_labels]
 
-        clause2labels.extend(
-            [(s, str(l)) for s, l in zip(batch_examples, pred_labels)]
-        )
+        for j, lab in enumerate(pred_labels):
+            sorted_labels[i + j] = lab
+
+    # Unsort back to original clause order
+    clause2labels = [None] * len(clauses)
+    for sorted_idx, orig_idx in enumerate(order):
+        clause2labels[orig_idx] = (clauses[orig_idx], str(sorted_labels[sorted_idx]))
 
     return clause2labels
 
 # generates clause segmentations from input
 @torch.no_grad()
 def get_pred_clause_labels(texts, tokenized_texts, model_batch_size=32, max_length=256):
-    all_labels = []
+    if not tokenized_texts:
+        return []
 
-    for i in range(0, len(texts), model_batch_size):
-        batch_words = tokenized_texts[i : i + model_batch_size]
+    # Length-bucket: sort indices by word count so each mini-batch contains
+    # snippets of similar length, minimizing padding waste. Unsort at the end.
+    order = sorted(range(len(tokenized_texts)), key=lambda i: len(tokenized_texts[i]))
+    sorted_words = [tokenized_texts[i] for i in order]
+
+    sorted_labels = [None] * len(sorted_words)
+    for i in range(0, len(sorted_words), model_batch_size):
+        batch_words = sorted_words[i : i + model_batch_size]
 
         encoding = tokenizer(
             batch_words,
@@ -225,13 +267,12 @@ def get_pred_clause_labels(texts, tokenized_texts, model_batch_size=32, max_leng
             max_length=max_length,
         ).to(device)
 
-        with torch.no_grad():
+        with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
             outputs = clause_model(**encoding)
             logits = outputs[0] if isinstance(outputs, tuple) else outputs.logits
 
         pred_ids = logits.argmax(-1).cpu().numpy()
 
-        # Map predictions back to word-level labels (one label per word)
         for b_idx, words in enumerate(batch_words):
             word_ids = encoding.word_ids(batch_index=b_idx)
             labels = []
@@ -239,9 +280,14 @@ def get_pred_clause_labels(texts, tokenized_texts, model_batch_size=32, max_leng
             for j, word_idx in enumerate(word_ids):
                 if word_idx is None or word_idx in seen:
                     continue
-                labels.append(pred_ids[b_idx][j])  # label from first subword
+                labels.append(pred_ids[b_idx][j])
                 seen.add(word_idx)
-            all_labels.append(labels)
+            sorted_labels[i + b_idx] = labels
+
+    # Unsort back to original snippet order
+    all_labels = [None] * len(tokenized_texts)
+    for sorted_idx, orig_idx in enumerate(order):
+        all_labels[orig_idx] = sorted_labels[sorted_idx]
 
     return all_labels
 
@@ -319,103 +365,8 @@ def label_generalization_file(file):
             ]
             writer.writerow(new_headers)
 
-        batch_lines = []
-        total_lines = 0
-        relevant_lines = []
-
-        # Iterate rows
-        for row_idx, line in enumerate(reader):
-            # Skip bad rows
-            if len(line) < 3:
-                log_report(report_file_path, f"Skipping line {row_idx}: insufficient columns ({len(line)} found)")
-                missing_lines_count += 1
-                continue
-
-            # Resume: skip if already processed based on INPUT's source_row
-            src_val = line[src_idx_in].strip()
-            src_num = int(src_val) if src_val.isdigit() else None
-            if src_num is not None and src_num <= last_processed:
-                continue
-
-            batch_lines.append(line)
-            total_lines += 1
-
-            if len(batch_lines) == batch_size:
-                # 1) run predictions on the batch
-                texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
-                _, result = run_pipeline(texts)
-
-                counts = {}
-                individual_labels = {}
-                clauses = {}
-                props = {}
-
-                # Extract and count labels per doc
-                for i_doc, text_result in enumerate(result):
-                    individual_labels[i_doc] = []
-                    clauses[i_doc] = []
-                    counts[i_doc] = {
-                        "generic":0,"specific":0,"stative":0,"dynamic":0,
-                        "static":0,"episodic":0,"habitual":0,
-                        "NA genericity":0,"NA eventivity":0,"NA boundedness":0
-                    }
-                    for clause in text_result:
-                        clauses[i_doc].append(clause[0])
-                        individual_labels[i_doc].append(clause[1])
-                        label_triplet = labels2attrs[clause[1]]
-                        for j, feature in enumerate(label_triplet):
-                            if "NA" not in feature:
-                                counts[i_doc][feature] += 1
-                            elif j == 0:
-                                counts[i_doc]["NA genericity"] += 1
-                            elif j == 1:
-                                counts[i_doc]["NA eventivity"] += 1
-                            else:
-                                counts[i_doc]["NA boundedness"] += 1
-
-                    # proportions
-                    props[i_doc] = []
-                    gen_tot = counts[i_doc]['generic'] + counts[i_doc]['specific'] + counts[i_doc]['NA genericity']
-                    props[i_doc] += [
-                        (counts[i_doc]['generic']/gen_tot) if gen_tot else 0.0,
-                        (counts[i_doc]['specific']/gen_tot) if gen_tot else 0.0,
-                    ]
-                    eve_tot = counts[i_doc]['stative'] + counts[i_doc]['dynamic'] + counts[i_doc]['NA eventivity']
-                    props[i_doc] += [
-                        (counts[i_doc]['stative']/eve_tot) if eve_tot else 0.0,
-                        (counts[i_doc]['dynamic']/eve_tot) if eve_tot else 0.0,
-                    ]
-                    bou_tot = (counts[i_doc]['static'] + counts[i_doc]['episodic'] +
-                               counts[i_doc]["habitual"] + counts[i_doc]['NA boundedness'])
-                    props[i_doc] += [
-                        (counts[i_doc]['static']/bou_tot) if bou_tot else 0.0,
-                        (counts[i_doc]['episodic']/bou_tot) if bou_tot else 0.0,
-                        (counts[i_doc]['habitual']/bou_tot) if bou_tot else 0.0,
-                        (counts[i_doc]['NA boundedness']/bou_tot) if bou_tot else 0.0,
-                    ]
-
-                # 2) collect output rows
-                for i_doc in counts.keys():
-                    ind_clause = "\n".join(clauses[i_doc])
-                    ind_labels = "\n".join(individual_labels[i_doc])
-                    row_out = (batch_lines[i_doc] + [ind_clause, ind_labels,
-                              counts[i_doc]['generic'], counts[i_doc]['specific'],
-                              counts[i_doc]['stative'], counts[i_doc]['dynamic'],
-                              counts[i_doc]['static'], counts[i_doc]['episodic'],
-                              counts[i_doc]['habitual'], counts[i_doc]['NA boundedness']] + props[i_doc])
-                    relevant_lines.append(row_out)
-
-                # 3) write and clear
-                if relevant_lines:
-                    writer.writerows(relevant_lines)
-                    relevant_lines.clear()
-                batch_lines.clear()
-
-        # Final flush
-        if batch_lines:
-            texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
-            _, result = run_pipeline(texts)
-
+        # Aggregate result rows for a single batch and append to relevant_lines.
+        def process_batch_result(batch_lines, result, relevant_lines):
             counts = {}
             individual_labels = {}
             clauses = {}
@@ -443,7 +394,6 @@ def label_generalization_file(file):
                         else:
                             counts[i_doc]["NA boundedness"] += 1
 
-                # proportions
                 props[i_doc] = []
                 gen_tot = counts[i_doc]['generic'] + counts[i_doc]['specific'] + counts[i_doc]['NA genericity']
                 props[i_doc] += [
@@ -465,7 +415,7 @@ def label_generalization_file(file):
                 ]
 
             for i_doc in counts.keys():
-                ind_clause = "\n".join(clauses[i_doc])   # FIX: was using individual_labels before
+                ind_clause = "\n".join(clauses[i_doc])
                 ind_labels = "\n".join(individual_labels[i_doc])
                 row_out = (batch_lines[i_doc] + [ind_clause, ind_labels,
                           counts[i_doc]['generic'], counts[i_doc]['specific'],
@@ -474,12 +424,68 @@ def label_generalization_file(file):
                           counts[i_doc]['habitual'], counts[i_doc]['NA boundedness']] + props[i_doc])
                 relevant_lines.append(row_out)
 
+        # Prefetch batches from a producer thread: while the GPU runs the
+        # segmentation + generalization forwards for batch N, the producer
+        # reads the CSV and runs spaCy auto_split for batch N+1 on the CPU.
+        # spaCy is the dominant CPU cost here, so this overlap is the big win.
+        # Queue depth 1 keeps memory bounded.
+        batch_queue: "Queue" = Queue(maxsize=2)
+        SENTINEL = object()
+        producer_state = {"total_lines": 0, "missing_lines_count": 0}
+
+        def producer():
+            pending_lines = []
+            try:
+                for row_idx, line in enumerate(reader):
+                    if len(line) < 3:
+                        log_report(report_file_path, f"Skipping line {row_idx}: insufficient columns ({len(line)} found)")
+                        producer_state["missing_lines_count"] += 1
+                        continue
+
+                    src_val = line[src_idx_in].strip()
+                    src_num = int(src_val) if src_val.isdigit() else None
+                    if src_num is not None and src_num <= last_processed:
+                        continue
+
+                    pending_lines.append(line)
+                    producer_state["total_lines"] += 1
+
+                    if len(pending_lines) == batch_size:
+                        texts = [l[2].strip().replace("\n", " ") for l in pending_lines]
+                        prepared = prepare_pipeline_inputs(texts)
+                        batch_queue.put((pending_lines, prepared))
+                        pending_lines = []
+
+                if pending_lines:
+                    texts = [l[2].strip().replace("\n", " ") for l in pending_lines]
+                    prepared = prepare_pipeline_inputs(texts)
+                    batch_queue.put((pending_lines, prepared))
+            finally:
+                batch_queue.put(SENTINEL)
+
+        producer_thread = threading.Thread(target=producer, daemon=True)
+        producer_thread.start()
+
+        relevant_lines = []
+        while True:
+            item = batch_queue.get()
+            if item is SENTINEL:
+                break
+            batch_lines, prepared = item
+            _, result = run_pipeline(None, prepared=prepared)
+            process_batch_result(batch_lines, result, relevant_lines)
             if relevant_lines:
                 writer.writerows(relevant_lines)
+                relevant_lines.clear()
+
+        producer_thread.join()
+        total_lines = producer_state["total_lines"]
+        missing_lines_count = producer_state["missing_lines_count"]
 
     # generate processing report
     elapsed_minutes = (time.time() - start_time) / 60
     log_report(report_file_path, f"Finished labeling generalization for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_gpu_memory()
 
     if missing_lines_count:
         missing_records_file = os.path.join(output_path, 'missing_records.csv')

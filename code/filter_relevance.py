@@ -17,6 +17,8 @@ from pathlib import Path
 import traceback
 import sys
 import io
+import threading
+from queue import Queue
 
 ### Argument Handling
 
@@ -110,25 +112,29 @@ log_gpu_memory()
 
 ### Main functions
 
-# Define function to infer labels for a batch of documents
-@torch.no_grad()
-def get_predictions(texts, threshold_class=threshold_class, threshold=threshold, thresholding=thresholding):
-    # Ensure texts is a list
-    if isinstance(texts, str):
-        texts = [texts]
-
-    # Tokenize batch
-    inputs = tokenizer(
+# CPU-side tokenization (runs on the producer thread so it can overlap with
+# GPU inference happening on the main thread).
+def tokenize_texts(texts):
+    enc = tokenizer(
         texts,
         padding=True,
         truncation=True,
         max_length=max_length,
-        return_tensors="pt"
-    ).to(device)
+        return_tensors="pt",
+    )
+    if device.type == "cuda":
+        enc = {k: v.pin_memory() for k, v in enc.items()}
+    else:
+        enc = {k: v for k, v in enc.items()}
+    return enc
 
-    # Model inference
-    outputs = model(**inputs)
-    probs = outputs[0].softmax(1)  # shape: (batch_size, num_classes)
+# GPU-side inference on an already-tokenized batch.
+@torch.no_grad()
+def predict_tokenized(tokenized, threshold_class=threshold_class, threshold=threshold, thresholding=thresholding):
+    inputs = {k: v.to(device, non_blocking=True) for k, v in tokenized.items()}
+    with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
+        outputs = model(**inputs)
+        probs = outputs[0].softmax(1)
 
     predictions = []
     for prob in probs:
@@ -192,88 +198,165 @@ def filter_relevance_file(file):
                 else:
                     writer.writerow(list(in_header) + ["source_row"])
 
-            batch_lines = []
-            relevant_lines = []
+            # Producer/consumer with length-bucketing. The producer accumulates
+            # a bucket of BUCKET_MULTIPLIER * batch_size rows, sorts them by
+            # estimated token length, and greedily packs them into sub-batches
+            # respecting a fixed token-slot budget (batch_size * max_length).
+            # Effect: short docs batch together with little padding; long docs
+            # are processed in smaller sub-batches so peak GPU memory stays
+            # bounded by the original worst case rather than growing past it.
+            # The consumer collects outputs per bucket and re-sorts them by
+            # input row order before writing, so resume safety is preserved.
+            BUCKET_MULTIPLIER = 8
+            bucket_target = batch_size * BUCKET_MULTIPLIER
+            token_budget = batch_size * max_length
 
-            def flush_batch(batch_lines, relevant_lines):
-                nonlocal passed_counter
-                if not batch_lines:
+            batch_queue: "Queue" = Queue(maxsize=2)
+            SENTINEL = object()
+            producer_state = {"evaluated_counter": 0, "error_counter": 0}
+
+            def flush_bucket(buf):
+                if not buf:
                     return
+                buf.sort(key=lambda t: t[2])
+                sub_batches = []
+                current = []
+                current_max = 0
+                for triple in buf:
+                    length = triple[2]
+                    new_max = max(current_max, length)
+                    if current and (len(current) + 1) * new_max > token_budget:
+                        sub_batches.append(current)
+                        current = [triple]
+                        current_max = length
+                    else:
+                        current.append(triple)
+                        current_max = new_max
+                if current:
+                    sub_batches.append(current)
 
-                texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
-                predictions = get_predictions(texts)
+                for i, sb in enumerate(sub_batches):
+                    is_last = (i == len(sub_batches) - 1)
+                    try:
+                        lines = [t[1] for t in sb]
+                        ids = [t[0] for t in sb]
+                        texts = [l[2].strip().replace("\n", " ") for l in lines]
+                        tokenized = tokenize_texts(texts)
+                        batch_queue.put((ids, lines, tokenized, is_last))
+                    except Exception as e:
+                        log_error(
+                            function_name,
+                            file,
+                            int(sb[0][0]) if sb else -1,
+                            f"tokenize sub-batch ({len(sb)} rows)",
+                            e,
+                            report_file_path=report_file_path,
+                            output_path=output_path,
+                        )
+                        producer_state["error_counter"] += len(sb)
+                        # Still need to mark the bucket boundary so the consumer flushes.
+                        if is_last:
+                            batch_queue.put(([], [], None, True))
 
-                for idx, pred in enumerate(predictions):
-                    if pred == 1:
-                        row = batch_lines[idx]
-                        row[keywords_idx] = ",".join(set(row[keywords_idx].split(",")))
-                        relevant_lines.append(row)
-                        passed_counter += 1
-
-                if relevant_lines:
-                    writer.writerows(relevant_lines)
-                    relevant_lines.clear()
-
-            for id_, line in enumerate(reader, start=1):
+            def producer():
+                pending_pairs = []
                 try:
-                    if len(line) < 3:
-                        raise IndexError(f"insufficient columns ({len(line)} found)")
-
-                    # Determine source_row for this row (for resume + output).
-                    if has_input_source_row:
-                        src_val = line[src_idx_in].strip() if len(line) > src_idx_in else ""
+                    for id_, line in enumerate(reader, start=1):
                         try:
-                            src_num = int(src_val)
-                        except ValueError:
-                            src_num = None
-                    else:
-                        src_num = id_
+                            if len(line) < 3:
+                                raise IndexError(f"insufficient columns ({len(line)} found)")
 
-                    # Resume: skip already-processed rows.
-                    if src_num is not None and src_num <= last_processed:
-                        continue
+                            if has_input_source_row:
+                                src_val = line[src_idx_in].strip() if len(line) > src_idx_in else ""
+                                try:
+                                    src_num = int(src_val)
+                                except ValueError:
+                                    src_num = None
+                            else:
+                                src_num = id_
 
-                    # Append source_row only if input lacked it; otherwise the
-                    # input row already carries it through.
-                    if has_input_source_row:
-                        batch_lines.append(line)
-                    else:
-                        batch_lines.append(list(line) + [id_])
-                    evaluated_counter += 1
+                            if src_num is not None and src_num <= last_processed:
+                                continue
 
-                    if len(batch_lines) == batch_size:
-                        flush_batch(batch_lines, relevant_lines)
-                        batch_lines.clear()
+                            if has_input_source_row:
+                                line_to_add = line
+                            else:
+                                line_to_add = list(line) + [id_]
 
-                except Exception as e:
-                    log_error(
-                        function_name,
-                        file,
-                        id_ + 1,
-                        str(line),
-                        e,
-                        report_file_path=report_file_path,
-                        output_path=output_path,
-                    )
-                    error_counter += 1
-                    continue
+                            est_len = min(max_length, max(1, len(line_to_add[2]) // 4 + 1))
+                            pending_pairs.append((id_, line_to_add, est_len))
+                            producer_state["evaluated_counter"] += 1
 
-            # Process remainder
-            if batch_lines:
-                try:
-                    flush_batch(batch_lines, relevant_lines)
-                    batch_lines.clear()
-                except Exception as e:
-                    log_error(
-                        function_name,
-                        file,
-                        int(batch_lines[0][-1]) if batch_lines else -1,
-                        f"final batch ({len(batch_lines)} buffered rows)",
-                        e,
-                        report_file_path=report_file_path,
-                        output_path=output_path,
-                    )
-                    error_counter += len(batch_lines)
+                            if len(pending_pairs) >= bucket_target:
+                                flush_bucket(pending_pairs)
+                                pending_pairs = []
+
+                        except Exception as e:
+                            log_error(
+                                function_name,
+                                file,
+                                id_ + 1,
+                                str(line),
+                                e,
+                                report_file_path=report_file_path,
+                                output_path=output_path,
+                            )
+                            producer_state["error_counter"] += 1
+                            continue
+
+                    if pending_pairs:
+                        flush_bucket(pending_pairs)
+                        pending_pairs = []
+                finally:
+                    batch_queue.put(SENTINEL)
+
+            producer_thread = threading.Thread(target=producer, daemon=True)
+            producer_thread.start()
+
+            pending_writes = []  # (input_id, output_row) within current bucket
+            while True:
+                item = batch_queue.get()
+                if item is SENTINEL:
+                    break
+                ids, batch_lines, tokenized, is_last = item
+
+                predictions = None
+                if tokenized is not None:
+                    try:
+                        predictions = predict_tokenized(tokenized)
+                    except Exception as e:
+                        log_error(
+                            function_name,
+                            file,
+                            int(ids[0]) if ids else -1,
+                            f"inference sub-batch ({len(batch_lines)} rows)",
+                            e,
+                            report_file_path=report_file_path,
+                            output_path=output_path,
+                        )
+                        producer_state["error_counter"] += len(batch_lines)
+
+                if predictions is not None:
+                    for idx, pred in enumerate(predictions):
+                        if pred == 1:
+                            row = batch_lines[idx]
+                            row[keywords_idx] = ",".join(set(row[keywords_idx].split(",")))
+                            pending_writes.append((ids[idx], row))
+                            passed_counter += 1
+
+                if is_last and pending_writes:
+                    pending_writes.sort(key=lambda x: x[0])
+                    writer.writerows([row for _, row in pending_writes])
+                    pending_writes.clear()
+
+            producer_thread.join()
+            if pending_writes:
+                pending_writes.sort(key=lambda x: x[0])
+                writer.writerows([row for _, row in pending_writes])
+                pending_writes.clear()
+
+            evaluated_counter = producer_state["evaluated_counter"]
+            error_counter = producer_state["error_counter"]
 
         elapsed_minutes = (time.time() - start_time) / 60
         log_report(

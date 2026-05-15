@@ -15,6 +15,8 @@ import datetime
 import re
 from transformers import RobertaTokenizerFast, RobertaForSequenceClassification, DistilBertForSequenceClassification, DistilBertTokenizerFast
 from pathlib import Path
+import threading
+from queue import Queue
 
 ### Argument Handling
 
@@ -79,28 +81,44 @@ model1.eval() # set model to evaluation mode
 model2.eval() # set model to evaluation mode
 model3.eval() # set model to evaluation mode
 
+# Log GPU memory usage
+def log_gpu_memory():
+    if device.type == "cuda":
+        free_bytes, total_bytes = torch.cuda.mem_get_info(device=device)
+        used_bytes = total_bytes - free_bytes
+        log_report(
+            report_file_path,
+            f"GPU memory: {used_bytes / (1024 ** 3):.2f} GiB / {total_bytes / (1024 ** 3):.2f} GiB used"
+        )
+
+log_gpu_memory()
+
 ### Main Functions
 
-# Tokenizes and encodes a batch of texts, then returns predicted labels.
-@torch.no_grad()
-def get_predictions(texts, tokenizer=None, model=None, max_length=512):
-    inputs = tokenizer(
+# CPU-side tokenization for a single tokenizer (runs on the producer thread).
+def tokenize_texts(texts, tokenizer, max_length=512):
+    enc = tokenizer(
         texts,
         padding=True,
         truncation=True,
         max_length=max_length,
-        return_tensors="pt"
-    ).to(device)
-    
-    # mixed-precision classification for faster performance. 
-    with torch.no_grad():
-        with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
-            outputs = model(**inputs)
-            probs = torch.nn.functional.softmax(outputs.logits, dim=1)
-            predictions = probs.argmax(dim=1).tolist()
+        return_tensors="pt",
+    )
+    if device.type == "cuda":
+        enc = {k: v.pin_memory() for k, v in enc.items()}
+    else:
+        enc = {k: v for k, v in enc.items()}
+    return enc
 
-    probs = torch.softmax(probs,dim=1).tolist() # extract the probabilities from output layer activations
-
+# GPU-side inference on an already-tokenized batch.
+@torch.no_grad()
+def predict_tokenized(tokenized, model):
+    inputs = {k: v.to(device, non_blocking=True) for k, v in tokenized.items()}
+    with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
+        outputs = model(**inputs)
+        probs = torch.nn.functional.softmax(outputs.logits, dim=1)
+        predictions = probs.argmax(dim=1).tolist()
+    probs = torch.softmax(probs, dim=1).tolist()
     return predictions, probs
 
 # generates labels for a month's worth of documents. Resumes labeling if it finds incomplete output files. 
@@ -151,71 +169,113 @@ def label_emotion_file(file):
             new_headers = in_header + emotion_headers
             writer.writerow(new_headers)
 
-        batch_lines = []
-        relevant_lines = []
-        total_lines = 0
+        # Producer/consumer with length-bucketing. See filter_relevance.py for
+        # design notes. Each sub-batch carries both tokenizations (tokenizer1
+        # and tokenizer2; model3 reuses tokenizer1's output) so the three
+        # model forwards on the GPU stay pipelined behind one CPU prep step.
+        BUCKET_MULTIPLIER = 8
+        bucket_target = batch_size * BUCKET_MULTIPLIER
+        MAX_LENGTH = 512
+        token_budget = batch_size * MAX_LENGTH
 
-        # Iterate rows
-        for row_idx, line in enumerate(reader, start=1):  # start=1 since we consumed header
-            # Skip bad rows (need at least 3 cols because we read text from line[2])
-            if len(line) < 3:
-                log_report(report_file_path, f"Skipping line {row_idx}: insufficient columns ({len(line)} found)")
-                missing_lines_count += 1
-                continue
+        batch_queue: "Queue" = Queue(maxsize=2)
+        SENTINEL = object()
+        producer_state = {"total_lines": 0, "missing_lines_count": 0}
 
-            # Resume: skip if already processed based on input's source_row
-            src_val = line[src_idx_in].strip()
-            src_num = int(src_val) if src_val.isdigit() else None
-            if src_num is not None and src_num <= last_processed:
-                continue
-
-            batch_lines.append(line)
-            total_lines += 1
-
-            if len(batch_lines) == batch_size:
-                texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
-
-                # Accumulate probabilities from the three models
-                for i in range(3):
-                    if i == 0:
-                        _, probs = get_predictions(texts, tokenizer=tokenizer1, model=model1)
-                    elif i == 1:
-                        _, probs = get_predictions(texts, tokenizer=tokenizer2, model=model2)
-                    else:
-                        _, probs = get_predictions(texts, tokenizer=tokenizer1, model=model3)
-
-                    # Append probabilities to each row in-place
-                    for idx in range(len(batch_lines)):
-                        batch_lines[idx] = batch_lines[idx] + probs[idx]
-
-                relevant_lines.extend(batch_lines)
-                if relevant_lines:
-                    writer.writerows(relevant_lines)
-                    relevant_lines.clear()
-                batch_lines.clear()
-
-        # Final flush
-        if batch_lines:
-            texts = [l[2].strip().replace("\n", " ") for l in batch_lines]
-
-            for i in range(3):
-                if i == 0:
-                    _, probs = get_predictions(texts, tokenizer=tokenizer1, model=model1)
-                elif i == 1:
-                    _, probs = get_predictions(texts, tokenizer=tokenizer2, model=model2)
+        def flush_bucket(buf):
+            if not buf:
+                return
+            buf.sort(key=lambda t: t[2])
+            sub_batches = []
+            current = []
+            current_max = 0
+            for triple in buf:
+                length = triple[2]
+                new_max = max(current_max, length)
+                if current and (len(current) + 1) * new_max > token_budget:
+                    sub_batches.append(current)
+                    current = [triple]
+                    current_max = length
                 else:
-                    _, probs = get_predictions(texts, tokenizer=tokenizer1, model=model3)
+                    current.append(triple)
+                    current_max = new_max
+            if current:
+                sub_batches.append(current)
 
+            for i, sb in enumerate(sub_batches):
+                is_last = (i == len(sub_batches) - 1)
+                lines = [t[1] for t in sb]
+                ids = [t[0] for t in sb]
+                texts = [l[2].strip().replace("\n", " ") for l in lines]
+                tok1 = tokenize_texts(texts, tokenizer1)
+                tok2 = tokenize_texts(texts, tokenizer2)
+                batch_queue.put((ids, lines, tok1, tok2, is_last))
+
+        def producer():
+            pending_pairs = []
+            try:
+                for id_, line in enumerate(reader, start=1):
+                    if len(line) < 3:
+                        log_report(report_file_path, f"Skipping line {id_}: insufficient columns ({len(line)} found)")
+                        producer_state["missing_lines_count"] += 1
+                        continue
+
+                    src_val = line[src_idx_in].strip()
+                    src_num = int(src_val) if src_val.isdigit() else None
+                    if src_num is not None and src_num <= last_processed:
+                        continue
+
+                    est_len = min(MAX_LENGTH, max(1, len(line[2]) // 4 + 1))
+                    pending_pairs.append((id_, line, est_len))
+                    producer_state["total_lines"] += 1
+
+                    if len(pending_pairs) >= bucket_target:
+                        flush_bucket(pending_pairs)
+                        pending_pairs = []
+
+                if pending_pairs:
+                    flush_bucket(pending_pairs)
+                    pending_pairs = []
+            finally:
+                batch_queue.put(SENTINEL)
+
+        producer_thread = threading.Thread(target=producer, daemon=True)
+        producer_thread.start()
+
+        pending_writes = []  # (input_id, output_row) within current bucket
+        while True:
+            item = batch_queue.get()
+            if item is SENTINEL:
+                break
+
+            ids, batch_lines, tok1, tok2, is_last = item
+
+            for tok, model_ref in [(tok1, model1), (tok2, model2), (tok1, model3)]:
+                _, probs = predict_tokenized(tok, model_ref)
                 for idx in range(len(batch_lines)):
                     batch_lines[idx] = batch_lines[idx] + probs[idx]
 
-            relevant_lines.extend(batch_lines)
-            if relevant_lines:
-                writer.writerows(relevant_lines)
+            for idx, row_out in enumerate(batch_lines):
+                pending_writes.append((ids[idx], row_out))
+
+            if is_last and pending_writes:
+                pending_writes.sort(key=lambda x: x[0])
+                writer.writerows([row for _, row in pending_writes])
+                pending_writes.clear()
+
+        producer_thread.join()
+        if pending_writes:
+            pending_writes.sort(key=lambda x: x[0])
+            writer.writerows([row for _, row in pending_writes])
+            pending_writes.clear()
+
+        total_lines = producer_state["total_lines"]
+        missing_lines_count = producer_state["missing_lines_count"]
 
     # generate processing report
     elapsed_minutes = (time.time() - start_time) / 60
     log_report(report_file_path, f"Finished labeling emotion for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_gpu_memory()
 
     # Create missing_records.csv only if there were missing lines
     if missing_lines_count > 0:

@@ -1,12 +1,34 @@
 #!/bin/bash
-#SBATCH --mail-user=[enter your email address here]
+#SBATCH --mail-user=babak.hemmatian@stonybrook.edu
 #SBATCH --mail-type=END,FAIL
-#SBATCH --time=48:00:00
+#SBATCH --time=96:00:00
 #SBATCH --mem=32G
 # --cpus-per-task=8
 #SBATCH --export=ALL
 
 set -euo pipefail
+
+# Activate the project's conda env (the README documents creating one named
+# ISAAC). On HPC clusters with Environment Modules / Lmod, 'module load conda'
+# is tried first; on clusters where conda is already on PATH (system install
+# or user-init in ~/.bashrc), the module step is a silent no-op. The activate
+# step is what actually puts the project's python on PATH, so an sbatch
+# launched from any shell (interactive or not) works without the caller
+# having to 'conda activate ISAAC' first.
+if command -v module >/dev/null 2>&1; then
+    module load conda >/dev/null 2>&1 || true
+fi
+if ! command -v conda >/dev/null 2>&1; then
+    echo "[slurm.sh] ERROR: 'conda' not found on PATH. See README.md for ISAAC env setup." >&2
+    exit 1
+fi
+# Conda's activation hooks reference some unset shell variables (e.g.
+# ADDR2LINE in binutils' activation hook), which trips 'set -u'. Disable
+# nounset around the activation, then restore it.
+set +u
+eval "$(conda shell.bash hook)"
+conda activate ISAAC
+set -u
 
 export PYTHONUNBUFFERED=TRUE
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True

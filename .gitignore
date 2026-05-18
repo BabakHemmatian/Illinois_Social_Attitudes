@@ -11,3 +11,6 @@ models/
 
 # pycache #
 code/__pycache__
+
+# Slurm job stdout/stderr per-task logs #
+slurm_logs/

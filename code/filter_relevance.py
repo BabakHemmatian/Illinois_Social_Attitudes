@@ -320,19 +320,24 @@ def filter_relevance_file(file):
 
                 predictions = None
                 if tokenized is not None:
+                    # Inference failures (CUDA OOM, model errors, etc.) are
+                    # infrastructure issues, not per-row data problems. Swallowing
+                    # them produces silently-incomplete output with the Slurm task
+                    # still exiting 0 -- the exact failure mode that triggered this
+                    # hardening. Log one line to the report CSV for forensics, then
+                    # re-raise so the task exits non-zero and we know to fix and
+                    # resubmit (likely with a smaller --batchsize or a larger GPU).
                     try:
                         predictions = predict_tokenized(tokenized)
                     except Exception as e:
-                        log_error(
-                            function_name,
-                            file,
-                            int(ids[0]) if ids else -1,
-                            f"inference sub-batch ({len(batch_lines)} rows)",
-                            e,
-                            report_file_path=report_file_path,
-                            output_path=output_path,
+                        log_report(
+                            report_file_path,
+                            f"[fatal] inference failed on sub-batch "
+                            f"({len(batch_lines)} rows) in {os.path.basename(file)} "
+                            f"at first input id={int(ids[0]) if ids else -1}: "
+                            f"{type(e).__name__}: {e}"
                         )
-                        producer_state["error_counter"] += len(batch_lines)
+                        raise
 
                 if predictions is not None:
                     for idx, pred in enumerate(predictions):
@@ -372,7 +377,11 @@ def filter_relevance_file(file):
             report_file_path,
             f"Fatal error during relevance filtering for {Path(file).name}:\n{tb_str}"
         )
-        return None
+        # Per-row data errors are caught deeper in the producer/flush_bucket,
+        # so what reaches this handler is infrastructure (CUDA OOM, model
+        # crashes, fs errors). Re-raise so the Slurm task exits non-zero
+        # instead of silently exiting 0 with truncated or missing output.
+        raise
 
 ### Main Execution
 

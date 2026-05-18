@@ -96,7 +96,7 @@ report_file_path = os.path.join(output_path, "Report_filter_language.csv")
 def filter_language_file(file):
 
     function_name = "filter_language_file"
-    log_report(report_file_path, f"Started language filtering for {Path(file).name}")
+    log_report(report_file_path, f"Started language filtering for the {group} content in {Path(file).name}.")
 
     try:
         output_file_path = os.path.join(output_path, Path(file).name)
@@ -178,10 +178,12 @@ def filter_language_file(file):
                     continue
                 filtered_counter += 1
 
-            elapsed = (time.time() - start_time) / 60
-            msg = (f"Finished language filtering {Path(file).name} in {elapsed:.2f} minutes. "
-                   f"# of evaluations: {filtered_counter}, # of English posts: {passed_counter}, # of errors: {error_counter}")
-            log_report(report_file_path, msg)
+            elapsed_minutes = (time.time() - start_time) / 60
+            log_report(
+                report_file_path,
+                f"Finished {Path(file).name} for the {group} social group in {elapsed_minutes:.2f} minutes. "
+                f"# of evaluations: {filtered_counter}, # of English posts: {passed_counter}, # of errors: {error_counter}"
+            )
             # Return counters for overall statistics
             return filtered_counter, passed_counter, error_counter
     except Exception as e:

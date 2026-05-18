@@ -237,7 +237,7 @@ def filter_keyword_adv_file(file_name):
     elapsed_time = (time.time() - start_time) / 60
     log_report(
         report_file_path,
-        f"[{ENGINE}] Filtered {input_path.name} in {elapsed_time:.2f} minutes. "
+        f"[{ENGINE}] Filtered {input_path.name} for the {group} social group in {elapsed_time:.2f} minutes. "
         f"Total lines: {total_lines}, matched lines: {matched_lines}"
     )
     return total_lines, matched_lines
@@ -268,7 +268,7 @@ def _select_files_for_this_run():
 def filter_keyword_adv_parallel():
     total_lines = 0
     matched_lines = 0
-    max_workers = min(6, os.cpu_count())
+    max_workers = min(3, os.cpu_count())
     log_report(report_file_path, f"Using {max_workers} processes for parallel processing. Engine: {ENGINE}")
 
     initargs = (group, keyword_path)

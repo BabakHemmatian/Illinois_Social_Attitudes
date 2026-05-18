@@ -217,7 +217,7 @@ def label_sentiment_file(file):
     # generate processing report
     end_time = time.time()
     elapsed_minutes = (end_time - start_time) / 60
-    log_report(report_file_path, f"Finished labeling sentiment for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. Processed rows: {total_lines_written}")
+    log_report(report_file_path, f"Finished {Path(file).name} for the {group} social group in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines_written}")
 
     if missing_lines_count > 0:
         missing_records_file = os.path.join(output_path, 'missing_records.csv')

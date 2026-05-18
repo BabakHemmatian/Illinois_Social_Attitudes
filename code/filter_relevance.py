@@ -108,8 +108,6 @@ def log_gpu_memory():
             f"GPU memory: {used_bytes / (1024 ** 3):.2f} GiB / {total_bytes / (1024 ** 3):.2f} GiB used"
         )
 
-log_gpu_memory()
-
 ### Main functions
 
 # CPU-side tokenization (runs on the producer thread so it can overlap with
@@ -156,7 +154,7 @@ def filter_relevance_file(file):
     function_name = "filter_relevance_file"
     log_report(
         report_file_path,
-        f"Started relevance filtering for {Path(file).name} for relevance to the {group} social group."
+        f"Started filtering {Path(file).name} for relevance to the {group} social group."
     )
 
     try:
@@ -361,7 +359,7 @@ def filter_relevance_file(file):
         elapsed_minutes = (time.time() - start_time) / 60
         log_report(
             report_file_path,
-            f"Finished relevance filtering {Path(file).name} in {elapsed_minutes:.2f} minutes. "
+            f"Finished {Path(file).name} for the {group} social group in {elapsed_minutes:.2f} minutes. "
             f"# of evaluations: {evaluated_counter}, # of relevant posts: {passed_counter}, # of errors: {error_counter}"
         )
         log_gpu_memory()

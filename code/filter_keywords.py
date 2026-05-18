@@ -225,10 +225,6 @@ def filter_keyword_file(file):
     except Exception as e:
         log_report(report_file_path, f"Error filtering by keywords in file {Path(file).name}: {e}")
 
-
-    elapsed_time = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Filtered {Path(file).name} for relevance to the {group} social group based on keywords in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
-
     return total_lines, matched_lines
 
 # wrapper for filter_keyword_file
@@ -246,7 +242,7 @@ def filter_keyword_month(year, month, files):
             log_report(report_file_path, f"Error filtering by keywords in file {Path(file).name}: {e}")
 
     elapsed_time = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Completed filtering {year}-{month} in {elapsed_time:.2f} minutes")
+    log_report(report_file_path, f"Completed filtering {year}-{month} for the {group} social group in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
     return total_lines, matched_lines
 
 # Process files in parallel while checking for missing month files.
@@ -254,7 +250,7 @@ def filter_keyword_month(year, month, files):
 def filter_keyword_parallel():
     total_lines = 0
     matched_lines = 0
-    max_workers = min(6, os.cpu_count() or 1)
+    max_workers = min(3, os.cpu_count() or 1)
     log_report(report_file_path, f"Using {max_workers} processes for parallel processing.")
 
     # Group eligible raw files by requested (year, month)
@@ -297,12 +293,12 @@ def filter_keyword_parallel():
             files = files_by_year_month.get((year, month), [])
             if not files:
                 continue
-            log_report(report_file_path, f"Started filtering files for {year}-{month}")
             future = executor.submit(filter_keyword_month, year, month, files)
             future_to_month[future] = (year, month)
 
         for future, (year, month) in future_to_month.items():
             try:
+                log_report(report_file_path, f"Started filtering files for {year}-{month} for the {group} social group")
                 month_lines, month_matched = future.result()
                 total_lines += month_lines
                 matched_lines += month_matched

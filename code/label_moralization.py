@@ -82,8 +82,6 @@ def log_gpu_memory():
             f"GPU memory: {used_bytes / (1024 ** 3):.2f} GiB / {total_bytes / (1024 ** 3):.2f} GiB used"
         )
 
-log_gpu_memory()
-
 ### Main Functions
 
 # CPU-side tokenization (runs on the producer thread).
@@ -248,11 +246,10 @@ def label_moralization_file(file):
         missing_lines_count = producer_state["missing_lines_count"]
 
     # generate processing report
-    end_time = time.time()
-    elapsed_minutes = (end_time - start_time) / 60
+    elapsed_minutes = (time.time() - start_time) / 60
     log_report(
         report_file_path,
-        f"Finished labeling moralization for the {group} social group in {Path(file).name} within {elapsed_minutes:.2f} minutes. "
+        f"Finished {Path(file).name} for the {group} social group in {elapsed_minutes:.2f} minutes. "
         f"Processed rows: {total_lines}"
     )
     log_gpu_memory()

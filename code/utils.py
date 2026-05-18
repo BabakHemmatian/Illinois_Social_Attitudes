@@ -232,20 +232,33 @@ def log_error(
     line_content: str,
     error: Exception,
     report_file_path: Optional[str] = None,
-    output_path: Optional[str] = None,
+    output_path: Optional[str] = None,  # kept for backward-compat; no longer used
 ) -> None:
+    """
+    Log a per-row recoverable error to the report CSV as a single line.
+
+    Intended for data-level errors where the right action is "skip this row
+    and continue" (e.g., malformed CSV row in filter_keywords). Does NOT
+    create a separate file per error -- callers that previously relied on
+    `output_path` to dump an `error_<...>.txt` should expect a single
+    entry in the report CSV instead.
+
+    For fatal infrastructure errors (OOM, CUDA, model failures), do NOT
+    use this -- log via `log_report` with a clear "[fatal] ..." prefix
+    and re-raise so the task exits non-zero.
+    """
     try:
-        error_time = datetime.now().strftime("%Y%m%d_%H%M%S")
         resource_identifier = os.path.basename(file)
-        error_filename = f"error_{resource_identifier}_{line_number}_{error_time}.txt"
-        if output_path:
-            os.makedirs(output_path, exist_ok=True)
-            error_filepath = os.path.join(output_path, error_filename)
-            with open(error_filepath, "w", encoding="utf-8") as ef:
-                ef.write(f"Error in {function_name} at line {line_number}: {error}\n")
-                ef.write(f"Line content: {line_content}\n")
+        snippet = line_content if len(line_content) <= 200 else line_content[:200] + "..."
+        message = (
+            f"[error] {function_name} | {resource_identifier} | line {line_number} | "
+            f"{type(error).__name__}: {error} | content: {snippet}"
+        )
         if report_file_path:
-            log_report(report_file_path, f"Logged error in {error_filename}")
+            log_report(report_file_path, message)
+        else:
+            # Fall back so the error isn't swallowed entirely.
+            print(message, file=sys.stderr, flush=True)
     except Exception:
         pass
 
@@ -343,10 +356,28 @@ def check_reqd_files(years: List[int], check_path: str | Path, type_: str) -> Li
         )
 
     expected_months = {f"{m:02d}" for m in range(1, 13)}
+    missing_by_year: Dict[int, List[str]] = {}
     for y in years:
         missing = expected_months - files_by_year.get(str(y), set())
         if missing:
-            print(f"Warning: For {type_} year {y}, missing months: {sorted(missing)}")
+            missing_by_year[y] = sorted(missing)
+
+    if missing_by_year:
+        summary = "\n".join(
+            f"  {y}: {', '.join(months)}"
+            for y, months in sorted(missing_by_year.items())
+        )
+        raise FileNotFoundError(
+            f"Missing required {type_} input files in {check_path}.\n"
+            f"Strict mode: refusing to return a partial file_list because doing so "
+            f"would silently shift the array-index -> month mapping in downstream "
+            f"resource scripts. Each task computes file_list[task_id], so a gap at "
+            f"month N causes every task index >= N to process the wrong month, and "
+            f"tail tasks past the end of the compacted list to no-op as COMPLETED.\n"
+            f"Missing months by year:\n{summary}\n"
+            f"Fix the upstream pipeline stage that should have produced these months, "
+            f"or restrict --years to a span with complete coverage."
+        )
 
     return matched_files
 
@@ -526,19 +557,34 @@ def parse_time_to_hour(time_str: str) -> Optional[int]:
         return None
 
 # update a user's sparse counts in-place from a single row
+# word_vocab / subreddit_vocab are optional vocabularies; when supplied, tokens
+# or subreddits not in the set are skipped. OOV features are dropped by the
+# downstream model's word_index / struct_vectorizer anyway, so accumulating
+# them just wastes memory during the raw .zst scan. Pass None to disable
+# filtering (preserves the original behavior for callers that don't have a
+# model vocab on hand, e.g. preprocessing/training pipelines).
 def add_features_for_row(
     counts: Dict[str, int],
     text: str,
     subreddit: str,
     time_value: str,
+    word_vocab: Optional[set] = None,
+    subreddit_vocab: Optional[set] = None,
 ) -> None:
-    for tok in tokenize(text):
-        k = f"w:{tok}"
-        counts[k] = counts.get(k, 0) + 1
+    if word_vocab is None:
+        for tok in tokenize(text):
+            k = f"w:{tok}"
+            counts[k] = counts.get(k, 0) + 1
+    else:
+        for tok in tokenize(text):
+            if tok not in word_vocab:
+                continue
+            k = f"w:{tok}"
+            counts[k] = counts.get(k, 0) + 1
 
     if subreddit:
         s = subreddit.strip()
-        if s:
+        if s and (subreddit_vocab is None or s in subreddit_vocab):
             k = f"s:{s}"
             counts[k] = counts.get(k, 0) + 1
 
@@ -604,6 +650,8 @@ def build_author_feature_map_from_raw_zst(
     target_authors: set[str],
     type_: str,
     max_items_per_author: int = 100,
+    word_vocab: Optional[set] = None,
+    subreddit_vocab: Optional[set] = None,
 ) -> Dict[str, Dict[str, int]]:
     """Wrapper returning only feature counts (without per-author seen counts)."""
     author_to_counts, _author_seen = build_author_feature_map_from_raw_zst_with_seen(
@@ -611,6 +659,8 @@ def build_author_feature_map_from_raw_zst(
         target_authors=target_authors,
         type_=type_,
         max_items_per_author=max_items_per_author,
+        word_vocab=word_vocab,
+        subreddit_vocab=subreddit_vocab,
     )
     return author_to_counts
 
@@ -621,6 +671,8 @@ def _scan_raw_file_chunk(
     target_authors: set,
     type_: str,
     max_items_per_author: int,
+    word_vocab: Optional[set] = None,
+    subreddit_vocab: Optional[set] = None,
 ) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
     local_counts: Dict[str, Dict[str, int]] = {}
     local_seen: Dict[str, int] = {}
@@ -644,7 +696,14 @@ def _scan_raw_file_chunk(
             if counts is None:
                 counts = {}
                 local_counts[author] = counts
-            add_features_for_row(counts, text=text, subreddit=subreddit, time_value=str(created_utc))
+            add_features_for_row(
+                counts,
+                text=text,
+                subreddit=subreddit,
+                time_value=str(created_utc),
+                word_vocab=word_vocab,
+                subreddit_vocab=subreddit_vocab,
+            )
             local_seen[author] = local_seen.get(author, 0) + 1
     return local_counts, local_seen
 
@@ -653,12 +712,17 @@ def _scan_raw_file_chunk(
 # NOTE: Collects up to max_items_per_author items per author. Returns (author_to_counts, author_seen).
 # NOTE: n_scan_workers > 1 splits files across threads (zstd decompression releases the GIL).
 #       Use only in single-process contexts (SLURM array tasks); not for multi-process local runs.
+# NOTE: word_vocab / subreddit_vocab cap the feature space at scan time -- pass
+#       the downstream model's known vocab to avoid building per-author dicts
+#       full of OOV tokens that would be dropped during inference anyway.
 def build_author_feature_map_from_raw_zst_with_seen(
     raw_files: List[str | Path],
     target_authors: set[str],
     type_: str,
     max_items_per_author: int = 100,
     n_scan_workers: int = 1,
+    word_vocab: Optional[set] = None,
+    subreddit_vocab: Optional[set] = None,
 ) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
     author_to_counts: Dict[str, Dict[str, int]] = {}
     author_seen: Dict[str, int] = {a: 0 for a in target_authors}
@@ -669,25 +733,37 @@ def build_author_feature_map_from_raw_zst_with_seen(
     raw_files = [str(f) for f in raw_files]
 
     if n_scan_workers > 1 and len(raw_files) > 1:
+        from concurrent.futures import as_completed
         n_workers = min(n_scan_workers, len(raw_files))
         chunks = [raw_files[i::n_workers] for i in range(n_workers)]
 
         def scan_chunk(chunk):
-            return _scan_raw_file_chunk(chunk, target_authors, type_, max_items_per_author)
+            return _scan_raw_file_chunk(
+                chunk, target_authors, type_, max_items_per_author,
+                word_vocab=word_vocab, subreddit_vocab=subreddit_vocab,
+            )
 
         with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            results = list(pool.map(scan_chunk, chunks))
-
-        for local_counts, local_seen in results:
-            for author, counts in local_counts.items():
-                merged = author_to_counts.get(author)
-                if merged is None:
-                    author_to_counts[author] = dict(counts)
-                else:
-                    for k, v in counts.items():
-                        merged[k] = merged.get(k, 0) + v
-            for author, seen in local_seen.items():
-                author_seen[author] = min(author_seen.get(author, 0) + seen, max_items_per_author)
+            futures = [pool.submit(scan_chunk, chunk) for chunk in chunks]
+            # Fold each chunk's result into the running totals as soon as it
+            # finishes, then drop the local references so the chunk's dicts
+            # can be reclaimed before the next chunk completes. With N workers
+            # this keeps peak memory at ~2 chunks (running + folding) instead
+            # of N+1 chunks.
+            for fut in as_completed(futures):
+                local_counts, local_seen = fut.result()
+                for author, counts in local_counts.items():
+                    merged = author_to_counts.get(author)
+                    if merged is None:
+                        author_to_counts[author] = counts
+                    else:
+                        for k, v in counts.items():
+                            merged[k] = merged.get(k, 0) + v
+                for author, seen in local_seen.items():
+                    author_seen[author] = min(author_seen.get(author, 0) + seen, max_items_per_author)
+                local_counts.clear()
+                local_seen.clear()
+                del local_counts, local_seen
 
         return author_to_counts, author_seen
 
@@ -713,7 +789,14 @@ def build_author_feature_map_from_raw_zst_with_seen(
             if counts is None:
                 counts = {}
                 author_to_counts[author] = counts
-            add_features_for_row(counts, text=text, subreddit=subreddit, time_value=str(created_utc))
+            add_features_for_row(
+                counts,
+                text=text,
+                subreddit=subreddit,
+                time_value=str(created_utc),
+                word_vocab=word_vocab,
+                subreddit_vocab=subreddit_vocab,
+            )
             author_seen[author] += 1
             if author_seen[author] == max_items_per_author:
                 remaining -= 1

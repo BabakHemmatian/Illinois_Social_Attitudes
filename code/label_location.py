@@ -155,13 +155,27 @@ def parse_time_to_hour(time_str: str) -> Optional[int]:
         return None
 
 
-def add_features_for_row(counts: Dict[str, int], text: str, subreddit: str, time_value: str) -> None:
-    for tok in tokenize(text):
-        key = f"w:{tok}"
-        counts[key] = counts.get(key, 0) + 1
+def add_features_for_row(
+    counts: Dict[str, int],
+    text: str,
+    subreddit: str,
+    time_value: str,
+    word_vocab: Optional[set] = None,
+    subreddit_vocab: Optional[set] = None,
+) -> None:
+    if word_vocab is None:
+        for tok in tokenize(text):
+            key = f"w:{tok}"
+            counts[key] = counts.get(key, 0) + 1
+    else:
+        for tok in tokenize(text):
+            if tok not in word_vocab:
+                continue
+            key = f"w:{tok}"
+            counts[key] = counts.get(key, 0) + 1
 
     subreddit = (subreddit or "").strip()
-    if subreddit:
+    if subreddit and (subreddit_vocab is None or subreddit in subreddit_vocab):
         key = f"s:{subreddit}"
         counts[key] = counts.get(key, 0) + 1
 
@@ -716,46 +730,125 @@ def _find_header_index(header: Sequence[str], name: str, fallback: int) -> int:
         return fallback
 
 
-def _read_month_rows_and_seed_features(curated_csv_path: str) -> Tuple[List[str], List[List[str]], set[str], Dict[str, Dict[str, int]], Dict[str, int], Dict[str, int]]:
-    rows: List[List[str]] = []
-    authors: set[str] = set()
-    local_counts: Dict[str, Dict[str, int]] = {}
+def _scan_month_authors(
+    curated_csv_path: str,
+    last_processed: int,
+) -> Tuple[List[str], Dict[str, int], int, int, set, Dict[str, int]]:
+    """Pass 1 of the streaming pipeline.
+
+    Scans the curated CSV header + rows without holding row contents in memory.
+    Returns:
+      header (the input CSV header row),
+      idx_map (column indices: author/text/time/subreddit/source_row; -1 if absent),
+      total_rows (parsed non-empty rows),
+      remaining_row_count (rows that still need to be written: source_row >
+        last_processed, or all rows on a fresh run / file without source_row),
+      target_row_authors (authors appearing in remaining rows; excludes
+        "[deleted]" and empty author),
+      local_seen (per-author total curated activity in this month; counts
+        every parsed row with a valid author, not just remaining rows).
+
+    Raises StopIteration if the CSV is empty (no header row).
+    """
+    rows_total = 0
+    remaining_row_count = 0
+    target_row_authors: set = set()
     local_seen: Dict[str, int] = {}
 
     with open(curated_csv_path, "r", encoding="utf-8-sig", errors="ignore") as f:
         reader = csv.reader((line.replace("\x00", "") for line in f))
-        header = next(reader)
+        header = next(reader)  # propagates StopIteration on empty file
 
         author_idx = _find_header_index(header, "author", 3)
         text_idx = _find_header_index(header, "text", 2)
         time_idx = _find_header_index(header, "time", 4)
         subreddit_idx = _find_header_index(header, "subreddit", 5)
+        src_idx = header.index("source_row") if "source_row" in header else -1
+        idx_map = {
+            "author": author_idx,
+            "text": text_idx,
+            "time": time_idx,
+            "subreddit": subreddit_idx,
+            "source_row": src_idx,
+        }
+
+        filter_by_src = src_idx >= 0 and last_processed >= 0
 
         for r in reader:
             if not r:
                 continue
-            rows.append(r)
-            if len(r) <= author_idx:
+            rows_total += 1
+
+            # Track every parsed row's author in local_seen so the bias
+            # threshold check and inference seen_count match the original
+            # behavior, even for rows that have already been written
+            # (source_row <= last_processed).
+            author = r[author_idx].strip() if len(r) > author_idx else ""
+            if author and author != "[deleted]":
+                local_seen[author] = local_seen.get(author, 0) + 1
+
+            if filter_by_src:
+                if len(r) <= src_idx:
+                    continue
+                try:
+                    if int(r[src_idx].strip()) <= last_processed:
+                        continue
+                except ValueError:
+                    continue
+
+            remaining_row_count += 1
+            if author and author != "[deleted]":
+                target_row_authors.add(author)
+
+    return header, idx_map, rows_total, remaining_row_count, target_row_authors, local_seen
+
+
+def _seed_features_for_authors(
+    curated_csv_path: str,
+    idx_map: Dict[str, int],
+    target_authors_set: set,
+    word_vocab: Optional[set] = None,
+    subreddit_vocab: Optional[set] = None,
+) -> Dict[str, Dict[str, int]]:
+    """Pass 2 of the streaming pipeline.
+
+    Re-reads the curated CSV and accumulates per-author feature counts only
+    for authors in target_authors_set. Authors not in the set are skipped,
+    so local_counts only holds entries for authors that still need
+    inference -- typically ~75% of the curated authors are pre-cached and
+    don't need seed features.
+    """
+    local_counts: Dict[str, Dict[str, int]] = {}
+
+    author_idx = idx_map["author"]
+    text_idx = idx_map["text"]
+    time_idx = idx_map["time"]
+    subreddit_idx = idx_map["subreddit"]
+
+    with open(curated_csv_path, "r", encoding="utf-8-sig", errors="ignore") as f:
+        reader = csv.reader((line.replace("\x00", "") for line in f))
+        try:
+            next(reader)  # skip header
+        except StopIteration:
+            return local_counts
+
+        for r in reader:
+            if not r or len(r) <= author_idx:
                 continue
             author = r[author_idx].strip()
-            if not author or author == "[deleted]":
+            if author not in target_authors_set:
                 continue
-            authors.add(author)
             counts = local_counts.setdefault(author, {})
             add_features_for_row(
                 counts,
                 text=r[text_idx] if len(r) > text_idx else "",
                 subreddit=r[subreddit_idx] if len(r) > subreddit_idx else "",
                 time_value=r[time_idx] if len(r) > time_idx else "",
+                word_vocab=word_vocab,
+                subreddit_vocab=subreddit_vocab,
             )
-            local_seen[author] = local_seen.get(author, 0) + 1
 
-    return header, rows, authors, local_counts, local_seen, {
-        "author": author_idx,
-        "text": text_idx,
-        "time": time_idx,
-        "subreddit": subreddit_idx,
-    }
+    return local_counts
 
 
 def _merge_feature_maps(
@@ -765,16 +858,29 @@ def _merge_feature_maps(
     raw_seen: Dict[str, int],
     target_authors: Sequence[str],
 ) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
-    merged_counts: Dict[str, Dict[str, int]] = {}
+    # Merge in place into raw_counts (it dominates memory since each target
+    # author has up to max_items_per_author raw items vs typically much less
+    # curated activity). Empty {} is created for authors absent from raw_counts
+    # so the returned dict has one entry per target author. Items popped from
+    # local_counts as we go to release its memory before the inference loop.
+    target_set = set(target_authors)
     merged_seen: Dict[str, int] = {}
-    for author in target_authors:
-        counts: Dict[str, int] = {}
-        for src in (local_counts.get(author, {}), raw_counts.get(author, {})):
+    for author in list(local_counts.keys()):
+        if author not in target_set:
+            local_counts.pop(author, None)
+            continue
+        src = local_counts.pop(author)
+        dst = raw_counts.get(author)
+        if dst is None:
+            raw_counts[author] = src
+        else:
             for k, v in src.items():
-                counts[k] = counts.get(k, 0) + int(v)
-        merged_counts[author] = counts
+                dst[k] = dst.get(k, 0) + int(v)
+    for author in target_authors:
+        if author not in raw_counts:
+            raw_counts[author] = {}
         merged_seen[author] = int(local_seen.get(author, 0)) + int(raw_seen.get(author, 0))
-    return merged_counts, merged_seen
+    return raw_counts, merged_seen
 
 
 def _details_from_cache_or_label(author: str, cached_details: Dict[str, Dict[str, object]], cached_locations: Dict[str, str]) -> Dict[str, object]:
@@ -795,19 +901,57 @@ def _details_from_cache_or_label(author: str, cached_details: Dict[str, Dict[str
     }
 
 
-def _write_output_csv(
-    header: Sequence[str],
-    rows: Sequence[Sequence[str]],
-    author_idx: int,
-    detail_by_author: Dict[str, Dict[str, object]],
+def _stream_write_output(
+    curated_csv_path: str,
     out_file: Path,
-    mode: str = "w",
+    last_processed: int,
+    idx_map: Dict[str, int],
+    detail_by_author: Dict[str, Dict[str, object]],
+    write_mode: str = "w",
 ) -> None:
-    with open(out_file, mode, encoding="utf-8", newline="", errors="ignore") as fo:
+    """Pass 3 of the streaming pipeline.
+
+    Re-reads the curated CSV row by row and writes each row that still needs
+    writing to out_file with the four location columns appended. Never holds
+    the row set in memory, so the dominant peak-RAM term (the curated
+    month's rows: 5-8 GB for the largest months) is freed.
+
+    Crash recovery: writes are streamed in input order. If the writer dies
+    mid-row, the next run's get_last_source_row truncates the partial trailing
+    row before re-opening in append mode.
+    """
+    author_idx = idx_map["author"]
+    src_idx = idx_map.get("source_row", -1)
+    filter_by_src = src_idx >= 0 and last_processed >= 0
+
+    with open(curated_csv_path, "r", encoding="utf-8-sig", errors="ignore") as fi, \
+            open(out_file, write_mode, encoding="utf-8", newline="", errors="ignore") as fo:
+        reader = csv.reader((line.replace("\x00", "") for line in fi))
         writer = csv.writer(fo)
-        if mode == "w":
-            writer.writerow(list(header) + ["location", "location_prob", "contender_location", "contender_location_prob"])
-        for r in rows:
+
+        try:
+            header = next(reader)
+        except StopIteration:
+            return
+
+        if write_mode == "w":
+            writer.writerow(
+                list(header)
+                + ["location", "location_prob", "contender_location", "contender_location_prob"]
+            )
+
+        for r in reader:
+            if not r:
+                continue
+            if filter_by_src:
+                if len(r) <= src_idx:
+                    continue
+                try:
+                    if int(r[src_idx].strip()) <= last_processed:
+                        continue
+                except ValueError:
+                    continue
+
             author = r[author_idx].strip() if len(r) > author_idx else ""
             detail = detail_by_author.get(author, {"location": UNKNOWN_LABEL})
             writer.writerow(
@@ -841,41 +985,48 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     )
     write_mode = "a" if last_processed >= 0 else "w"
 
+    # Load model bundle up front so we can pass its word vocab into both the
+    # curated seed pass and the raw-zst scan. OOV word-filtering at scan time
+    # prevents the per-author count dicts from accumulating w:tok features
+    # that would be dropped by word_index lookup anyway (Reddit's token Zipf
+    # tail vs the 50k selected_words), which is the dominant peak-RAM term
+    # and what was driving the 47-58 GiB cgroup OOM kills on the 32G
+    # label_location array tasks.
+    #
+    # Subreddit OOV is NOT filtered here even though most subreddits are
+    # long-tail OOV: _normalize_struct_counts divides s: counts by their full
+    # total before struct_vectorizer.transform drops OOV columns, so removing
+    # OOV subreddits at scan time would shift the normalization total relative
+    # to what the saved struct model was trained against. Hour features are
+    # fully in-vocab (24/24) so no filter is needed.
+    bundle = get_worker_bundle()
+    word_vocab = set(bundle["top_words"].selected_words)
+
+    # Pass 1: scan the curated CSV to determine which rows still need writing
+    # (source_row > last_processed) and accumulate per-author totals
+    # (local_seen). Rows themselves are not retained -- pass 2 and pass 3
+    # re-read the file. Trades two extra CSV passes (a few seconds each on
+    # OS-cached input) for ~5-8 GB of peak RAM on the largest months.
     try:
-        header, rows, authors, local_counts, local_seen, idx_map = _read_month_rows_and_seed_features(curated_csv_path)
+        header, idx_map, rows_total, remaining_row_count, target_row_authors, local_seen = \
+            _scan_month_authors(curated_csv_path, last_processed)
     except StopIteration:
         return (stem, 0, 0, 0)
 
-    if not authors:
-        log_report(report_file_path, f"[warn] {stem}: no authors found")
-        return (stem, 0, 0, 0)
+    n_total = len(local_seen)
 
-    # Filter to rows still needing inference + write; restrict authors to
-    # those that appear in the remaining rows so we don't waste raw-zst
-    # scans on authors whose rows have already been written.
-    src_idx = header.index("source_row") if "source_row" in header else -1
-    if last_processed >= 0 and src_idx >= 0:
-        remaining_rows: List[List[str]] = []
-        for r in rows:
-            if len(r) <= src_idx:
-                continue
-            sval = r[src_idx].strip()
-            try:
-                if int(sval) > last_processed:
-                    remaining_rows.append(r)
-            except ValueError:
-                continue
-        if not remaining_rows:
-            log_report(report_file_path, f"[skip-complete] {stem}: all rows already processed (last_source_row={last_processed})")
-            return (stem, len(rows), len(authors), 0)
-        author_idx_for_filter = idx_map["author"]
-        target_row_authors = {
-            r[author_idx_for_filter].strip() for r in remaining_rows
-            if len(r) > author_idx_for_filter and r[author_idx_for_filter].strip() and r[author_idx_for_filter].strip() != "[deleted]"
-        }
-    else:
-        remaining_rows = list(rows)
-        target_row_authors = set(authors)
+    if remaining_row_count == 0:
+        log_report(report_file_path, f"[skip-complete] {stem}: all rows already processed (last_source_row={last_processed})")
+        return (stem, rows_total, n_total, 0)
+
+    if not target_row_authors:
+        # No author-bearing rows remain. Still need to write any "[deleted]"
+        # / empty-author rows through the output as UNK so resume points
+        # match input.
+        _stream_write_output(curated_csv_path, out_file, last_processed, idx_map, {}, write_mode=write_mode)
+        elapsed = (time.time() - start) / 60
+        log_report(report_file_path, f"[done-no-authors] {stem}: rows={remaining_row_count:,} minutes={elapsed:.2f}")
+        return (stem, remaining_row_count, n_total, 0)
 
     # Cache lookups are restricted to authors that still need a row written.
     cached_locations = cache_get_locations(CACHE_DB_PATH, target_row_authors)
@@ -898,13 +1049,12 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
 
     remaining_authors = sorted(a for a in target_row_authors if a not in detail_by_author)
     n_cached = len(detail_by_author)
-    n_total = len(authors)
 
     if not remaining_authors:
-        _write_output_csv(header, remaining_rows, idx_map["author"], detail_by_author, out_file, mode=write_mode)
+        _stream_write_output(curated_csv_path, out_file, last_processed, idx_map, detail_by_author, write_mode=write_mode)
         elapsed = (time.time() - start) / 60
-        log_report(report_file_path, f"[done-cache] {stem}: rows={len(remaining_rows):,} authors={len(target_row_authors):,} cached={n_cached:,} minutes={elapsed:.2f}")
-        return (stem, len(remaining_rows), len(target_row_authors), 0)
+        log_report(report_file_path, f"[done-cache] {stem}: rows={remaining_row_count:,} authors={len(target_row_authors):,} cached={n_cached:,} minutes={elapsed:.2f}")
+        return (stem, remaining_row_count, len(target_row_authors), 0)
 
     scan_months = month_spiral(year, month_int, max_files_to_scan=max_files_to_scan, max_radius=max_radius)
     raw_files: List[str] = []
@@ -918,10 +1068,10 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     if not raw_files:
         for author in remaining_authors:
             detail_by_author[author] = unknown_result(seen_count=local_seen.get(author, 0), reason="no_raw_files")
-        _write_output_csv(header, remaining_rows, idx_map["author"], detail_by_author, out_file, mode=write_mode)
+        _stream_write_output(curated_csv_path, out_file, last_processed, idx_map, detail_by_author, write_mode=write_mode)
         elapsed = (time.time() - start) / 60
         log_report(report_file_path, f"[warn] {stem}: no raw files in scan window; wrote UNKNOWN for {len(remaining_authors):,}. minutes={elapsed:.2f}")
-        return (stem, len(remaining_rows), n_total, len(remaining_authors))
+        return (stem, remaining_row_count, n_total, len(remaining_authors))
 
     log_report(
         report_file_path,
@@ -931,15 +1081,27 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         f"local_seen_bias_threshold={LOCAL_SEEN_BIAS_THRESHOLD}",
     )
 
-    bundle = get_worker_bundle()
+    # Pass 2: seed curated features ONLY for the authors that still need
+    # inference (typically ~25-75% of target_row_authors after cache+bias
+    # filtering). Drops local_counts entries for cache-hit authors entirely,
+    # saving ~25-50% of the local_counts peak vs the old "seed for everyone
+    # then filter" pattern.
+    remaining_authors_set = set(remaining_authors)
+    local_counts = _seed_features_for_authors(
+        curated_csv_path,
+        idx_map,
+        remaining_authors_set,
+        word_vocab=word_vocab,
+    )
 
     raw_scan_start = time.time()
     raw_counts, raw_seen = build_author_feature_map_from_raw_zst_with_seen(
         raw_files=raw_files,
-        target_authors=set(remaining_authors),
+        target_authors=remaining_authors_set,
         type_=RAW_TYPE,
         max_items_per_author=max_items_per_author,
         n_scan_workers=n_scan_workers,
+        word_vocab=word_vocab,
     )
     log_report(
         report_file_path,
@@ -982,16 +1144,20 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         f"top_conf>={TOP_CONF_THRESHOLD} reg_margin>={REG_CONF_MARGIN} state_margin>={STA_CONF_MARGIN} min_samples_cache={MIN_SAMPLES_FOR_CACHE}",
     )
 
-    _write_output_csv(header, remaining_rows, idx_map["author"], detail_by_author, out_file, mode=write_mode)
+    # Pass 3: stream the curated input row by row to the output file,
+    # appending the four location columns from detail_by_author. Never
+    # holds rows in memory, so the input month's row set (5-8 GB for big
+    # months) never becomes a memory term.
+    _stream_write_output(curated_csv_path, out_file, last_processed, idx_map, detail_by_author, write_mode=write_mode)
 
     elapsed = (time.time() - start) / 60
     covered = sum(1 for a in remaining_authors if author_seen.get(a, 0) > 0)
     log_report(
         report_file_path,
-        f"[done] {stem}: rows={len(remaining_rows):,} authors={n_total:,} cached={n_cached:,} scanned_raw={len(remaining_authors):,} "
+        f"[done] {stem}: rows={remaining_row_count:,} authors={n_total:,} cached={n_cached:,} scanned_raw={len(remaining_authors):,} "
         f"covered={covered:,} minutes={elapsed:.2f}",
     )
-    return (stem, len(remaining_rows), n_total, len(remaining_authors))
+    return (stem, remaining_row_count, n_total, len(remaining_authors))
 
 
 def label_location_parallel() -> None:

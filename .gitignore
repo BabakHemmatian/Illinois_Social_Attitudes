@@ -5,6 +5,8 @@
 # processed Reddit files #
 ############
 *.csv
+*.jsonl
+*.sqlite
 
 # trained models #
 models/

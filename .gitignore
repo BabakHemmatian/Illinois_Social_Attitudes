@@ -8,6 +8,11 @@
 *.jsonl
 *.sqlite
 
+# Whitelist the relevance training samples and the post-filter QA samples so
+# reviewers can audit the FPR / kappa / classifier-performance claims.
+!data/data_relevance_ratings/**/*.csv
+!data/data_relevance_QAratings/**/*.csv
+
 # trained models #
 models/
 

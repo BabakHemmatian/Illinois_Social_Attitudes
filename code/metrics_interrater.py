@@ -1,69 +1,93 @@
 ### Imports
 
 # import functions and objects
-from cli import get_args,DATA_DIR
+from cli import get_args, DATA_DIR
 
 # import python packages
 from sklearn.metrics import cohen_kappa_score
 from scipy.stats import pearsonr
 import csv
-csv.field_size_limit(2**31 - 1) # Increase the field size limit to handle larger fields
+csv.field_size_limit(2**31 - 1)  # Increase the field size limit to handle larger fields
 import os
 
 ### Agreement Metric Hyperparameters
 
-num_annot = 2 # number of annotators
-# NOTE: This script currently only supports two annotators. And that a '_rated' tag has been added to the name of the files outputted by 'filter_sample' after they were rated.
-
+num_annot = 2  # number of annotators
+# NOTE: This script currently only supports two annotators and the canonical
+# double-rated samples under data/data_relevance_ratings/<type>/.
 
 ### Argument Handling
 
 args = get_args()
 group = args.group
 type_ = args.type
-tag = 0 # identifies the 'filter_sample' output version for the rated files to be evaluated
 
 ### Path Handling
 
-# where to find the rated relevance samples
-if not args.input:    
-    ratings_path = DATA_DIR / "samples" / group / type_
+# Where to find the rated relevance samples. Defaults to the canonical location
+# data/data_relevance_ratings/<type>/ where the original double-rated samples live.
+if not args.input:
+    ratings_path = DATA_DIR / "data_relevance_ratings" / type_
 else:
     ratings_path = args.input
 
+### Label binarization
+# Match the convention used elsewhere in the codebase: only the literal "1" counts
+# as relevant; "0", "x", "-1", blanks, etc. all become 0.
+def binarize(cell: str) -> int:
+    return 1 if str(cell).strip() == "1" else 0
+
 ### Main Evaluation
 
-# start a dictionary for storing each annoator's ratings
-ratings = {i:{} for i in range(num_annot)}
+# Per-rater dict: random_id -> 0/1
+ratings = {i: {} for i in range(num_annot)}
 
-# extract and align the annotators' ratings
 for rater in range(num_annot):
-    with open(os.path.join(ratings_path,f"filter_sample_{rater}_v{tag}_rated.csv"),"r", encoding='utf-8',errors='ignore') as f:
+    fname = os.path.join(
+        ratings_path,
+        f"relevance_sample_{group}_{rater}_rated.csv",
+    )
+    with open(fname, "r", encoding="utf-8-sig", errors="ignore") as f:
         reader = csv.reader(f)
-        for idx,line in enumerate(reader):
-            if idx != 0 and len(line) > 0:
-                try:
-                    ratings[rater][int(line[0].strip())] = int(line[2].strip())
-                except:
-                    raise Exception(f"Error processing annotator {rater}'s response on line {idx}, with the following contents: {line}")
+        for idx, line in enumerate(reader):
+            if idx == 0 or not line:
+                continue
+            rid_raw = line[0].strip()
+            if not rid_raw:
+                continue
+            try:
+                rid = int(rid_raw)
+            except ValueError:
+                raise Exception(
+                    f"Error parsing annotator {rater}'s row {idx}: non-integer id={line[0]!r}"
+                )
+            v = binarize(line[2] if len(line) >= 3 else "")
+            # If the same random_id appears more than once in the same file (a small
+            # number of duplicates exist in some samples), OR the labels: any "1"
+            # wins over "0".
+            ratings[rater][rid] = max(ratings[rater].get(rid, 0), v)
 
-# confirm that the vectors are of the same length
-assert len(ratings[0]) == len(ratings[1])
+# Restrict to documents both raters rated; warn about any asymmetric IDs
+common_ids = sorted(set(ratings[0].keys()) & set(ratings[1].keys()))
+only_in_0 = set(ratings[0].keys()) - set(ratings[1].keys())
+only_in_1 = set(ratings[1].keys()) - set(ratings[0].keys())
+for rid in only_in_0:
+    print(f"Warning! Entry with ID {rid} only rated by annotator 0")
+for rid in only_in_1:
+    print(f"Warning! Entry with ID {rid} only rated by annotator 1")
 
-# see if there is any mismatch in terms of included comments between the two samples
-for i in ratings[0]:
-    if i not in ratings[1]:
-        print(f'Warning! Unmatched entry with ID {i}')
+vector_0 = [ratings[0][rid] for rid in common_ids]
+vector_1 = [ratings[1][rid] for rid in common_ids]
 
-# calculate and print Cohen's kappa interrater agreement score
-vector_0 = []
-vector_1 = []
-for id_ in ratings[0]:
-    try:
-        vector_0.append(ratings[0][id_])
-        vector_1.append(ratings[1][id_])
-    except Exception as e:
-        print(f"Warning! Skipping rating id={id_!r} due to {type(e).__name__}: {e}")
+n = len(common_ids)
+agree = sum(1 for a, b in zip(vector_0, vector_1) if a == b) / n if n else float("nan")
+kappa = cohen_kappa_score(vector_0, vector_1)
+pear = pearsonr(vector_0, vector_1)
 
-print(f"Cohen's Kappa for interrater agreement: {cohen_kappa_score(vector_0,vector_1)}")
-print(pearsonr(vector_0,vector_1))
+print(f"Group: {group} ({type_})")
+print(f"N (both raters): {n}")
+print(f"Rater 0 relevant rate: {sum(vector_0)/n:.3f}")
+print(f"Rater 1 relevant rate: {sum(vector_1)/n:.3f}")
+print(f"Raw agreement: {agree:.3f}")
+print(f"Cohen's Kappa for interrater agreement: {kappa:.4f}")
+print(f"Pearson r: {pear.statistic:.4f}  (p={pear.pvalue:.2e})")

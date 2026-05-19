@@ -229,6 +229,7 @@ def filter_keyword_file(file):
 
 # wrapper for filter_keyword_file
 def filter_keyword_month(year, month, files):
+    log_report(report_file_path, f"Started filtering files for {year}-{month} for the {group} social group")
     start_time = time.time()
     total_lines = 0
     matched_lines = 0
@@ -298,7 +299,6 @@ def filter_keyword_parallel():
 
         for future, (year, month) in future_to_month.items():
             try:
-                log_report(report_file_path, f"Started filtering files for {year}-{month} for the {group} social group")
                 month_lines, month_matched = future.result()
                 total_lines += month_lines
                 matched_lines += month_matched

@@ -141,6 +141,7 @@ def filter_keyword_adv_file(file_name):
     out_stem = input_path.with_suffix("").name
     output_csv_file = output_path / f"{out_stem}.csv"
 
+    log_report(report_file_path, f"[{ENGINE}] Started filtering {input_path.name} for the {group} social group")
     total_lines = 0
     matched_lines = 0
     start_time = time.time()

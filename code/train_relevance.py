@@ -32,7 +32,8 @@ type_ = args.type           # "comments" or "submissions"
 
 # NOTE: Exactly one of these three should be active at a time:
 
-trial = 2   # identifies training run trial number. Used for loading the correct model if retraining or simply evaluating.
+trial = 2   # identifies training run trial number. Used only when `use_trial_suffix_in_path = True`.
+use_trial_suffix_in_path = False  # If True, model_path = filter_relevance_{group}_{model_name}_{trial}. If False, use the bare folder.
 
 ## 1) Train a model from the original data and evaluate on original test set
 training = False
@@ -44,7 +45,7 @@ training = False
 
 ## 3) Retrain (fine-tune) an already-trained model on additional data
 #    and evaluate on a held-out retraining test set.
-retraining = True
+retraining = False
 retrain_trial = 8 # identifies the retraining run
 
 ### Hyperparameters
@@ -108,9 +109,12 @@ if group == "skin_tone":
 else:
     model_name = "roberta-large" 
 
-model_path = os.path.join(
-    MODELS_DIR,f"filter_relevance_{group}_{model_name}_{trial}",
-)
+if use_trial_suffix_in_path:
+    model_path = os.path.join(
+        MODELS_DIR, f"filter_relevance_{group}_{model_name}_{trial}",
+    )
+else:
+    model_path = os.path.join(MODELS_DIR, f"filter_relevance_{group}")
 
 retrain_path = os.path.join(
     MODELS_DIR,
@@ -118,7 +122,7 @@ retrain_path = os.path.join(
 )
 
 # where to find the rated relevance samples
-ratings_path = DATA_DIR / "samples" / group / type_
+ratings_path = DATA_DIR / "data_relevance_ratings" / type_
 reratings_path = DATA_DIR / "data_relevance_QAratings"
 
 ### Utilities
@@ -158,31 +162,41 @@ def load_main_annotations(ratings_path, group: str, num_annot: int):
     for rater in range(num_annot):
         fname = os.path.join(
             ratings_path,
-            f"filter_sample_{rater}_rated.csv"
+            f"relevance_sample_{group}_{rater}_rated.csv"
         )
-        with open(fname, "r", encoding="utf-8", errors="ignore") as f:
+        with open(fname, "r", encoding="utf-8-sig", errors="ignore") as f:
             reader = csv.reader(f)
             for idx, line in enumerate(reader):
                 if idx == 0 or not line:
                     continue
-                doc_id = int(line[0].strip())
+                doc_id_raw = line[0].strip()
+                if not doc_id_raw:
+                    continue
+                doc_id = int(doc_id_raw)
+                # Binarize: only the literal "1" counts as relevant; everything else
+                # ("0", "x", "-1", blank, etc.) is treated as 0.
+                cell = line[2].strip() if len(line) >= 3 else ""
+                v = 1 if cell == "1" else 0
+                # If a random_id appears more than once in the same file, OR the labels.
+                ratings[rater][doc_id] = max(ratings[rater].get(doc_id, 0), v)
                 if rater == 0:
                     texts[doc_id] = line[1].strip()
-                if line[2].strip() == "x":
-                    ratings[rater][doc_id] = 0
-                else:
-                    ratings[rater][doc_id] = int(line[2].strip())
+
+    # Use only doc_ids that appear in every rater's file
+    common_ids = set(ratings[0].keys())
+    for r in range(1, num_annot):
+        common_ids &= set(ratings[r].keys())
 
     # Consider a post relevant if at least one annotator marked it relevant
     final_ratings = {}
-    for doc_id in ratings[0]:
+    for doc_id in common_ids:
         if all(ratings[r][doc_id] == 0 for r in range(num_annot)):
             final_ratings[doc_id] = 0
         else:
             final_ratings[doc_id] = 1
 
+    final_texts = [texts[did] for did in final_ratings.keys()]
     final_labels = list(final_ratings.values())
-    final_texts = list(texts.values())
 
     print(f"Number of annotated docs used in training: {len(final_texts)}")
     print(f"Number of instances for each label: {Counter(final_labels)}")
@@ -198,7 +212,7 @@ def load_retraining_annotations(reratings_path, group: str):
 
     fname = os.path.join(
         reratings_path,
-        f"{group}_retraining_sample_rated.csv"
+        f"qa_r_retraining_input_{group}_n400_rated.csv"
     )
 
     with open(fname, "r", encoding="utf-8", errors="ignore") as f:
@@ -467,10 +481,7 @@ def evaluate_and_save(
 texts, labels = load_main_annotations(ratings_path, group, num_annot)
 
 # where we store the original train/val/test split files
-split_data_path = model_path.replace(
-    f"filter_relevance_{group}_{model_name}_{trial}",
-    "train_relevance_data_split",
-)
+split_data_path = os.path.join(MODELS_DIR, "train_relevance_data_split")
 
 (
     train_texts,
@@ -486,6 +497,11 @@ split_data_path = model_path.replace(
     group,
     description="original",
 )
+
+# Labels read back from disk come in as strings; coerce to int so numpy/torch are happy.
+train_labels_raw = [int(l) for l in train_labels_raw]
+valid_labels_raw = [int(l) for l in valid_labels_raw]
+test_labels_raw = [int(l) for l in test_labels_raw]
 
 # print out stats for the splits
 summarize_split("training", train_texts, train_labels_raw)

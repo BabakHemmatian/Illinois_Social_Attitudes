@@ -346,63 +346,71 @@ def cache_put_location_details(db_path: str, details_by_author: Dict[str, Dict[s
     """Upsert per-author detail rows with confidence-aware overwrite. An existing
     cached row is atomically replaced only when the new location_prob is
     strictly greater than the cached one (or the cached one is NULL); a new
-    prob of None never overwrites a labeled row."""
+    prob of None never overwrites a labeled row.
+
+    Wrapped in _sqlite_retry_on_locked so that bursts of concurrent writers
+    on the NFS-hosted DB don't surface SQLITE_BUSY as a fatal error; the
+    write is retried with exponential backoff."""
     if not details_by_author:
         return
-    conn = sqlite3.connect(db_path, timeout=60)
-    try:
-        cur = conn.cursor()
-        now = int(time.time())
-        rows = []
-        for author, d in details_by_author.items():
-            if not author or not d.get("location"):
-                continue
-            rows.append(
-                (
-                    author,
-                    d.get("location"),
-                    d.get("location_prob"),
-                    d.get("contender_location"),
-                    d.get("contender_location_prob"),
-                    d.get("top_location"),
-                    d.get("top_location_prob"),
-                    d.get("top_contender_location"),
-                    d.get("top_contender_location_prob"),
-                    d.get("tier"),
-                    d.get("seen_count"),
-                    now,
+
+    def _do() -> None:
+        conn = sqlite3.connect(db_path, timeout=60)
+        try:
+            cur = conn.cursor()
+            now = int(time.time())
+            rows = []
+            for author, d in details_by_author.items():
+                if not author or not d.get("location"):
+                    continue
+                rows.append(
+                    (
+                        author,
+                        d.get("location"),
+                        d.get("location_prob"),
+                        d.get("contender_location"),
+                        d.get("contender_location_prob"),
+                        d.get("top_location"),
+                        d.get("top_location_prob"),
+                        d.get("top_contender_location"),
+                        d.get("top_contender_location_prob"),
+                        d.get("tier"),
+                        d.get("seen_count"),
+                        now,
+                    )
                 )
+            if not rows:
+                return
+            cur.executemany(
+                """
+                INSERT INTO author_location_detail(
+                    author, location, location_prob, contender_location, contender_location_prob,
+                    top_location, top_location_prob, top_contender_location, top_contender_location_prob,
+                    tier, seen_count, updated_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+                ON CONFLICT(author) DO UPDATE SET
+                    location = excluded.location,
+                    location_prob = excluded.location_prob,
+                    contender_location = excluded.contender_location,
+                    contender_location_prob = excluded.contender_location_prob,
+                    top_location = excluded.top_location,
+                    top_location_prob = excluded.top_location_prob,
+                    top_contender_location = excluded.top_contender_location,
+                    top_contender_location_prob = excluded.top_contender_location_prob,
+                    tier = excluded.tier,
+                    seen_count = excluded.seen_count,
+                    updated_at = excluded.updated_at
+                WHERE excluded.location_prob IS NOT NULL
+                  AND (author_location_detail.location_prob IS NULL
+                       OR excluded.location_prob > author_location_detail.location_prob)
+                """,
+                rows,
             )
-        if not rows:
-            return
-        cur.executemany(
-            """
-            INSERT INTO author_location_detail(
-                author, location, location_prob, contender_location, contender_location_prob,
-                top_location, top_location_prob, top_contender_location, top_contender_location_prob,
-                tier, seen_count, updated_at
-            ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
-            ON CONFLICT(author) DO UPDATE SET
-                location = excluded.location,
-                location_prob = excluded.location_prob,
-                contender_location = excluded.contender_location,
-                contender_location_prob = excluded.contender_location_prob,
-                top_location = excluded.top_location,
-                top_location_prob = excluded.top_location_prob,
-                top_contender_location = excluded.top_contender_location,
-                top_contender_location_prob = excluded.top_contender_location_prob,
-                tier = excluded.tier,
-                seen_count = excluded.seen_count,
-                updated_at = excluded.updated_at
-            WHERE excluded.location_prob IS NOT NULL
-              AND (author_location_detail.location_prob IS NULL
-                   OR excluded.location_prob > author_location_detail.location_prob)
-            """,
-            rows,
-        )
-        conn.commit()
-    finally:
-        conn.close()
+            conn.commit()
+        finally:
+            conn.close()
+
+    _sqlite_retry_on_locked(_do)
 
 
 ### Model loading + inference
@@ -1403,11 +1411,14 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
                     continue
                 to_cache_running[author] = detail
                 n_cache_confident += 1
-        # Persist newly-confident-cached authors so future months benefit.
-        if to_cache_running:
-            cache_put_locations(CACHE_DB_PATH, to_cache_running)
-            cache_put_location_details(CACHE_DB_PATH, to_cache_running)
-            to_cache_running.clear()
+        # NOTE: we accumulate confident-author details in to_cache_running and
+        # write them ONCE at the end of label_location_month. Writing here
+        # (every stream-flush, ~10x per task per month) caused NFS-mediated
+        # SQLite lock contention under %25 concurrency. Per-month write keeps
+        # the DB consistent at the cost of losing this task's cache
+        # contribution if the task crashes after a stream flush but before
+        # end-of-month.
+
         # Stream the longest now-resolvable prefix to disk.
         new_last, rows_w = _flush_completed_prefix(
             curated_csv_path, out_file, last_processed, idx_map, detail_by_author, write_mode

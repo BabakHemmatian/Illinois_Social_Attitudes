@@ -1073,37 +1073,41 @@ def cache_get_locations(db_path: str, authors: set[str]) -> Dict[str, str]:
 def cache_put_locations(db_path: str, details_by_author: Dict[str, Dict[str, Any]]) -> None:
     if not details_by_author:
         return
-    conn = sqlite3.connect(db_path, timeout=60)
-    try:
-        cur = conn.cursor()
-        now = int(time.time())
-        rows = []
-        for author, d in details_by_author.items():
-            if not author:
-                continue
-            location = d.get("location")
-            if not location:
-                continue
-            rows.append((author, str(location), d.get("location_prob"), now))
-        if not rows:
-            return
-        cur.executemany(
-            """
-            INSERT INTO author_location(author, location, location_prob, updated_at)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(author) DO UPDATE SET
-                location = excluded.location,
-                location_prob = excluded.location_prob,
-                updated_at = excluded.updated_at
-            WHERE excluded.location_prob IS NOT NULL
-              AND (author_location.location_prob IS NULL
-                   OR excluded.location_prob > author_location.location_prob)
-            """,
-            rows,
-        )
-        conn.commit()
-    finally:
-        conn.close()
+
+    def _do() -> None:
+        conn = sqlite3.connect(db_path, timeout=60)
+        try:
+            cur = conn.cursor()
+            now = int(time.time())
+            rows = []
+            for author, d in details_by_author.items():
+                if not author:
+                    continue
+                location = d.get("location")
+                if not location:
+                    continue
+                rows.append((author, str(location), d.get("location_prob"), now))
+            if not rows:
+                return
+            cur.executemany(
+                """
+                INSERT INTO author_location(author, location, location_prob, updated_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(author) DO UPDATE SET
+                    location = excluded.location,
+                    location_prob = excluded.location_prob,
+                    updated_at = excluded.updated_at
+                WHERE excluded.location_prob IS NOT NULL
+                  AND (author_location.location_prob IS NULL
+                       OR excluded.location_prob > author_location.location_prob)
+                """,
+                rows,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    _sqlite_retry_on_locked(_do)
 
 
 ## Persistent per-(author, raw_file) feature-counts cache (SQLite, separate

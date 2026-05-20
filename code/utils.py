@@ -10,11 +10,25 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from collections import Counter
 from pathlib import Path
-from typing import List, Dict, Literal, Tuple, Optional, Any
+from typing import List, Dict, Literal, NamedTuple, Tuple, Optional, Any
 import zstandard
 import io
 import json
 import sqlite3
+
+
+class StreamingScanYield(NamedTuple):
+    """One yield from iter_author_feature_map_streaming. The cumulative dicts
+    carry the running state across all yields so far; the per-file dicts hold
+    only this yield's contribution. Overlap dicts are non-empty only when the
+    scanner was given curated_seen_ids + target_month_basenames."""
+    files_just_done: List[str]
+    per_file_deltas: Dict[str, Tuple[Dict[str, Dict[str, int]], Dict[str, int], Dict[str, Dict[str, int]], Dict[str, int]]]
+    cumulative_counts: Dict[str, Dict[str, int]]
+    cumulative_seen: Dict[str, int]
+    cumulative_overlap_counts: Dict[str, Dict[str, int]]
+    cumulative_overlap_seen: Dict[str, int]
+    files_remaining: int
 
 ## Shared constants used across the codebase
 
@@ -644,6 +658,7 @@ def _scan_raw_file_chunk(
     subreddit_vocab: Optional[set] = None,
     curated_seen_ids: Optional[Dict[str, set]] = None,
     target_month_basenames: Optional[set] = None,
+    remaining_quota_per_author: Optional[Dict[str, int]] = None,
 ) -> Dict[str, Tuple[Dict[str, Dict[str, int]], Dict[str, int], Dict[str, Dict[str, int]], Dict[str, int]]]:
     """Scan a chunk of raw .zst files for the indicated authors.
 
@@ -670,6 +685,12 @@ def _scan_raw_file_chunk(
     per_file_mode = isinstance(target_authors, dict)
     curated_seen_ids = curated_seen_ids or {}
     target_month_basenames = target_month_basenames or set()
+    remaining_quota_per_author = remaining_quota_per_author or {}
+    # Chunk-cumulative seen across files in this chunk -- the across-files cap
+    # is min(max_items_per_author, remaining_quota_per_author[author]) so the
+    # author's total contribution from this chunk's scan respects the same
+    # cumulative cap the original (pre-streaming) scanner enforced.
+    chunk_seen: Dict[str, int] = {}
     out: Dict[str, Tuple[Dict[str, Dict[str, int]], Dict[str, int], Dict[str, Dict[str, int]], Dict[str, int]]] = {}
     for rf in file_chunk:
         basename = os.path.basename(rf)
@@ -687,6 +708,12 @@ def _scan_raw_file_chunk(
         for obj in iter_zst_json_lines(rf):
             author = (obj.get("author") or "").strip()
             if not author or author not in file_targets:
+                continue
+            author_cap = min(
+                max_items_per_author,
+                remaining_quota_per_author.get(author, max_items_per_author),
+            )
+            if chunk_seen.get(author, 0) >= author_cap:
                 continue
             if file_seen.get(author, 0) >= max_items_per_author:
                 continue
@@ -712,6 +739,7 @@ def _scan_raw_file_chunk(
                 subreddit_vocab=subreddit_vocab,
             )
             file_seen[author] = file_seen.get(author, 0) + 1
+            chunk_seen[author] = chunk_seen.get(author, 0) + 1
             if is_target_month_file:
                 post_id = (obj.get("id") or "").strip()
                 if post_id and post_id in curated_seen_ids.get(author, ()):  # tuple sentinel = empty set
@@ -761,6 +789,7 @@ def iter_author_feature_map_streaming(
     subreddit_vocab: Optional[set] = None,
     curated_seen_ids: Optional[Dict[str, set]] = None,
     target_month_basenames: Optional[set] = None,
+    remaining_quota_per_author: Optional[Dict[str, int]] = None,
 ):
     """`target_authors` may be either:
       - set[str]: scan every raw_file for the same author set (legacy mode).
@@ -772,19 +801,7 @@ def iter_author_feature_map_streaming(
     `curated_seen_ids` and `target_month_basenames` enable the per-post
     dedup correction (see _scan_raw_file_chunk doc).
 
-    Yields 7-tuples:
-      (files_just_done: List[str],
-       per_file_deltas: Dict[basename, (file_counts, file_seen,
-                                        file_overlap_counts, file_overlap_seen)],
-       cumulative_counts: Dict[author, counts],
-       cumulative_seen: Dict[author, seen],
-       cumulative_overlap_counts: Dict[author, counts],
-       cumulative_overlap_seen: Dict[author, seen],
-       files_remaining: int)
-
-    The cumulative_overlap_* dicts hold the running totals of features the
-    scanner observed in target-month files whose post id was in
-    curated_seen_ids; callers subtract these at inference time to dedupe.
+    Yields StreamingScanYield records (a NamedTuple).
     """
     per_file_mode = isinstance(target_authors, dict)
     if per_file_mode:
@@ -798,12 +815,17 @@ def iter_author_feature_map_streaming(
     cumulative_seen: Dict[str, int] = {a: 0 for a in all_target_authors}
     cumulative_overlap_counts: Dict[str, Dict[str, int]] = {}
     cumulative_overlap_seen: Dict[str, int] = {}
+    quota_per_author = remaining_quota_per_author or {}
+    # Each author's effective across-the-scan cap is min(max_items_per_author,
+    # quota_per_author[author]). Threaded chunks each enforce this cap
+    # internally; the post-fold min() below makes the cumulative cap exact even
+    # when multiple chunks individually filled up to the cap.
 
     raw_files = [str(f) for f in raw_files]
     total_files = len(raw_files)
 
     if not all_target_authors or total_files == 0:
-        yield ([], {}, cumulative_counts, cumulative_seen, cumulative_overlap_counts, cumulative_overlap_seen, 0)
+        yield StreamingScanYield([], {}, cumulative_counts, cumulative_seen, cumulative_overlap_counts, cumulative_overlap_seen, 0)
         return
 
     def _fold_per_file(per_file: Dict[str, Tuple[Dict[str, Dict[str, int]], Dict[str, int], Dict[str, Dict[str, int]], Dict[str, int]]]) -> None:
@@ -818,7 +840,8 @@ def iter_author_feature_map_streaming(
                     for k, v in c.items():
                         merged[k] = merged.get(k, 0) + v
             for author, s in file_seen.items():
-                cumulative_seen[author] = cumulative_seen.get(author, 0) + s
+                cap = min(max_items_per_author, quota_per_author.get(author, max_items_per_author))
+                cumulative_seen[author] = min(cap, cumulative_seen.get(author, 0) + s)
             for author, c in file_overlap_counts.items():
                 if not c:
                     continue
@@ -842,6 +865,7 @@ def iter_author_feature_map_streaming(
                 word_vocab=word_vocab, subreddit_vocab=subreddit_vocab,
                 curated_seen_ids=curated_seen_ids,
                 target_month_basenames=target_month_basenames,
+                remaining_quota_per_author=quota_per_author,
             )
 
         files_remaining = total_files
@@ -852,21 +876,31 @@ def iter_author_feature_map_streaming(
                 per_file_chunk = fut.result()
                 _fold_per_file(per_file_chunk)
                 files_remaining -= len(chunk)
-                yield (list(chunk), per_file_chunk, cumulative_counts, cumulative_seen, cumulative_overlap_counts, cumulative_overlap_seen, files_remaining)
+                yield StreamingScanYield(list(chunk), per_file_chunk, cumulative_counts, cumulative_seen, cumulative_overlap_counts, cumulative_overlap_seen, files_remaining)
         return
 
     # Sequential path: scan one file at a time via the chunk scanner so the
-    # per-file delta format is identical to the threaded path.
+    # per-file delta format is identical to the threaded path. Update the
+    # remaining-quota dict between files so the per-author cumulative cap
+    # exactly matches the original pre-streaming semantics.
+    running_quota = {a: min(max_items_per_author, quota_per_author.get(a, max_items_per_author))
+                     for a in all_target_authors}
     for i, rf in enumerate(raw_files):
         per_file_one = _scan_raw_file_chunk(
             [rf], target_authors, type_, max_items_per_author,
             word_vocab=word_vocab, subreddit_vocab=subreddit_vocab,
             curated_seen_ids=curated_seen_ids,
             target_month_basenames=target_month_basenames,
+            remaining_quota_per_author=running_quota,
         )
         _fold_per_file(per_file_one)
+        # Drain the quota by however much this file consumed.
+        for _basename, (_fc, file_seen, _ovc, _ovs) in per_file_one.items():
+            for author, s in file_seen.items():
+                if s and author in running_quota:
+                    running_quota[author] = max(0, running_quota[author] - s)
         files_remaining = total_files - (i + 1)
-        yield ([rf], per_file_one, cumulative_counts, cumulative_seen, cumulative_overlap_counts, cumulative_overlap_seen, files_remaining)
+        yield StreamingScanYield([rf], per_file_one, cumulative_counts, cumulative_seen, cumulative_overlap_counts, cumulative_overlap_seen, files_remaining)
 
 
 # NOTE: Collects up to max_items_per_author items per author. Returns (author_to_counts, author_seen).
@@ -890,7 +924,7 @@ def build_author_feature_map_from_raw_zst_with_seen(
 ) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
     author_to_counts: Dict[str, Dict[str, int]] = {}
     author_seen: Dict[str, int] = {a: 0 for a in target_authors}
-    for _files_done, _per_file, counts, seen, _overlap_counts, _overlap_seen, _files_remaining in iter_author_feature_map_streaming(
+    for yld in iter_author_feature_map_streaming(
         raw_files=raw_files,
         target_authors=target_authors,
         type_=type_,
@@ -902,8 +936,8 @@ def build_author_feature_map_from_raw_zst_with_seen(
         # The generator mutates and re-yields the same dicts each step; the
         # final iteration's state is what we want. Legacy callers don't pass
         # curated_seen_ids/target_month_basenames so overlap dicts are empty.
-        author_to_counts = counts
-        author_seen = seen
+        author_to_counts = yld.cumulative_counts
+        author_seen = yld.cumulative_seen
     return author_to_counts, author_seen
 
 # Find raw .zst files for a given year-month. Returns list of full paths.

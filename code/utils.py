@@ -91,20 +91,24 @@ def load_terms(file_path: str) -> List[str]:
 
 ## Resume helpers (used by all filter_/label_/organize_ resources)
 
-# Read the last fully-written row of a CSV efficiently (seek-from-end), and
-# return the integer in its `source_row` column. Returns -1 if:
+# Stream the existing output CSV forward with csv.reader and return the
+# largest integer found in its `source_row` column. Returns -1 if:
 #   - file doesn't exist
 #   - file is empty / has only a header
 #   - header lacks a `source_row` column
-#   - last data row is malformed / source_row not parseable
+#   - no data row has a parseable source_row value
 # Returns -1 (not 0) so callers can distinguish "no resume point" from
 # "first data row already processed" (source_row=0). Callers should resume
 # by skipping rows whose source_row <= returned value.
 #
-# As a side-effect, truncates any partial trailing data after the last
-# newline (which would otherwise corrupt the file when an append-mode
-# writer concatenates a new row onto it). This handles the realistic crash
-# pattern where a writer was killed mid-row.
+# We deliberately do NOT walk backward by byte to find the last row: many
+# of our resources write fields (e.g., post body / title+body) that contain
+# embedded newlines, so a single CSV record physically spans multiple
+# lines. A byte-level reverse scan can't tell whether a `\n` is a record
+# terminator or content inside a quoted field, and on submissions it almost
+# always lands inside the body — producing a bogus partial "last row" and
+# triggering a silent overwrite of a complete output. Streaming forward
+# with csv.reader respects quoting and so is correct on multi-line records.
 def get_last_source_row(output_file_path: str | Path,
                         report_file_path: Optional[str] = None,
                         file_for_log: Optional[str] = None) -> int:
@@ -117,79 +121,44 @@ def get_last_source_row(output_file_path: str | Path,
             reader = csv.reader(f)
             header = next(reader, None)
 
-        if not header:
-            return -1
-
-        try:
-            source_idx = header.index("source_row")
-        except ValueError:
-            if report_file_path and file_for_log:
-                log_report(
-                    report_file_path,
-                    f"Warning: Could not find 'source_row' column in existing output "
-                    f"for {Path(file_for_log).name}. Restarting from beginning."
-                )
-            return -1
-
-        # Open r+b so we can truncate a partial trailing row in place.
-        last_line = None
-        with open(output_file_path, "r+b") as f:
-            f.seek(0, os.SEEK_END)
-            file_end = f.tell()
-            if file_end == 0:
+            if not header:
                 return -1
 
-            # If the file does not end in a newline, the writer was killed
-            # mid-row. Walk back to the last newline and truncate everything
-            # after it before reading the last complete line.
-            f.seek(file_end - 1)
-            if f.read(1) != b"\n":
-                pos = file_end - 1
-                while pos > 0:
-                    pos -= 1
-                    f.seek(pos)
-                    if f.read(1) == b"\n":
-                        f.truncate(pos + 1)
-                        break
-                else:
-                    # No newline anywhere: the whole file is a partial single
-                    # line (corrupt header); no usable resume point.
-                    return -1
-
-            f.seek(0, os.SEEK_END)
-            position = f.tell()
-            if position == 0:
+            try:
+                source_idx = header.index("source_row")
+            except ValueError:
+                if report_file_path and file_for_log:
+                    log_report(
+                        report_file_path,
+                        f"Warning: Could not find 'source_row' column in existing output "
+                        f"for {Path(file_for_log).name}. Restarting from beginning."
+                    )
                 return -1
 
-            buffer = bytearray()
-            while position > 0:
-                position -= 1
-                f.seek(position)
-                byte = f.read(1)
-                if byte == b"\n":
-                    if buffer:
-                        last_line = buffer[::-1].decode("utf-8", errors="ignore").strip()
-                        if last_line:
-                            break
-                        buffer = bytearray()
-                else:
-                    buffer.extend(byte)
+            last_good_source_row = -1
+            try:
+                for row in reader:
+                    if source_idx >= len(row):
+                        continue
+                    try:
+                        src = int(row[source_idx])
+                    except (ValueError, TypeError):
+                        continue
+                    # source_row is monotonic in our pipeline; max() is
+                    # equivalent to last-seen but tolerant of any future
+                    # writer that flushes rows out of order.
+                    if src > last_good_source_row:
+                        last_good_source_row = src
+            except csv.Error as e:
+                if report_file_path and file_for_log:
+                    log_report(
+                        report_file_path,
+                        f"Warning: CSV parse error in existing output for {Path(file_for_log).name}; "
+                        f"resuming from source_row={last_good_source_row}. If a prior run was killed "
+                        f"mid-row, delete the file to force a clean re-run. ({e})"
+                    )
 
-            if buffer and not last_line:
-                last_line = buffer[::-1].decode("utf-8", errors="ignore").strip()
-
-        if not last_line:
-            return -1
-
-        last_row = next(csv.reader([last_line]))
-
-        if source_idx >= len(last_row):
-            return -1
-
-        try:
-            return int(last_row[source_idx])
-        except (ValueError, TypeError):
-            return -1
+            return last_good_source_row
 
     except Exception as e:
         if report_file_path and file_for_log:

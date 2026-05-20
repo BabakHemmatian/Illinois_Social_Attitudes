@@ -637,20 +637,58 @@ def build_author_feature_map_from_raw_zst(
 # Used by the parallel scan path; no early-exit since chunks run concurrently.
 def _scan_raw_file_chunk(
     file_chunk: List[str],
-    target_authors: set,
+    target_authors,
     type_: str,
     max_items_per_author: int,
     word_vocab: Optional[set] = None,
     subreddit_vocab: Optional[set] = None,
-) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
-    local_counts: Dict[str, Dict[str, int]] = {}
-    local_seen: Dict[str, int] = {}
+    curated_seen_ids: Optional[Dict[str, set]] = None,
+    target_month_basenames: Optional[set] = None,
+) -> Dict[str, Tuple[Dict[str, Dict[str, int]], Dict[str, int], Dict[str, Dict[str, int]], Dict[str, int]]]:
+    """Scan a chunk of raw .zst files for the indicated authors.
+
+    `target_authors` accepts either of:
+      - set[str]: legacy mode -- scan every file in the chunk for the same
+        author set (full spiral, no per-file targeting).
+      - Dict[str, set[str]]: per-file targeting mode -- keys are file BASENAMES
+        (e.g. "RC_2007-03.zst"), values are the set of authors we want to
+        collect from that file. Files whose basename is absent from the dict
+        are skipped entirely; an empty set value also skips the file.
+
+    `curated_seen_ids` (Dict[author, set[post_id]]) plus `target_month_basenames`
+    (set of file basenames) enable the per-post dedup correction: when scanning
+    a target-month file, posts whose id is in curated_seen_ids[author] are
+    counted into the per-author overlap dict in addition to the regular
+    per-author file counts. The caller then subtracts overlap from
+    regular-file-counts at inference time so each post is counted exactly once
+    across (curated, raw) sources.
+
+    Returns Dict[basename, (file_counts, file_seen, file_overlap_counts,
+    file_overlap_seen)]. The third and fourth elements are empty dicts for
+    non-target-month files.
+    """
+    per_file_mode = isinstance(target_authors, dict)
+    curated_seen_ids = curated_seen_ids or {}
+    target_month_basenames = target_month_basenames or set()
+    out: Dict[str, Tuple[Dict[str, Dict[str, int]], Dict[str, int], Dict[str, Dict[str, int]], Dict[str, int]]] = {}
     for rf in file_chunk:
+        basename = os.path.basename(rf)
+        if per_file_mode:
+            file_targets = target_authors.get(basename)
+            if not file_targets:
+                continue
+        else:
+            file_targets = target_authors
+        is_target_month_file = basename in target_month_basenames
+        file_counts: Dict[str, Dict[str, int]] = {}
+        file_seen: Dict[str, int] = {}
+        file_overlap_counts: Dict[str, Dict[str, int]] = {}
+        file_overlap_seen: Dict[str, int] = {}
         for obj in iter_zst_json_lines(rf):
             author = (obj.get("author") or "").strip()
-            if not author or author not in target_authors:
+            if not author or author not in file_targets:
                 continue
-            if local_seen.get(author, 0) >= max_items_per_author:
+            if file_seen.get(author, 0) >= max_items_per_author:
                 continue
             if type_ == "comments":
                 text = (obj.get("body") or "")
@@ -661,10 +699,10 @@ def _scan_raw_file_chunk(
                 text = (title + "\n" + body).strip()
                 subreddit = (obj.get("subreddit") or "")
             created_utc = obj.get("created_utc", "")
-            counts = local_counts.get(author)
+            counts = file_counts.get(author)
             if counts is None:
                 counts = {}
-                local_counts[author] = counts
+                file_counts[author] = counts
             add_features_for_row(
                 counts,
                 text=text,
@@ -673,17 +711,174 @@ def _scan_raw_file_chunk(
                 word_vocab=word_vocab,
                 subreddit_vocab=subreddit_vocab,
             )
-            local_seen[author] = local_seen.get(author, 0) + 1
-    return local_counts, local_seen
+            file_seen[author] = file_seen.get(author, 0) + 1
+            if is_target_month_file:
+                post_id = (obj.get("id") or "").strip()
+                if post_id and post_id in curated_seen_ids.get(author, ()):  # tuple sentinel = empty set
+                    overlap_dst = file_overlap_counts.get(author)
+                    if overlap_dst is None:
+                        overlap_dst = {}
+                        file_overlap_counts[author] = overlap_dst
+                    add_features_for_row(
+                        overlap_dst,
+                        text=text,
+                        subreddit=subreddit,
+                        time_value=str(created_utc),
+                        word_vocab=word_vocab,
+                        subreddit_vocab=subreddit_vocab,
+                    )
+                    file_overlap_seen[author] = file_overlap_seen.get(author, 0) + 1
+        # Materialize even no-hit authors so callers can persist
+        # "scanned-but-empty" rows: a file we opened for author X where X
+        # didn't appear. These rows let the next overlapping-spiral month
+        # know that f was already scanned for X and skip the file.
+        for a in file_targets:
+            if a not in file_counts:
+                file_counts[a] = {}
+                file_seen[a] = 0
+        out[basename] = (file_counts, file_seen, file_overlap_counts, file_overlap_seen)
+    return out
 
 
 # Stream one or more raw .zst files and build sparse features per author.
+# Generator variant of the raw-zst scanner. Yields (files_just_done, author_to_counts,
+# author_seen, files_remaining) after each raw .zst file finishes (sequential path) or
+# after each thread-pool chunk finishes (parallel path). The yielded dicts are the
+# CUMULATIVE state -- mutating them outside breaks invariants; callers should snapshot
+# anything they need to retain. Always yields at least once (the empty-target shortcut
+# yields once with files_remaining == 0).
+#
+# Used by label_location_month() to flush rows for saturated authors mid-scan, so a
+# task that crashes during the multi-day raw scan can resume from the last incremental
+# flush instead of re-scanning every raw file from the top.
+def iter_author_feature_map_streaming(
+    raw_files: List[str | Path],
+    target_authors,
+    type_: str,
+    max_items_per_author: int = 100,
+    n_scan_workers: int = 1,
+    word_vocab: Optional[set] = None,
+    subreddit_vocab: Optional[set] = None,
+    curated_seen_ids: Optional[Dict[str, set]] = None,
+    target_month_basenames: Optional[set] = None,
+):
+    """`target_authors` may be either:
+      - set[str]: scan every raw_file for the same author set (legacy mode).
+      - Dict[basename, set[str]]: per-file targeting. Keys are raw-file
+        BASENAMES; values are the authors to look for in that file. Files
+        whose basename is absent from the dict (or maps to an empty set) are
+        skipped without opening them.
+
+    `curated_seen_ids` and `target_month_basenames` enable the per-post
+    dedup correction (see _scan_raw_file_chunk doc).
+
+    Yields 7-tuples:
+      (files_just_done: List[str],
+       per_file_deltas: Dict[basename, (file_counts, file_seen,
+                                        file_overlap_counts, file_overlap_seen)],
+       cumulative_counts: Dict[author, counts],
+       cumulative_seen: Dict[author, seen],
+       cumulative_overlap_counts: Dict[author, counts],
+       cumulative_overlap_seen: Dict[author, seen],
+       files_remaining: int)
+
+    The cumulative_overlap_* dicts hold the running totals of features the
+    scanner observed in target-month files whose post id was in
+    curated_seen_ids; callers subtract these at inference time to dedupe.
+    """
+    per_file_mode = isinstance(target_authors, dict)
+    if per_file_mode:
+        all_target_authors: set = set()
+        for s in target_authors.values():
+            all_target_authors.update(s)
+    else:
+        all_target_authors = target_authors
+
+    cumulative_counts: Dict[str, Dict[str, int]] = {}
+    cumulative_seen: Dict[str, int] = {a: 0 for a in all_target_authors}
+    cumulative_overlap_counts: Dict[str, Dict[str, int]] = {}
+    cumulative_overlap_seen: Dict[str, int] = {}
+
+    raw_files = [str(f) for f in raw_files]
+    total_files = len(raw_files)
+
+    if not all_target_authors or total_files == 0:
+        yield ([], {}, cumulative_counts, cumulative_seen, cumulative_overlap_counts, cumulative_overlap_seen, 0)
+        return
+
+    def _fold_per_file(per_file: Dict[str, Tuple[Dict[str, Dict[str, int]], Dict[str, int], Dict[str, Dict[str, int]], Dict[str, int]]]) -> None:
+        for _basename, (file_counts, file_seen, file_overlap_counts, file_overlap_seen) in per_file.items():
+            for author, c in file_counts.items():
+                if not c:
+                    continue
+                merged = cumulative_counts.get(author)
+                if merged is None:
+                    cumulative_counts[author] = dict(c)
+                else:
+                    for k, v in c.items():
+                        merged[k] = merged.get(k, 0) + v
+            for author, s in file_seen.items():
+                cumulative_seen[author] = cumulative_seen.get(author, 0) + s
+            for author, c in file_overlap_counts.items():
+                if not c:
+                    continue
+                merged = cumulative_overlap_counts.get(author)
+                if merged is None:
+                    cumulative_overlap_counts[author] = dict(c)
+                else:
+                    for k, v in c.items():
+                        merged[k] = merged.get(k, 0) + v
+            for author, s in file_overlap_seen.items():
+                cumulative_overlap_seen[author] = cumulative_overlap_seen.get(author, 0) + s
+
+    if n_scan_workers > 1 and total_files > 1:
+        from concurrent.futures import as_completed
+        n_workers = min(n_scan_workers, total_files)
+        chunks = [raw_files[i::n_workers] for i in range(n_workers)]
+
+        def scan_chunk(chunk):
+            return _scan_raw_file_chunk(
+                chunk, target_authors, type_, max_items_per_author,
+                word_vocab=word_vocab, subreddit_vocab=subreddit_vocab,
+                curated_seen_ids=curated_seen_ids,
+                target_month_basenames=target_month_basenames,
+            )
+
+        files_remaining = total_files
+        with ThreadPoolExecutor(max_workers=n_workers) as pool:
+            future_to_chunk = {pool.submit(scan_chunk, chunk): chunk for chunk in chunks}
+            for fut in as_completed(future_to_chunk):
+                chunk = future_to_chunk[fut]
+                per_file_chunk = fut.result()
+                _fold_per_file(per_file_chunk)
+                files_remaining -= len(chunk)
+                yield (list(chunk), per_file_chunk, cumulative_counts, cumulative_seen, cumulative_overlap_counts, cumulative_overlap_seen, files_remaining)
+        return
+
+    # Sequential path: scan one file at a time via the chunk scanner so the
+    # per-file delta format is identical to the threaded path.
+    for i, rf in enumerate(raw_files):
+        per_file_one = _scan_raw_file_chunk(
+            [rf], target_authors, type_, max_items_per_author,
+            word_vocab=word_vocab, subreddit_vocab=subreddit_vocab,
+            curated_seen_ids=curated_seen_ids,
+            target_month_basenames=target_month_basenames,
+        )
+        _fold_per_file(per_file_one)
+        files_remaining = total_files - (i + 1)
+        yield ([rf], per_file_one, cumulative_counts, cumulative_seen, cumulative_overlap_counts, cumulative_overlap_seen, files_remaining)
+
+
 # NOTE: Collects up to max_items_per_author items per author. Returns (author_to_counts, author_seen).
 # NOTE: n_scan_workers > 1 splits files across threads (zstd decompression releases the GIL).
 #       Use only in single-process contexts (SLURM array tasks); not for multi-process local runs.
 # NOTE: word_vocab / subreddit_vocab cap the feature space at scan time -- pass
 #       the downstream model's known vocab to avoid building per-author dicts
 #       full of OOV tokens that would be dropped during inference anyway.
+#
+# This non-streaming variant is the legacy one-shot scan; it now consumes the streaming
+# generator above and returns the final cumulative state. Callers that don't need mid-scan
+# checkpoints (anything outside label_location.py) keep their existing semantics unchanged.
 def build_author_feature_map_from_raw_zst_with_seen(
     raw_files: List[str | Path],
     target_authors: set[str],
@@ -695,83 +890,20 @@ def build_author_feature_map_from_raw_zst_with_seen(
 ) -> Tuple[Dict[str, Dict[str, int]], Dict[str, int]]:
     author_to_counts: Dict[str, Dict[str, int]] = {}
     author_seen: Dict[str, int] = {a: 0 for a in target_authors}
-
-    if not target_authors:
-        return author_to_counts, author_seen
-
-    raw_files = [str(f) for f in raw_files]
-
-    if n_scan_workers > 1 and len(raw_files) > 1:
-        from concurrent.futures import as_completed
-        n_workers = min(n_scan_workers, len(raw_files))
-        chunks = [raw_files[i::n_workers] for i in range(n_workers)]
-
-        def scan_chunk(chunk):
-            return _scan_raw_file_chunk(
-                chunk, target_authors, type_, max_items_per_author,
-                word_vocab=word_vocab, subreddit_vocab=subreddit_vocab,
-            )
-
-        with ThreadPoolExecutor(max_workers=n_workers) as pool:
-            futures = [pool.submit(scan_chunk, chunk) for chunk in chunks]
-            # Fold each chunk's result into the running totals as soon as it
-            # finishes, then drop the local references so the chunk's dicts
-            # can be reclaimed before the next chunk completes. With N workers
-            # this keeps peak memory at ~2 chunks (running + folding) instead
-            # of N+1 chunks.
-            for fut in as_completed(futures):
-                local_counts, local_seen = fut.result()
-                for author, counts in local_counts.items():
-                    merged = author_to_counts.get(author)
-                    if merged is None:
-                        author_to_counts[author] = counts
-                    else:
-                        for k, v in counts.items():
-                            merged[k] = merged.get(k, 0) + v
-                for author, seen in local_seen.items():
-                    author_seen[author] = min(author_seen.get(author, 0) + seen, max_items_per_author)
-                local_counts.clear()
-                local_seen.clear()
-                del local_counts, local_seen
-
-        return author_to_counts, author_seen
-
-    # Sequential path with early-exit (used locally and in multi-process mode)
-    remaining = len(target_authors)
-    for rf in raw_files:
-        for obj in iter_zst_json_lines(rf):
-            author = (obj.get("author") or "").strip()
-            if not author or author not in author_seen:
-                continue
-            if author_seen[author] >= max_items_per_author:
-                continue
-            if type_ == "comments":
-                text = (obj.get("body") or "")
-                subreddit = (obj.get("subreddit") or "")
-            else:
-                title = (obj.get("title") or "")
-                body = (obj.get("selftext") or "")
-                text = (title + "\n" + body).strip()
-                subreddit = (obj.get("subreddit") or "")
-            created_utc = obj.get("created_utc", "")
-            counts = author_to_counts.get(author)
-            if counts is None:
-                counts = {}
-                author_to_counts[author] = counts
-            add_features_for_row(
-                counts,
-                text=text,
-                subreddit=subreddit,
-                time_value=str(created_utc),
-                word_vocab=word_vocab,
-                subreddit_vocab=subreddit_vocab,
-            )
-            author_seen[author] += 1
-            if author_seen[author] == max_items_per_author:
-                remaining -= 1
-                if remaining <= 0:
-                    return author_to_counts, author_seen
-
+    for _files_done, _per_file, counts, seen, _overlap_counts, _overlap_seen, _files_remaining in iter_author_feature_map_streaming(
+        raw_files=raw_files,
+        target_authors=target_authors,
+        type_=type_,
+        max_items_per_author=max_items_per_author,
+        n_scan_workers=n_scan_workers,
+        word_vocab=word_vocab,
+        subreddit_vocab=subreddit_vocab,
+    ):
+        # The generator mutates and re-yields the same dicts each step; the
+        # final iteration's state is what we want. Legacy callers don't pass
+        # curated_seen_ids/target_month_basenames so overlap dicts are empty.
+        author_to_counts = counts
+        author_seen = seen
     return author_to_counts, author_seen
 
 # Find raw .zst files for a given year-month. Returns list of full paths.
@@ -930,3 +1062,163 @@ def cache_put_locations(db_path: str, details_by_author: Dict[str, Dict[str, Any
         conn.commit()
     finally:
         conn.close()
+
+
+## Persistent per-(author, raw_file) feature-counts cache (SQLite, separate
+## table from the location-decision cache above)
+#
+# Purpose: amortize raw-zst scan work across runs. Each row records the
+# features collected for one author from one raw .zst file. Because the raw
+# data is the same physical input regardless of which social group, year, or
+# concurrent task triggered the scan, identical (author, file) tuples yield
+# identical counts. Writes use INSERT OR IGNORE so concurrent tasks scanning
+# the same (author, file) tuple converge on whichever row commits first --
+# the second scan's work is wasted but never corrupting (no double-counts,
+# no lost-write races).
+#
+# Aggregation happens at read time: cache_get_author_file_counts returns,
+# per author, the union of all cached basenames plus the summed counts and
+# seen across those files. Callers then subtract the union from the current
+# spiral to compute which files still need scanning.
+#
+# Storage: roughly 60-200 bytes per row after zstd compression (counts blob
+# is sparse with ~5-50 features; seen, timestamps, raw_file basename round
+# out the row). A fully-populated corpus row count is bounded by
+# unique_authors x average_files_per_author -- order of magnitude ~100M rows
+# for 2M authors x 50 files, or ~6-12 GB.
+
+
+def init_author_file_counts_cache(db_path: str) -> None:
+    """Create the author_file_counts table if missing. Idempotent; pre-create
+    once from a single process before launching parallel array tasks to
+    avoid 'database is locked' on first WAL setup."""
+    os.makedirs(os.path.dirname(db_path), exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=60)
+    try:
+        cur = conn.cursor()
+        cur.execute("PRAGMA journal_mode=WAL;")
+        cur.execute("PRAGMA synchronous=NORMAL;")
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS author_file_counts (
+                author TEXT NOT NULL,
+                raw_file TEXT NOT NULL,
+                counts_blob BLOB NOT NULL,
+                seen_count INTEGER NOT NULL,
+                scanned_at REAL NOT NULL,
+                PRIMARY KEY (author, raw_file)
+            );
+            """
+        )
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_author_file_counts_author ON author_file_counts(author);"
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def _zstd_compress_json(obj: Any) -> bytes:
+    raw = json.dumps(obj, separators=(",", ":")).encode("utf-8")
+    cctx = zstandard.ZstdCompressor(level=3)
+    return cctx.compress(raw)
+
+
+def _zstd_decompress_json(blob: bytes) -> Any:
+    dctx = zstandard.ZstdDecompressor()
+    raw = dctx.decompress(blob)
+    return json.loads(raw)
+
+
+# Returns Dict[author, (scanned_files: set[str], aggregated_counts: dict,
+# aggregated_seen: int)] for authors with at least one cached row. The
+# scanned_files set is the union of basenames cached for that author across
+# any prior run (or any group); counts and seen are the row-wise sums.
+# Authors without cached rows are absent from the result dict (caller treats
+# them as needing a full spiral scan).
+def cache_get_author_file_counts(
+    db_path: str,
+    authors,
+) -> Dict[str, Tuple[set, Dict[str, int], int]]:
+    if not authors:
+        return {}
+
+    def _do() -> Dict[str, Tuple[set, Dict[str, int], int]]:
+        conn = sqlite3.connect(db_path, timeout=60)
+        try:
+            cur = conn.cursor()
+            out: Dict[str, Tuple[set, Dict[str, int], int]] = {}
+            author_list = list(authors)
+            for i in range(0, len(author_list), 900):
+                chunk = author_list[i:i + 900]
+                qmarks = ",".join(["?"] * len(chunk))
+                cur.execute(
+                    f"SELECT author, raw_file, counts_blob, seen_count FROM author_file_counts WHERE author IN ({qmarks})",
+                    chunk,
+                )
+                for author, raw_file, counts_blob, seen in cur.fetchall():
+                    if author not in out:
+                        out[author] = (set(), {}, 0)
+                    scanned, agg_counts, agg_seen = out[author]
+                    scanned.add(raw_file)
+                    try:
+                        cnts = _zstd_decompress_json(counts_blob)
+                    except Exception:
+                        # Corrupt row -- treat as scanned-but-empty so we don't
+                        # re-scan, and don't add bogus counts.
+                        cnts = {}
+                    for k, v in cnts.items():
+                        agg_counts[k] = agg_counts.get(k, 0) + int(v)
+                    out[author] = (scanned, agg_counts, agg_seen + int(seen))
+            return out
+        finally:
+            conn.close()
+
+    return _sqlite_retry_on_locked(_do)
+
+
+# INSERT OR IGNORE one row per (author, raw_file). `rows` is an iterable of
+# (author, raw_file_basename, counts_dict, seen_count). A row already in the
+# table for the same (author, raw_file) keeps its existing contents -- this
+# is the race-safety guarantee: two concurrent tasks scanning the same
+# (author, file) tuple commit identical work, so whichever lands first wins
+# and the other is silently dropped.
+def cache_put_author_file_counts(
+    db_path: str,
+    rows,
+) -> None:
+    rows = list(rows)
+    if not rows:
+        return
+
+    def _do() -> None:
+        conn = sqlite3.connect(db_path, timeout=60)
+        try:
+            cur = conn.cursor()
+            now = time.time()
+            db_rows = []
+            for entry in rows:
+                author, raw_file, counts, seen_count = entry
+                if not author or not raw_file:
+                    continue
+                db_rows.append((
+                    author,
+                    raw_file,
+                    _zstd_compress_json(counts or {}),
+                    int(seen_count or 0),
+                    now,
+                ))
+            if not db_rows:
+                return
+            cur.executemany(
+                """
+                INSERT OR IGNORE INTO author_file_counts(author, raw_file, counts_blob, seen_count, scanned_at)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                db_rows,
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    _sqlite_retry_on_locked(_do)

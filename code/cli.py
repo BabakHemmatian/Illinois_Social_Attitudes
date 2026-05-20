@@ -12,6 +12,7 @@ import sys
 from utils import (
     array_span_from_years,
     groups,
+    init_author_file_counts_cache,
     init_location_cache,
     init_location_detail_cache,
     validate_years,
@@ -283,6 +284,7 @@ if __name__ == "__main__":
         location_cache_db_path = str(location_cache_dir / f"author_location_cache_{args.type}.sqlite")
         init_location_cache(location_cache_db_path)
         init_location_detail_cache(location_cache_db_path)
+        init_author_file_counts_cache(location_cache_db_path)
 
     if args.slurm:
         slurm_vars = [f"resource={args.resource}", f"type={args.type}"]

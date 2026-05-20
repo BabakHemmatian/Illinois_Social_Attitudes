@@ -27,6 +27,13 @@ fi
 # nounset around the activation, then restore it.
 set +u
 eval "$(conda shell.bash hook)"
+# Pop any conda envs inherited from the submitter shell (--export=ALL can
+# propagate CONDA_DEFAULT_ENV/CONDA_PREFIX). Without this, 'conda activate
+# ISAAC' short-circuits as a no-op when ISAAC is already marked active, and
+# ISAAC/bin can end up behind miniforge3/bin in PATH -> wrong python.
+while [[ "${CONDA_SHLVL:-0}" -gt 0 ]]; do
+    conda deactivate
+done
 conda activate ISAAC
 set -u
 

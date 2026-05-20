@@ -1482,10 +1482,12 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
                     counts,
                     seen,
                 ))
-        if pending_file_cache_rows:
-            cache_put_author_file_counts(CACHE_DB_PATH, pending_file_cache_rows)
-            n_file_cache_rows_written += len(pending_file_cache_rows)
-            pending_file_cache_rows.clear()
+        # NOTE: we deliberately do NOT write pending_file_cache_rows here.
+        # The cache DB lives on NFS, which can corrupt under bursts of
+        # concurrent writes (SQLite + NFS + multiple writers is a known
+        # fragile combination). We accumulate per-file rows in memory and
+        # write them all in a single transaction at the end of
+        # label_location_month -- one cache write per task per month.
 
         if files_since_flush < FLUSH_EVERY_N_RAW and files_remaining > 0:
             continue
@@ -1508,7 +1510,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     log_report(
         report_file_path,
         f"[scan] {stem}: collected_raw_for={len(raw_counts_state):,} authors in {(time.time() - raw_scan_start)/60:.2f} minutes "
-        f"file_cache_rows_written={n_file_cache_rows_written:,}",
+        f"pending_file_cache_rows={len(pending_file_cache_rows):,}",
     )
 
     # Final inference for any remaining_authors not yet processed (the
@@ -1569,10 +1571,17 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         cache_put_location_details(CACHE_DB_PATH, to_cache_running)
         to_cache_running.clear()
 
-    # Per-(author, file) scan-state cache rows were already persisted
-    # incrementally inside the streaming loop above (each yield's
-    # per_file_deltas were INSERT OR IGNOREd as soon as they arrived).
-    # Nothing left to persist here.
+    # Per-(author, file) scan-state cache: persist ALL accumulated rows now
+    # in a single transaction. Doing this once per task (instead of after
+    # every scanned file) keeps the NFS-mediated write traffic low enough
+    # that the DB stays consistent under %25 concurrency. Within-month
+    # crash resilience is provided by the streaming source_row writer; on
+    # crash the cache for this task is lost, but the next month's
+    # overlapping-spiral re-scan is the only cost.
+    if pending_file_cache_rows:
+        cache_put_author_file_counts(CACHE_DB_PATH, pending_file_cache_rows)
+        n_file_cache_rows_written = len(pending_file_cache_rows)
+        pending_file_cache_rows.clear()
 
     n_dedup_authors = sum(1 for v in raw_overlap_seen_state.values() if v > 0)
     n_dedup_items = sum(int(v) for v in raw_overlap_seen_state.values())

@@ -1170,12 +1170,22 @@ def _zstd_decompress_json(blob: bytes) -> Any:
 # any prior run (or any group); counts and seen are the row-wise sums.
 # Authors without cached rows are absent from the result dict (caller treats
 # them as needing a full spiral scan).
+#
+# `exclude_basenames`: optional set of raw-file basenames whose rows should
+# NOT contribute to the aggregated counts/seen, but whose presence still
+# counts toward scanned_files. label_location's caller passes the target
+# month's basenames here so the aggregated cached_counts excludes features
+# from any prior run's scan of THIS run's target month -- otherwise we'd
+# double-count the target month's content (once via prior-run cached counts,
+# once via this run's forced target-month re-scan).
 def cache_get_author_file_counts(
     db_path: str,
     authors,
+    exclude_basenames: Optional[set] = None,
 ) -> Dict[str, Tuple[set, Dict[str, int], int]]:
     if not authors:
         return {}
+    exclude_basenames = exclude_basenames or set()
 
     def _do() -> Dict[str, Tuple[set, Dict[str, int], int]]:
         conn = sqlite3.connect(db_path, timeout=60)
@@ -1195,6 +1205,13 @@ def cache_get_author_file_counts(
                         out[author] = (set(), {}, 0)
                     scanned, agg_counts, agg_seen = out[author]
                     scanned.add(raw_file)
+                    if raw_file in exclude_basenames:
+                        # Row is in the cache (scanned_files reflects it) but
+                        # we deliberately do NOT fold its counts/seen into the
+                        # aggregate -- the caller will get a fresh scan of
+                        # this file and add those counts directly.
+                        out[author] = (scanned, agg_counts, agg_seen)
+                        continue
                     try:
                         cnts = _zstd_decompress_json(counts_blob)
                     except Exception:

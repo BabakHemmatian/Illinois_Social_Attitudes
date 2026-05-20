@@ -1250,7 +1250,16 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     # curated_seen_ids.
     remaining_authors_set = set(remaining_authors)
     spiral_basenames = {os.path.basename(rf) for rf in raw_files}
-    scan_state_existing = cache_get_author_file_counts(CACHE_DB_PATH, remaining_authors_set)
+    # Exclude target month basenames from the cached aggregation so we don't
+    # double-count features that a prior run's spiral happened to scan from
+    # this month's raw .zst. Those rows still live in the cache (other-target
+    # months' spirals can use them); they just don't contribute to *this*
+    # run's cached_counts because we will scan the target month fresh below.
+    scan_state_existing = cache_get_author_file_counts(
+        CACHE_DB_PATH,
+        remaining_authors_set,
+        exclude_basenames=target_month_basenames,
+    )
     cached_counts_by_author: Dict[str, Dict[str, int]] = {}
     cached_seen_by_author: Dict[str, int] = {}
     cached_scanned_by_author: Dict[str, set] = {}

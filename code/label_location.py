@@ -23,6 +23,10 @@ from cli import get_args, MODELS_DIR, DATA_DIR
 from utils import (
     _sqlite_retry_on_locked,
     build_author_feature_map_from_raw_zst_with_seen,
+    iter_author_feature_map_streaming,
+    init_author_file_counts_cache,
+    cache_get_author_file_counts,
+    cache_put_author_file_counts,
     cache_get_locations,
     cache_put_locations,
     check_reqd_files,
@@ -44,6 +48,11 @@ UNKNOWN_LABEL = "UNK"
 
 MIN_SAMPLES_FOR_INFERENCE = 10
 MIN_SAMPLES_FOR_CACHE = 25
+# After every FLUSH_EVERY_N_RAW raw .zst files complete, infer locations for
+# now-saturated authors and write their rows incrementally. Caps the worst-case
+# lost-work window on a mid-scan crash to ~N/total_raw_files of the month's
+# scan time; with default N=3 and ~30-50 raw files per month that is ~6-10%.
+FLUSH_EVERY_N_RAW = 3
 # When an author has at least this many items in the curated (group-filtered)
 # input for the current month, the local seed features dominate the inference
 # enough that any cross-group cached label is least trustworthy. Skip the cache
@@ -73,9 +82,43 @@ years = parse_range(args.years)
 if isinstance(years, int):
     years = [years]
 group = args.group
-max_items_per_author = getattr(args, "maxitems", None) or 50
-max_files_to_scan = getattr(args, "maxfiles", None) or 60
-max_radius = getattr(args, "maxradius", None) or 30
+# CLI knob overrides. None means "no explicit value; fall back to the
+# per-year-band policy in YEAR_BAND_SCAN_KNOBS". Resolved per-month inside
+# label_location_month() via _resolve_scan_knobs_for_year().
+_cli_max_items_per_author = getattr(args, "maxitems", None)
+_cli_max_files_to_scan = getattr(args, "maxfiles", None)
+_cli_max_radius = getattr(args, "maxradius", None)
+# Year-band policy: stringent through 2019 (the historical defaults), then
+# halved per-author sampling and tighter month window for 2020-2023 where
+# raw-zst activity per month is 3-4x higher and the old defaults push the
+# scan past the 4-day SLURM wall on the largest months. Each tuple is
+# (max_items_per_author, max_files_to_scan, max_radius). Bands are inclusive
+# on both ends; the first matching band wins.
+YEAR_BAND_SCAN_KNOBS: List[Tuple[int, int, int, int, int]] = [
+    # (year_lo, year_hi, max_items_per_author, max_files_to_scan, max_radius)
+    (2007, 2019, 50, 60, 30),
+    (2020, 2023, 25, 60, 20),
+]
+
+
+def _resolve_scan_knobs_for_year(year: int) -> Tuple[int, int, int]:
+    """Return (max_items_per_author, max_files_to_scan, max_radius) for year.
+
+    Picks the matching band from YEAR_BAND_SCAN_KNOBS, then lets any
+    explicit CLI override (--maxitems / --maxfiles / --maxradius) win.
+    """
+    band_items, band_files, band_radius = 50, 60, 30  # ultimate fallback
+    for lo, hi, items, files, radius in YEAR_BAND_SCAN_KNOBS:
+        if lo <= year <= hi:
+            band_items, band_files, band_radius = items, files, radius
+            break
+    return (
+        _cli_max_items_per_author if _cli_max_items_per_author is not None else band_items,
+        _cli_max_files_to_scan if _cli_max_files_to_scan is not None else band_files,
+        _cli_max_radius if _cli_max_radius is not None else band_radius,
+    )
+
+
 batch_size = max(1, int(getattr(args, "batchsize", DEFAULT_BATCH_SIZE) or DEFAULT_BATCH_SIZE))
 # Parallel file scan: enabled only for SLURM array tasks (single-process); falls back to 1 locally
 # and in multi-process mode to avoid compounding memory with ProcessPoolExecutor workers.
@@ -121,6 +164,7 @@ output_path.mkdir(parents=True, exist_ok=True)
 CACHE_DIR = DATA_DIR / "data_reddit_curated" / "data_reddit_location"
 CACHE_DB_PATH = str(CACHE_DIR / f"author_location_cache_{RAW_TYPE}.sqlite")
 init_location_cache(CACHE_DB_PATH)
+init_author_file_counts_cache(CACHE_DB_PATH)
 report_file_path = os.path.join(output_path, "report_label_location.csv")
 
 
@@ -764,12 +808,14 @@ def _scan_month_authors(
         time_idx = _find_header_index(header, "time", 4)
         subreddit_idx = _find_header_index(header, "subreddit", 5)
         src_idx = header.index("source_row") if "source_row" in header else -1
+        id_idx = header.index("id") if "id" in header else -1
         idx_map = {
             "author": author_idx,
             "text": text_idx,
             "time": time_idx,
             "subreddit": subreddit_idx,
             "source_row": src_idx,
+            "id": id_idx,
         }
 
         filter_by_src = src_idx >= 0 and last_processed >= 0
@@ -809,7 +855,7 @@ def _seed_features_for_authors(
     target_authors_set: set,
     word_vocab: Optional[set] = None,
     subreddit_vocab: Optional[set] = None,
-) -> Dict[str, Dict[str, int]]:
+) -> Tuple[Dict[str, Dict[str, int]], Dict[str, set]]:
     """Pass 2 of the streaming pipeline.
 
     Re-reads the curated CSV and accumulates per-author feature counts only
@@ -817,20 +863,31 @@ def _seed_features_for_authors(
     so local_counts only holds entries for authors that still need
     inference -- typically ~75% of the curated authors are pre-cached and
     don't need seed features.
+
+    Returns (local_counts, curated_seen_ids). curated_seen_ids[author] is the
+    set of comment/submission IDs the author contributed via the curated CSV;
+    Pass 3's raw scanner uses it to deduplicate posts that appear in BOTH the
+    curated CSV (already counted as local) AND the same month's raw .zst (would
+    otherwise be counted again as raw), correcting a per-post double-count
+    that's been latent in the original pipeline. Dedup is applied only when
+    the raw scanner reads the target month's .zst file -- other spiral months'
+    files have no overlap with this month's curated content.
     """
     local_counts: Dict[str, Dict[str, int]] = {}
+    curated_seen_ids: Dict[str, set] = {}
 
     author_idx = idx_map["author"]
     text_idx = idx_map["text"]
     time_idx = idx_map["time"]
     subreddit_idx = idx_map["subreddit"]
+    id_idx = idx_map.get("id", -1)
 
     with open(curated_csv_path, "r", encoding="utf-8-sig", errors="ignore") as f:
         reader = csv.reader((line.replace("\x00", "") for line in f))
         try:
             next(reader)  # skip header
         except StopIteration:
-            return local_counts
+            return local_counts, curated_seen_ids
 
         for r in reader:
             if not r or len(r) <= author_idx:
@@ -847,8 +904,12 @@ def _seed_features_for_authors(
                 word_vocab=word_vocab,
                 subreddit_vocab=subreddit_vocab,
             )
+            if id_idx >= 0 and len(r) > id_idx:
+                post_id = r[id_idx].strip()
+                if post_id:
+                    curated_seen_ids.setdefault(author, set()).add(post_id)
 
-    return local_counts
+    return local_counts, curated_seen_ids
 
 
 def _merge_feature_maps(
@@ -965,6 +1026,103 @@ def _stream_write_output(
             )
 
 
+def _flush_completed_prefix(
+    curated_csv_path: str,
+    out_file: Path,
+    last_processed: int,
+    idx_map: Dict[str, int],
+    detail_by_author: Dict[str, Dict[str, object]],
+    write_mode: str,
+) -> Tuple[int, int]:
+    """Walk the curated CSV in source_row order and write the longest leading
+    prefix of rows beyond `last_processed` whose author label is known.
+
+    A row is "writable" when:
+      - its author is empty / "[deleted]" (defaults to UNK), or
+      - its author appears in detail_by_author.
+
+    The walk STOPS at the first writable-gating failure (a real author whose
+    detail is not yet known). This preserves monotonic source_row ordering in
+    the output so get_last_source_row can correctly resume an interrupted run.
+
+    Returns (new_last_processed, rows_written). When rows_written == 0 the file
+    is not modified and `write_mode` should still apply to the next call.
+    """
+    author_idx = idx_map["author"]
+    src_idx = idx_map.get("source_row", -1)
+    filter_by_src = src_idx >= 0 and last_processed >= 0
+    new_last = last_processed
+    rows_written = 0
+
+    # We open the output in the requested mode only if/when we have at least
+    # one row to write -- avoids creating an empty header-only file when the
+    # first flush has nothing to do (e.g. the very first row's author has not
+    # been inferred yet).
+    fi = open(curated_csv_path, "r", encoding="utf-8-sig", errors="ignore")
+    try:
+        reader = csv.reader((line.replace("\x00", "") for line in fi))
+        try:
+            header = next(reader)
+        except StopIteration:
+            return last_processed, 0
+
+        fo = None
+        writer = None
+        try:
+            for r in reader:
+                if not r:
+                    continue
+
+                row_src: Optional[int] = None
+                if src_idx >= 0 and len(r) > src_idx:
+                    try:
+                        row_src = int(r[src_idx].strip())
+                    except ValueError:
+                        row_src = None
+
+                if filter_by_src:
+                    if row_src is None or row_src <= last_processed:
+                        continue
+
+                author = r[author_idx].strip() if len(r) > author_idx else ""
+                if author and author not in detail_by_author:
+                    # First unresolved author -> stop; everything after must
+                    # wait until that author's detail is known so we preserve
+                    # source_row monotonicity in the output.
+                    break
+
+                # Lazy-open the output writer on first writable row.
+                if fo is None:
+                    fo = open(out_file, write_mode, encoding="utf-8", newline="", errors="ignore")
+                    writer = csv.writer(fo)
+                    if write_mode == "w":
+                        writer.writerow(
+                            list(header)
+                            + ["location", "location_prob", "contender_location", "contender_location_prob"]
+                        )
+
+                detail = detail_by_author.get(author, {"location": UNKNOWN_LABEL})
+                writer.writerow(
+                    list(r)
+                    + [
+                        detail.get("location", UNKNOWN_LABEL),
+                        _fmt_prob(detail.get("location_prob")),
+                        detail.get("contender_location", "") or "",
+                        _fmt_prob(detail.get("contender_location_prob")),
+                    ]
+                )
+                rows_written += 1
+                if row_src is not None and row_src > new_last:
+                    new_last = row_src
+        finally:
+            if fo is not None:
+                fo.close()
+    finally:
+        fi.close()
+
+    return new_last, rows_written
+
+
 def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     curated_csv_path = str(curated_csv_path)
     stem = Path(curated_csv_path).stem
@@ -974,6 +1132,9 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         log_report(report_file_path, f"[warn] could not parse year-month from {curated_csv_path}; skipping")
         return (stem, 0, 0, 0)
     year, month_int = ym
+
+    # Resolve per-year-band scan knobs (CLI overrides win if set).
+    max_items_per_author, max_files_to_scan, max_radius = _resolve_scan_knobs_for_year(year)
 
     start = time.time()
 
@@ -1073,12 +1234,57 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         log_report(report_file_path, f"[warn] {stem}: no raw files in scan window; wrote UNKNOWN for {len(remaining_authors):,}. minutes={elapsed:.2f}")
         return (stem, remaining_row_count, n_total, len(remaining_authors))
 
+    # Identify the target month's raw .zst basename(s). These must ALWAYS be
+    # rescanned (cache never short-circuits them) because per-post dedup needs
+    # the scanner to read this run's curated_seen_ids alongside the raw posts,
+    # and the cached counts -- being group-agnostic -- don't carry that info.
+    target_month_str = f"{month_int:02d}"
+    target_month_files = find_raw_month_files(RAW_DIR, RAW_TYPE, year, target_month_str)
+    target_month_basenames = {os.path.basename(p) for p in target_month_files}
+
+    # Persistent scan-state cache lookup: subtract previously-scanned files
+    # from each author's per-spiral workload. Authors whose cached scanned_files
+    # already cover this spiral's basenames are "fully cached" -- no raw-zst
+    # scan at all this month, EXCEPT for the target month's file which must
+    # always be opened so we can run the dedup pass against the current
+    # curated_seen_ids.
+    remaining_authors_set = set(remaining_authors)
+    spiral_basenames = {os.path.basename(rf) for rf in raw_files}
+    scan_state_existing = cache_get_author_file_counts(CACHE_DB_PATH, remaining_authors_set)
+    cached_counts_by_author: Dict[str, Dict[str, int]] = {}
+    cached_seen_by_author: Dict[str, int] = {}
+    cached_scanned_by_author: Dict[str, set] = {}
+    per_file_targets: Dict[str, set] = {}
+    fully_cached_authors: set = set()
+    for author in remaining_authors_set:
+        state = scan_state_existing.get(author)
+        # The target month's files are always added to per_file_targets so
+        # they get rescanned for dedup; cache hits for those files are
+        # ignored. For other spiral files, normal cache-hit subtraction.
+        if state is not None:
+            scanned_files, counts, seen = state
+            cached_counts_by_author[author] = counts
+            cached_seen_by_author[author] = seen
+            cached_scanned_by_author[author] = scanned_files
+            new_files = (spiral_basenames - scanned_files) | target_month_basenames
+            if not new_files:
+                fully_cached_authors.add(author)
+                continue
+            for fb in new_files:
+                per_file_targets.setdefault(fb, set()).add(author)
+        else:
+            for fb in spiral_basenames:
+                per_file_targets.setdefault(fb, set()).add(author)
+    files_to_scan = [rf for rf in raw_files if os.path.basename(rf) in per_file_targets]
+
     log_report(
         report_file_path,
         f"[start] {stem}: authors={n_total:,} cached={n_cached:,} cache_skipped_bias={n_skipped_bias:,} "
-        f"need_raw={len(remaining_authors):,} raw_type={RAW_TYPE} scan_months={len(scan_months)} months_with_files={months_with_files} raw_files={len(raw_files)} "
+        f"need_raw={len(remaining_authors):,} scan_state_hits={len(scan_state_existing):,} fully_cached_for_raw={len(fully_cached_authors):,} "
+        f"raw_type={RAW_TYPE} scan_months={len(scan_months)} months_with_files={months_with_files} "
+        f"raw_files_in_spiral={len(raw_files)} raw_files_to_scan={len(files_to_scan)} "
         f"samples_per_author={max_items_per_author} batch_size={batch_size} max_files_to_scan={max_files_to_scan} max_radius={max_radius} "
-        f"local_seen_bias_threshold={LOCAL_SEEN_BIAS_THRESHOLD}",
+        f"local_seen_bias_threshold={LOCAL_SEEN_BIAS_THRESHOLD} flush_every_n_raw={FLUSH_EVERY_N_RAW}",
     )
 
     # Pass 2: seed curated features ONLY for the authors that still need
@@ -1086,43 +1292,237 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     # filtering). Drops local_counts entries for cache-hit authors entirely,
     # saving ~25-50% of the local_counts peak vs the old "seed for everyone
     # then filter" pattern.
-    remaining_authors_set = set(remaining_authors)
-    local_counts = _seed_features_for_authors(
+    # (remaining_authors_set already computed above for the scan-state lookup.)
+    # Also collects curated_seen_ids (Dict[author, set[post_id]]) so Pass 3 can
+    # subtract from raw scan any posts that already contributed via local_counts.
+    local_counts, curated_seen_ids = _seed_features_for_authors(
         curated_csv_path,
         idx_map,
         remaining_authors_set,
         word_vocab=word_vocab,
     )
 
+    # Initial incremental flush: write the longest curated prefix whose authors
+    # we already know from the cache (or are empty/[deleted]). Cuts down the
+    # downstream final-write workload and, on resume, lets crash-after-cache-hits
+    # tasks skip these rows immediately.
+    if detail_by_author:
+        new_last, rows_init = _flush_completed_prefix(
+            curated_csv_path, out_file, last_processed, idx_map, detail_by_author, write_mode
+        )
+        if rows_init > 0:
+            last_processed = new_last
+            write_mode = "a"
+            log_report(
+                report_file_path,
+                f"[stream-flush] {stem}: trigger=cache-init rows_written={rows_init:,} last_processed={last_processed}",
+            )
+
+    # Pass 3 (streaming): scan raw .zst files, and after every FLUSH_EVERY_N_RAW
+    # files completed, infer locations for newly-saturated authors and flush
+    # their rows. A crash during the multi-day raw scan now leaves a usable
+    # partial output that the next submission can resume from.
     raw_scan_start = time.time()
-    raw_counts, raw_seen = build_author_feature_map_from_raw_zst_with_seen(
-        raw_files=raw_files,
-        target_authors=remaining_authors_set,
+    raw_counts_state: Dict[str, Dict[str, int]] = {}
+    raw_seen_state: Dict[str, int] = {a: 0 for a in remaining_authors_set}
+    files_since_flush = 0
+    files_done = 0
+    inferred_authors: set = set()  # authors already moved into detail_by_author during streaming
+    to_cache_running: Dict[str, Dict[str, object]] = {}
+    n_cache_confident = 0
+    n_cache_skipped_lowconf = 0
+    n_cache_skipped_lowsamples = 0
+    n_stream_flushes = 0
+
+    def _infer_and_flush(saturated_chunk: List[str], trigger: str) -> Tuple[int, int]:
+        """Infer for a list of authors, cache the confident ones, flush rows.
+        Returns (rows_written, n_inferred). Mutates closure state."""
+        nonlocal last_processed, write_mode, n_cache_confident, n_cache_skipped_lowconf, n_cache_skipped_lowsamples, n_stream_flushes
+        if not saturated_chunk:
+            return 0, 0
+        n_inferred = 0
+        for i in range(0, len(saturated_chunk), batch_size):
+            chunk = saturated_chunk[i:i + batch_size]
+            chunk_counts: List[Dict[str, int]] = []
+            chunk_seen: List[int] = []
+            for a in chunk:
+                merged: Dict[str, int] = {}
+                lc = local_counts.get(a)
+                if lc:
+                    merged.update(lc)
+                # Fold cached per-author counts from prior months' scans into
+                # the inference input -- the persistent scan-state cache stores
+                # raw-zst feature contributions across spirals so we get the
+                # full historical context here even though this month only
+                # scanned the spiral-delta files.
+                cc = cached_counts_by_author.get(a)
+                if cc:
+                    for k, v in cc.items():
+                        merged[k] = merged.get(k, 0) + v
+                rc = raw_counts_state.get(a)
+                if rc:
+                    for k, v in rc.items():
+                        merged[k] = merged.get(k, 0) + v
+                # Subtract the target-month overlap so posts already counted
+                # via local_counts (curated) aren't counted again via raw.
+                ov = raw_overlap_counts_state.get(a)
+                if ov:
+                    for k, v in ov.items():
+                        new_val = merged.get(k, 0) - v
+                        if new_val > 0:
+                            merged[k] = new_val
+                        elif k in merged:
+                            del merged[k]
+                chunk_counts.append(merged)
+                chunk_seen.append(
+                    int(local_seen.get(a, 0))
+                    + int(cached_seen_by_author.get(a, 0))
+                    + int(raw_seen_state.get(a, 0))
+                    - int(raw_overlap_seen_state.get(a, 0))
+                )
+            batch_results = infer_locations_for_batch(chunk_counts, chunk_seen, bundle)
+            for author, detail in zip(chunk, batch_results):
+                detail_by_author[author] = detail
+                inferred_authors.add(author)
+                n_inferred += 1
+                seen = int(detail.get("seen_count") or 0)
+                if seen < MIN_SAMPLES_FOR_CACHE:
+                    n_cache_skipped_lowsamples += 1
+                    continue
+                if detail.get("location") == UNKNOWN_LABEL:
+                    n_cache_skipped_lowconf += 1
+                    continue
+                to_cache_running[author] = detail
+                n_cache_confident += 1
+        # Persist newly-confident-cached authors so future months benefit.
+        if to_cache_running:
+            cache_put_locations(CACHE_DB_PATH, to_cache_running)
+            cache_put_location_details(CACHE_DB_PATH, to_cache_running)
+            to_cache_running.clear()
+        # Stream the longest now-resolvable prefix to disk.
+        new_last, rows_w = _flush_completed_prefix(
+            curated_csv_path, out_file, last_processed, idx_map, detail_by_author, write_mode
+        )
+        if rows_w > 0:
+            last_processed = new_last
+            write_mode = "a"
+        n_stream_flushes += 1
+        log_report(
+            report_file_path,
+            f"[stream-flush] {stem}: trigger={trigger} inferred={n_inferred:,} rows_written={rows_w:,} "
+            f"last_processed={last_processed} files_done={files_done}/{len(files_to_scan)}",
+        )
+        return rows_w, n_inferred
+
+    # Drive the generator with files_to_scan + per_file_targets so we open
+    # only the spiral files that have at least one author needing them. The
+    # target month's file is always in per_file_targets so dedup can run; the
+    # cache stores undeduped counts so cross-group reuse works.
+    raw_counts_state: Dict[str, Dict[str, int]] = {}
+    raw_seen_state: Dict[str, int] = {a: 0 for a in remaining_authors_set}
+    raw_overlap_counts_state: Dict[str, Dict[str, int]] = {}
+    raw_overlap_seen_state: Dict[str, int] = {}
+    pending_file_cache_rows: List[Tuple[str, str, Dict[str, int], int]] = []
+    n_file_cache_rows_written = 0
+    for files_just_done, per_file_deltas, raw_counts_state, raw_seen_state, raw_overlap_counts_state, raw_overlap_seen_state, files_remaining in iter_author_feature_map_streaming(
+        raw_files=files_to_scan,
+        target_authors=per_file_targets if per_file_targets else remaining_authors_set,
         type_=RAW_TYPE,
         max_items_per_author=max_items_per_author,
         n_scan_workers=n_scan_workers,
         word_vocab=word_vocab,
-    )
+        curated_seen_ids=curated_seen_ids,
+        target_month_basenames=target_month_basenames,
+    ):
+        files_done += len(files_just_done)
+        files_since_flush += len(files_just_done)
+
+        # Persist per-(author, file) rows for everything just scanned. We
+        # cache the UNDEDUPED file_counts (the full raw view) so future
+        # cross-group runs can subtract their own group-specific overlap.
+        # Per-(author, file) rows include "scanned-but-empty" so the next
+        # overlapping-spiral month knows the file was already covered.
+        for basename, file_payload in per_file_deltas.items():
+            file_counts, file_seen, _file_overlap_counts, _file_overlap_seen = file_payload
+            for author, counts in file_counts.items():
+                pending_file_cache_rows.append((
+                    author,
+                    basename,
+                    counts,
+                    int(file_seen.get(author, 0)),
+                ))
+        if pending_file_cache_rows:
+            cache_put_author_file_counts(CACHE_DB_PATH, pending_file_cache_rows)
+            n_file_cache_rows_written += len(pending_file_cache_rows)
+            pending_file_cache_rows.clear()
+
+        if files_since_flush < FLUSH_EVERY_N_RAW and files_remaining > 0:
+            continue
+
+        # Pick saturated authors not yet inferred. "Saturated" includes both
+        # this-month newly-saturated AND fully_cached_authors whose cached
+        # seen already exceeds the cap. Effective seen = cached + this-month.
+        saturated = sorted(
+            a for a in remaining_authors_set
+            if a not in inferred_authors
+            and (
+                int(cached_seen_by_author.get(a, 0)) + int(raw_seen_state.get(a, 0))
+                >= max_items_per_author
+            )
+        )
+        if saturated:
+            _infer_and_flush(saturated, trigger=f"saturated@{files_done}files")
+        files_since_flush = 0
+
     log_report(
         report_file_path,
-        f"[scan] {stem}: collected_raw_for={len(raw_counts):,} authors in {(time.time() - raw_scan_start)/60:.2f} minutes",
+        f"[scan] {stem}: collected_raw_for={len(raw_counts_state):,} authors in {(time.time() - raw_scan_start)/60:.2f} minutes "
+        f"file_cache_rows_written={n_file_cache_rows_written:,}",
     )
 
-    author_to_counts, author_seen = _merge_feature_maps(local_counts, local_seen, raw_counts, raw_seen, remaining_authors)
+    # Final inference for any remaining_authors not yet processed (the
+    # non-saturated tail, whose seen_count never reached max_items_per_author).
+    # The merge here folds local_counts (this-month curated seed) + raw_counts_state
+    # (this-month raw-zst scan delta) + cached_counts_by_author (prior-month scans
+    # from the persistent scan-state cache), then SUBTRACTS the per-post
+    # target-month overlap so curated and raw don't double-count the same post.
+    author_to_counts, author_seen = _merge_feature_maps(local_counts, local_seen, raw_counts_state, raw_seen_state, remaining_authors)
+    for author, ccnt in cached_counts_by_author.items():
+        if author not in author_to_counts:
+            author_to_counts[author] = {}
+        dst = author_to_counts[author]
+        for k, v in ccnt.items():
+            dst[k] = dst.get(k, 0) + int(v)
+    for author in remaining_authors:
+        author_seen[author] = int(author_seen.get(author, 0)) + int(cached_seen_by_author.get(author, 0))
+    # Dedup: subtract the target-month curated/raw overlap from each author's
+    # combined counts and seen. Net effect: each post counted exactly once
+    # across (curated, raw) sources for the target month.
+    for author, ov in raw_overlap_counts_state.items():
+        if not ov:
+            continue
+        dst = author_to_counts.get(author)
+        if dst is None:
+            continue
+        for k, v in ov.items():
+            new_val = dst.get(k, 0) - int(v)
+            if new_val > 0:
+                dst[k] = new_val
+            elif k in dst:
+                del dst[k]
+    for author, s in raw_overlap_seen_state.items():
+        if s and author in author_seen:
+            author_seen[author] = max(0, int(author_seen[author]) - int(s))
 
-    to_cache_details: Dict[str, Dict[str, object]] = {}
-    n_cache_confident = 0
-    n_cache_skipped_lowconf = 0
-    n_cache_skipped_lowsamples = 0
-
-    for i in range(0, len(remaining_authors), batch_size):
-        chunk = remaining_authors[i:i + batch_size]
+    leftover_authors = [a for a in remaining_authors if a not in inferred_authors]
+    for i in range(0, len(leftover_authors), batch_size):
+        chunk = leftover_authors[i:i + batch_size]
         batch_counts = [author_to_counts.get(a, {}) for a in chunk]
         batch_seen = [int(author_seen.get(a, 0)) for a in chunk]
         batch_results = infer_locations_for_batch(batch_counts, batch_seen, bundle)
-
         for author, detail in zip(chunk, batch_results):
             detail_by_author[author] = detail
+            inferred_authors.add(author)
             seen = int(detail.get("seen_count") or 0)
             if seen < MIN_SAMPLES_FOR_CACHE:
                 n_cache_skipped_lowsamples += 1
@@ -1130,24 +1530,33 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
             if detail.get("location") == UNKNOWN_LABEL:
                 n_cache_skipped_lowconf += 1
                 continue
-            to_cache_details[author] = detail
+            to_cache_running[author] = detail
             n_cache_confident += 1
 
-    if to_cache_details:
-        cache_put_locations(CACHE_DB_PATH, to_cache_details)
-        cache_put_location_details(CACHE_DB_PATH, to_cache_details)
+    if to_cache_running:
+        cache_put_locations(CACHE_DB_PATH, to_cache_running)
+        cache_put_location_details(CACHE_DB_PATH, to_cache_running)
+        to_cache_running.clear()
 
+    # Per-(author, file) scan-state cache rows were already persisted
+    # incrementally inside the streaming loop above (each yield's
+    # per_file_deltas were INSERT OR IGNOREd as soon as they arrived).
+    # Nothing left to persist here.
+
+    n_dedup_authors = sum(1 for v in raw_overlap_seen_state.values() if v > 0)
+    n_dedup_items = sum(int(v) for v in raw_overlap_seen_state.values())
     log_report(
         report_file_path,
         f"[cache] {stem}: newly_labeled={len(remaining_authors):,} cached_confident={n_cache_confident:,} "
         f"skipped_lowconf_or_unknown={n_cache_skipped_lowconf:,} skipped_lowsamples={n_cache_skipped_lowsamples:,} "
+        f"stream_flushes={n_stream_flushes} file_cache_rows_written={n_file_cache_rows_written:,} "
+        f"dedup_authors={n_dedup_authors:,} dedup_items={n_dedup_items:,} "
         f"top_conf>={TOP_CONF_THRESHOLD} reg_margin>={REG_CONF_MARGIN} state_margin>={STA_CONF_MARGIN} min_samples_cache={MIN_SAMPLES_FOR_CACHE}",
     )
 
-    # Pass 3: stream the curated input row by row to the output file,
-    # appending the four location columns from detail_by_author. Never
-    # holds rows in memory, so the input month's row set (5-8 GB for big
-    # months) never becomes a memory term.
+    # Final write: anything past last_processed gets written here. By this point
+    # every author is in detail_by_author, so _stream_write_output will resolve
+    # every row.
     _stream_write_output(curated_csv_path, out_file, last_processed, idx_map, detail_by_author, write_mode=write_mode)
 
     elapsed = (time.time() - start) / 60

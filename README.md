@@ -86,9 +86,7 @@ This example command will use the appropriate keyword lists from this repository
 
 #### Resumable Runs and the `source_row` Column
 
-Every per-month CSV produced by ```filter_keywords``` carries a `source_row` column whose value is the 1-indexed line number of the post inside the original ```.zst``` file. Every later resource (```filter_language```, ```filter_relevance```, ```filter_keywords_adv```, all ```label_*```, and ```organize_anonymize```) propagates `source_row` unchanged through to its own output and uses it to resume an interrupted run by skipping rows whose `source_row` value has already been written. ```organize_types```, which merges two time-sorted streams, instead writes to a `<output>.csv.tmp` file and atomically renames on success, so a crashed run is detected and re-done from scratch on the next invocation.
-
-If you slot a custom resource into the pipeline, preserve the `source_row` column in your output to keep downstream resume working. Older outputs that predate this column continue to work — when a resource's input lacks `source_row`, it falls back to generating one from the input's row index.
+Every per-month CSV produced by a resource propagates or generates a `source_row` column. If a run fails, any future runs will skip the already written rows and resume the work of the previous invocation.
 
 ### Default Resource Use Order
 
@@ -102,7 +100,7 @@ The scripts may be used without any changes to recreate the ISAAC corpus. To do 
 6. _```label_sentiment```_: Generates a range of sentiment labels for a post based on [Stanza](https://stanfordnlp.github.io/stanza/sentiment.html), [TextBlob](https://textblob.readthedocs.io/en/dev/quickstart.html) and [Vader](https://github.com/cjhutto/vaderSentiment) models. The combination of multiple models supports reliable inference.
 7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. 
 8. _```label_emotion```_: Generates a range of emotion labels for a post based on the neural network models found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
-9. _```label_location```_: Estimates a submission/comment author's home location down to the state-level for US users and to global region for non-US users based on Reddit posting history. This is the slowest resource, whose behavior can be managed using unique command line arguments. Defaults are stringent through 2019 and relaxed for 2020–2023 (where raw activity per month is several times higher) — CLI flags can override. Expect ~5-8 GB peak RAM per task and a 5-15 GB persistent scan-progress cache on disk. See [Label Location Internals](location_internals.md) for the cache, concurrency, dedup, and resume mechanics.  
+9. _```label_location```_: Estimates a submission/comment author's home location down to the state-level for US users and to global region for non-US users based on Reddit posting history. This is the slowest resource, whose behavior can be managed using unique command line arguments. Defaults are stringent through 2019 and relaxed for 2020–2023 (where raw activity per month is several times higher) — CLI flags can override. Expect ~5-8 GB peak RAM per task and a 1-5 GB persistent scan-progress cache on disk. See [Label Location Internals](label_location_internals.md) for details on the algorithm and adjustable knobs.  
 10. ```organize_types```: Combines corresponding Reddit 'comment' and 'submissions' datasets into a single timestamp-organized dataset.
 11. ```organize_anonymize```: Replaces author usernames with persistent random IDs to safeguard Reddit users' privacy. 
 
@@ -114,7 +112,7 @@ All resources support batch processing on a supercomputing cluster by adding the
 
 _filter_ resources use CPU-based parallelization for extremely fast processing. 
 
-_label_ resources, with the exception of the CPU-only ```label_location```, become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). These resources print out the "device" as part of their logging, which can be used to confirm the use of "cuda".
+_label_ resources, with the exception of the CPU-only ```label_location```, become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). These resources print out the "device" as well as GPU RAM usage as part of their logging, which can be used to confirm the appropriate use of "cuda".
 
 ## Adaptations
 

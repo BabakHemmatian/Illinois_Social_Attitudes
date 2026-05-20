@@ -1424,7 +1424,17 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     raw_overlap_seen_state: Dict[str, int] = {}
     pending_file_cache_rows: List[Tuple[str, str, Dict[str, int], int]] = []
     n_file_cache_rows_written = 0
-    for files_just_done, per_file_deltas, raw_counts_state, raw_seen_state, raw_overlap_counts_state, raw_overlap_seen_state, files_remaining in iter_author_feature_map_streaming(
+    # Per-author remaining quota: total sampling cap for this run is
+    # max_items_per_author MINUS whatever the persistent cache already
+    # contributed for this author. Restores the original semantics that the
+    # location LR was trained on (one author -> at most max_items_per_author
+    # samples across the entire scan, cumulative across spiral files and
+    # cumulative across all prior runs).
+    remaining_quota_per_author = {
+        a: max(0, max_items_per_author - int(cached_seen_by_author.get(a, 0)))
+        for a in remaining_authors_set
+    }
+    for yld in iter_author_feature_map_streaming(
         raw_files=files_to_scan,
         target_authors=per_file_targets if per_file_targets else remaining_authors_set,
         type_=RAW_TYPE,
@@ -1433,23 +1443,35 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         word_vocab=word_vocab,
         curated_seen_ids=curated_seen_ids,
         target_month_basenames=target_month_basenames,
+        remaining_quota_per_author=remaining_quota_per_author,
     ):
-        files_done += len(files_just_done)
-        files_since_flush += len(files_just_done)
+        per_file_deltas = yld.per_file_deltas
+        raw_counts_state = yld.cumulative_counts
+        raw_seen_state = yld.cumulative_seen
+        raw_overlap_counts_state = yld.cumulative_overlap_counts
+        raw_overlap_seen_state = yld.cumulative_overlap_seen
+        files_remaining = yld.files_remaining
+        files_done += len(yld.files_just_done)
+        files_since_flush += len(yld.files_just_done)
 
-        # Persist per-(author, file) rows for everything just scanned. We
-        # cache the UNDEDUPED file_counts (the full raw view) so future
-        # cross-group runs can subtract their own group-specific overlap.
-        # Per-(author, file) rows include "scanned-but-empty" so the next
-        # overlapping-spiral month knows the file was already covered.
+        # Persist per-(author, file) rows for everything actually found.
+        # "scanned-but-empty" rows (seen=0) are deliberately NOT cached:
+        # next month's overlapping spiral may re-open files where this
+        # author wasn't present, but the file gets opened anyway for any
+        # other target author needing it -- the marginal cost is a fast
+        # per-line author-set lookup. Skipping seen=0 rows reduces the
+        # cache to ~3x smaller without changing scan correctness.
         for basename, file_payload in per_file_deltas.items():
             file_counts, file_seen, _file_overlap_counts, _file_overlap_seen = file_payload
             for author, counts in file_counts.items():
+                seen = int(file_seen.get(author, 0))
+                if seen <= 0:
+                    continue
                 pending_file_cache_rows.append((
                     author,
                     basename,
                     counts,
-                    int(file_seen.get(author, 0)),
+                    seen,
                 ))
         if pending_file_cache_rows:
             cache_put_author_file_counts(CACHE_DB_PATH, pending_file_cache_rows)

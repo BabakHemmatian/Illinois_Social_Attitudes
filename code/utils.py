@@ -987,7 +987,15 @@ def init_location_cache(db_path: str) -> None:
     conn = sqlite3.connect(db_path, timeout=60)
     try:
         cur = conn.cursor()
-        cur.execute("PRAGMA journal_mode=WAL;")
+        # DELETE journal mode (not WAL): the cache DB lives on NFS, and WAL's
+        # shared-memory coordination file (-shm) requires real mmap-based
+        # shared memory that NFS does not provide. Under concurrent writes
+        # from multiple array tasks across nodes, WAL silently corrupts the
+        # DB. DELETE mode uses POSIX file locks, which NFS implements
+        # correctly (just more slowly). Combined with batching writes to
+        # one per label_location_month, the contention is low enough that
+        # the slower lock path is irrelevant.
+        cur.execute("PRAGMA journal_mode=DELETE;")
         cur.execute("PRAGMA synchronous=NORMAL;")
         cur.execute(
             """
@@ -1130,7 +1138,15 @@ def init_author_file_counts_cache(db_path: str) -> None:
     conn = sqlite3.connect(db_path, timeout=60)
     try:
         cur = conn.cursor()
-        cur.execute("PRAGMA journal_mode=WAL;")
+        # DELETE journal mode (not WAL): the cache DB lives on NFS, and WAL's
+        # shared-memory coordination file (-shm) requires real mmap-based
+        # shared memory that NFS does not provide. Under concurrent writes
+        # from multiple array tasks across nodes, WAL silently corrupts the
+        # DB. DELETE mode uses POSIX file locks, which NFS implements
+        # correctly (just more slowly). Combined with batching writes to
+        # one per label_location_month, the contention is low enough that
+        # the slower lock path is irrelevant.
+        cur.execute("PRAGMA journal_mode=DELETE;")
         cur.execute("PRAGMA synchronous=NORMAL;")
         cur.execute(
             """

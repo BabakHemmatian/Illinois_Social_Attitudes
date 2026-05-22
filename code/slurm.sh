@@ -100,6 +100,14 @@ if [[ -n "${target:-}" ]]; then
   ARGS+=( "-S" "${target}" )
 fi
 
+if [[ -n "${num_annotators:-}" ]]; then
+  ARGS+=( "-n" "${num_annotators}" )
+fi
+
+if [[ -n "${perc_overlap:-}" ]]; then
+  ARGS+=( "-p" "${perc_overlap}" )
+fi
+
 # Forward optional input/output overrides
 if [[ -n "${input:-}" ]]; then
   ARGS+=( "-i" "${input}" )

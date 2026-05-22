@@ -8,19 +8,15 @@ from sklearn.metrics import cohen_kappa_score
 from scipy.stats import pearsonr
 import csv
 csv.field_size_limit(2**31 - 1)  # Increase the field size limit to handle larger fields
+import itertools
 import os
-
-### Agreement Metric Hyperparameters
-
-num_annot = 2  # number of annotators
-# NOTE: This script currently only supports two annotators and the canonical
-# double-rated samples under data/data_relevance_ratings/<type>/.
 
 ### Argument Handling
 
 args = get_args()
 group = args.group
 type_ = args.type
+num_annot = args.num_annotators  # CLI default = 2
 
 ### Path Handling
 
@@ -36,6 +32,38 @@ else:
 # as relevant; "0", "x", "-1", blanks, etc. all become 0.
 def binarize(cell: str) -> int:
     return 1 if str(cell).strip() == "1" else 0
+
+
+### Fleiss' kappa for N raters with binary labels.
+# Generalises Cohen's kappa to >2 raters. Reduces to Cohen's kappa when N=2 and the two
+# rater label vectors are aligned 1:1 on the same items.
+def fleiss_kappa_binary(rating_vectors):
+    """`rating_vectors` is a list of N parallel 0/1 lists (one per rater), all the same length."""
+    n_raters = len(rating_vectors)
+    n_items = len(rating_vectors[0])
+    if any(len(v) != n_items for v in rating_vectors):
+        raise ValueError("All rater vectors must have the same length")
+    if n_raters < 2 or n_items == 0:
+        return float("nan")
+
+    # For each item, count how many raters assigned each category (0 and 1).
+    # P_i = (sum_k n_ik^2 - n) / (n * (n - 1)) is the per-item agreement.
+    # Pbar = mean of P_i across items; Pe = sum_k (p_k)^2 where p_k is overall proportion.
+    p_bar_sum = 0.0
+    cat_totals = [0, 0]  # raters assigning 0, raters assigning 1, across all items
+    for i in range(n_items):
+        n_i0 = sum(1 for v in rating_vectors if v[i] == 0)
+        n_i1 = n_raters - n_i0
+        p_bar_sum += (n_i0 * n_i0 + n_i1 * n_i1 - n_raters) / (n_raters * (n_raters - 1))
+        cat_totals[0] += n_i0
+        cat_totals[1] += n_i1
+    P_bar = p_bar_sum / n_items
+    total_ratings = n_raters * n_items
+    P_e = (cat_totals[0] / total_ratings) ** 2 + (cat_totals[1] / total_ratings) ** 2
+    if P_e == 1.0:
+        return 1.0
+    return (P_bar - P_e) / (1.0 - P_e)
+
 
 ### Main Evaluation
 
@@ -67,27 +95,49 @@ for rater in range(num_annot):
             # wins over "0".
             ratings[rater][rid] = max(ratings[rater].get(rid, 0), v)
 
-# Restrict to documents both raters rated; warn about any asymmetric IDs
-common_ids = sorted(set(ratings[0].keys()) & set(ratings[1].keys()))
-only_in_0 = set(ratings[0].keys()) - set(ratings[1].keys())
-only_in_1 = set(ratings[1].keys()) - set(ratings[0].keys())
-for rid in only_in_0:
-    print(f"Warning! Entry with ID {rid} only rated by annotator 0")
-for rid in only_in_1:
-    print(f"Warning! Entry with ID {rid} only rated by annotator 1")
+# Restrict to documents EVERY rater rated. With filter_sample --perc-overlap < 1.0,
+# the "every-rater" set is exactly the shared subset that all annotators received.
+id_sets = [set(ratings[r].keys()) for r in range(num_annot)]
+common_ids = sorted(set.intersection(*id_sets)) if id_sets else []
 
-vector_0 = [ratings[0][rid] for rid in common_ids]
-vector_1 = [ratings[1][rid] for rid in common_ids]
+# Surface any id that one rater has but others don't.
+all_ids = set().union(*id_sets) if id_sets else set()
+for rid in sorted(all_ids - set(common_ids)):
+    missing = [r for r in range(num_annot) if rid not in ratings[r]]
+    have = [r for r in range(num_annot) if rid in ratings[r]]
+    print(
+        f"Warning! ID {rid} rated by annotator(s) {have} but missing from annotator(s) {missing}"
+    )
 
+# Build per-rater 0/1 vectors over common_ids
+vectors = [[ratings[r][rid] for rid in common_ids] for r in range(num_annot)]
 n = len(common_ids)
-agree = sum(1 for a, b in zip(vector_0, vector_1) if a == b) / n if n else float("nan")
-kappa = cohen_kappa_score(vector_0, vector_1)
-pear = pearsonr(vector_0, vector_1)
 
 print(f"Group: {group} ({type_})")
-print(f"N (both raters): {n}")
-print(f"Rater 0 relevant rate: {sum(vector_0)/n:.3f}")
-print(f"Rater 1 relevant rate: {sum(vector_1)/n:.3f}")
-print(f"Raw agreement: {agree:.3f}")
-print(f"Cohen's Kappa for interrater agreement: {kappa:.4f}")
-print(f"Pearson r: {pear.statistic:.4f}  (p={pear.pvalue:.2e})")
+print(f"Annotators: {num_annot}")
+print(f"N (rated by all annotators): {n}")
+if n == 0:
+    print("No documents rated by every annotator; nothing to score.")
+    raise SystemExit(0)
+
+for r, v in enumerate(vectors):
+    print(f"  Rater {r} relevant rate: {sum(v)/n:.3f}")
+
+# Raw all-agree rate: fraction of items where every rater gave the same label.
+all_agree = sum(1 for i in range(n) if len(set(v[i] for v in vectors)) == 1) / n
+print(f"Raw all-rater agreement: {all_agree:.3f}")
+
+# Multi-rater Fleiss' kappa (collapses to Cohen's kappa when num_annot == 2 + binary)
+fleiss = fleiss_kappa_binary(vectors)
+print(f"Fleiss' kappa ({num_annot} raters): {fleiss:.4f}")
+
+# Pairwise Cohen's kappa and Pearson r for each (i, j) pair, for finer-grained diagnostics.
+if num_annot >= 2:
+    print("Pairwise metrics:")
+    for i, j in itertools.combinations(range(num_annot), 2):
+        kappa_ij = cohen_kappa_score(vectors[i], vectors[j])
+        pear_ij = pearsonr(vectors[i], vectors[j])
+        print(
+            f"  raters {i} vs {j}:  Cohen kappa = {kappa_ij:+.4f}  "
+            f"Pearson r = {pear_ij.statistic:+.4f} (p = {pear_ij.pvalue:.2e})"
+        )

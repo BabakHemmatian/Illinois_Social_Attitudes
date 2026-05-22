@@ -128,7 +128,21 @@ def get_args(argv=None):
         '-c', '--sample',
         type=int,
         dest='sample',
-        help='the number of documents per annotator that filter_sample should aim for. Note that because of stratification, the final count might be substantially different.'
+        help='Per-annotator target document count for filter_sample. The realized total matches this exactly when data isn\'t sparse; shortfalls in a year only narrow the gap by that year\'s contribution.'
+    )
+    argparser.add_argument(
+        '-n', '--num-annotators',
+        type=int,
+        dest='num_annotators',
+        default=2,
+        help='Number of annotators that filter_sample should produce sample files for. Default: 2. Also used by metrics_interrater to know how many rater files to load.'
+    )
+    argparser.add_argument(
+        '-p', '--perc-overlap',
+        type=float,
+        dest='perc_overlap',
+        default=1.0,
+        help='Fraction of each annotator\'s samples that should be shared (same docs, same random_id) with every other annotator. 1.0 (default) = every annotator gets the same set in a different shuffle; 0.0 = annotators get fully disjoint sets; 0.1 = 10%% of each annotator\'s set is shared, 90%% is annotator-specific. Only applies to filter_sample.'
     )
     argparser.add_argument(
         '-S', '--sample-target',
@@ -265,6 +279,11 @@ def get_args(argv=None):
     if args.files_per_job <= 0:
         argparser.error("--files-per-job must be a positive integer")
 
+    if args.num_annotators is not None and args.num_annotators < 1:
+        argparser.error("--num-annotators must be at least 1")
+    if args.perc_overlap is not None and not (0.0 <= args.perc_overlap <= 1.0):
+        argparser.error("--perc-overlap must be between 0.0 and 1.0 inclusive")
+
     return args
 
 
@@ -321,6 +340,10 @@ if __name__ == "__main__":
             slurm_vars.append(f"sample={args.sample}")
         if args.target is not None:
             slurm_vars.append(f"target={args.target}")
+        if args.num_annotators is not None:
+            slurm_vars.append(f"num_annotators={args.num_annotators}")
+        if args.perc_overlap is not None:
+            slurm_vars.append(f"perc_overlap={args.perc_overlap}")
 
         # Location-labeling sampling controls (forwarded to label_location)
         if getattr(args, "maxitems", None) is not None:
@@ -398,6 +421,10 @@ if __name__ == "__main__":
             cmd_parts.extend(["-c", str(args.sample)])
         if args.target is not None:
             cmd_parts.extend(["-S", args.target])
+        if args.num_annotators is not None:
+            cmd_parts.extend(["-n", str(args.num_annotators)])
+        if args.perc_overlap is not None:
+            cmd_parts.extend(["-p", str(args.perc_overlap)])
         if getattr(args, "maxitems", None) is not None:
             cmd_parts.extend(["--maxitems", str(args.maxitems)])
         if getattr(args, "maxfiles", None) is not None:

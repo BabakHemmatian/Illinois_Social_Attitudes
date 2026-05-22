@@ -181,7 +181,7 @@ def filter_language_file(file):
             elapsed_minutes = (time.time() - start_time) / 60
             log_report(
                 report_file_path,
-                f"Finished {Path(file).name} for the {group} social group in {elapsed_minutes:.2f} minutes. "
+                f"Finished filtering {Path(file).name} for relevance to the {group} social group based on language in {elapsed_minutes:.2f} minutes. "
                 f"# of evaluations: {filtered_counter}, # of English posts: {passed_counter}, # of errors: {error_counter}"
             )
             # Return counters for overall statistics

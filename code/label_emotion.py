@@ -272,7 +272,7 @@ def label_emotion_file(file):
 
     # generate processing report
     elapsed_minutes = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Finished {Path(file).name} for the {group} social group in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
+    log_report(report_file_path, f"Finished emotion labeling {Path(file).name} for the {group} social group in {elapsed_minutes:.2f} minutes. Processed rows: {total_lines}")
     log_gpu_memory()
 
     # Create missing_records.csv only if there were missing lines

@@ -229,7 +229,7 @@ def filter_keyword_file(file):
 
 # wrapper for filter_keyword_file
 def filter_keyword_month(year, month, files):
-    log_report(report_file_path, f"Started filtering files for {year}-{month} for the {group} social group")
+    log_report(report_file_path, f"Started filtering files for {year}-{month} for relevance to the {group} social group based on keywords.")
     start_time = time.time()
     total_lines = 0
     matched_lines = 0
@@ -243,7 +243,7 @@ def filter_keyword_month(year, month, files):
             log_report(report_file_path, f"Error filtering by keywords in file {Path(file).name}: {e}")
 
     elapsed_time = (time.time() - start_time) / 60
-    log_report(report_file_path, f"Completed filtering {year}-{month} for the {group} social group in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
+    log_report(report_file_path, f"Completed keyword filtering {year}-{month} for the {group} social group in {elapsed_time:.2f} minutes. Total lines: {total_lines}, matched lines: {matched_lines}")
     return total_lines, matched_lines
 
 # Process files in parallel while checking for missing month files.

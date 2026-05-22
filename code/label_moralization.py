@@ -249,7 +249,7 @@ def label_moralization_file(file):
     elapsed_minutes = (time.time() - start_time) / 60
     log_report(
         report_file_path,
-        f"Finished {Path(file).name} for the {group} social group in {elapsed_minutes:.2f} minutes. "
+        f"Finished moralization labeling {Path(file).name} for the {group} social group in {elapsed_minutes:.2f} minutes. "
         f"Processed rows: {total_lines}"
     )
     log_gpu_memory()

@@ -1134,6 +1134,7 @@ def _flush_completed_prefix(
 def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     curated_csv_path = str(curated_csv_path)
     stem = Path(curated_csv_path).stem
+    log_report(report_file_path, f"Started labeling user location for {stem} for the {group} social group")
 
     ym = _extract_year_month_from_name(curated_csv_path)
     if ym is None:
@@ -1185,7 +1186,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     n_total = len(local_seen)
 
     if remaining_row_count == 0:
-        log_report(report_file_path, f"[skip-complete] {stem}: all rows already processed (last_source_row={last_processed})")
+        log_report(report_file_path, f"[skip-complete] user location labeling for {stem}: all rows already processed (last_source_row={last_processed})")
         return (stem, rows_total, n_total, 0)
 
     if not target_row_authors:
@@ -1194,7 +1195,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         # match input.
         _stream_write_output(curated_csv_path, out_file, last_processed, idx_map, {}, write_mode=write_mode)
         elapsed = (time.time() - start) / 60
-        log_report(report_file_path, f"[done-no-authors] {stem}: rows={remaining_row_count:,} minutes={elapsed:.2f}")
+        log_report(report_file_path, f"[done-no-authors] user location labeling for {stem}: rows={remaining_row_count:,} minutes={elapsed:.2f}")
         return (stem, remaining_row_count, n_total, 0)
 
     # Cache lookups are restricted to authors that still need a row written.
@@ -1222,7 +1223,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     if not remaining_authors:
         _stream_write_output(curated_csv_path, out_file, last_processed, idx_map, detail_by_author, write_mode=write_mode)
         elapsed = (time.time() - start) / 60
-        log_report(report_file_path, f"[done-cache] {stem}: rows={remaining_row_count:,} authors={len(target_row_authors):,} cached={n_cached:,} minutes={elapsed:.2f}")
+        log_report(report_file_path, f"[done-cache] user location labeling for {stem}: rows={remaining_row_count:,} authors={len(target_row_authors):,} cached={n_cached:,} minutes={elapsed:.2f}")
         return (stem, remaining_row_count, len(target_row_authors), 0)
 
     scan_months = month_spiral(year, month_int, max_files_to_scan=max_files_to_scan, max_radius=max_radius)
@@ -1239,7 +1240,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
             detail_by_author[author] = unknown_result(seen_count=local_seen.get(author, 0), reason="no_raw_files")
         _stream_write_output(curated_csv_path, out_file, last_processed, idx_map, detail_by_author, write_mode=write_mode)
         elapsed = (time.time() - start) / 60
-        log_report(report_file_path, f"[warn] {stem}: no raw files in scan window; wrote UNKNOWN for {len(remaining_authors):,}. minutes={elapsed:.2f}")
+        log_report(report_file_path, f"[warn] user location labeling for {stem}: no raw files in scan window; wrote UNKNOWN for {len(remaining_authors):,}. minutes={elapsed:.2f}")
         return (stem, remaining_row_count, n_total, len(remaining_authors))
 
     # Identify the target month's raw .zst basename(s). These must ALWAYS be
@@ -1614,7 +1615,7 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     covered = sum(1 for a in remaining_authors if author_seen.get(a, 0) > 0)
     log_report(
         report_file_path,
-        f"[done] {stem}: rows={remaining_row_count:,} authors={n_total:,} cached={n_cached:,} scanned_raw={len(remaining_authors):,} "
+        f"[done] user location labeling for {stem}: rows={remaining_row_count:,} authors={n_total:,} cached={n_cached:,} scanned_raw={len(remaining_authors):,} "
         f"covered={covered:,} minutes={elapsed:.2f}",
     )
     return (stem, remaining_row_count, n_total, len(remaining_authors))

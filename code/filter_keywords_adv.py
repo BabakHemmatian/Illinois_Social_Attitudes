@@ -141,7 +141,7 @@ def filter_keyword_adv_file(file_name):
     out_stem = input_path.with_suffix("").name
     output_csv_file = output_path / f"{out_stem}.csv"
 
-    log_report(report_file_path, f"[{ENGINE}] Started filtering {input_path.name} for the {group} social group")
+    log_report(report_file_path, f"[{ENGINE}] Started advanced regex filtering {input_path.name} for relevance to the {group} social group")
     total_lines = 0
     matched_lines = 0
     start_time = time.time()
@@ -238,7 +238,7 @@ def filter_keyword_adv_file(file_name):
     elapsed_time = (time.time() - start_time) / 60
     log_report(
         report_file_path,
-        f"[{ENGINE}] Filtered {input_path.name} for the {group} social group in {elapsed_time:.2f} minutes. "
+        f"[{ENGINE}] Filtered {input_path.name} for relevance to the {group} social group based on advanced regex in {elapsed_time:.2f} minutes. "
         f"Total lines: {total_lines}, matched lines: {matched_lines}"
     )
     return total_lines, matched_lines

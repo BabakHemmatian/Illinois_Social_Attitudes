@@ -1,3 +1,5 @@
+# NOTE: This script currently only applies to binary relevance ratings. If the ratings are on a different scale, or if there are multiple non-binary categories, this script would need to be updated. 
+
 ### Imports
 
 # import functions and objects
@@ -28,17 +30,18 @@ else:
     ratings_path = args.input
 
 ### Label binarization
-# Match the convention used elsewhere in the codebase: only the literal "1" counts
-# as relevant; "0", "x", "-1", blanks, etc. all become 0.
+
+# NOTE: The current assumption is that the relevant category is indicated by "1" and all other values (including empty strings) are treated as non-relevant (0).
+
 def binarize(cell: str) -> int:
     return 1 if str(cell).strip() == "1" else 0
-
 
 ### Fleiss' kappa for N raters with binary labels.
 # Generalises Cohen's kappa to >2 raters. Reduces to Cohen's kappa when N=2 and the two
 # rater label vectors are aligned 1:1 on the same items.
+# "`rating_vectors` is a list of N parallel 0/1 lists (one per rater), all the same length."
 def fleiss_kappa_binary(rating_vectors):
-    """`rating_vectors` is a list of N parallel 0/1 lists (one per rater), all the same length."""
+    
     n_raters = len(rating_vectors)
     n_items = len(rating_vectors[0])
     if any(len(v) != n_items for v in rating_vectors):

@@ -11,7 +11,7 @@ confection==0.1.5
 cymem==2.0.11
 emoji==2.14.1
 en_core_web_sm @ https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl#sha256=1932429db727d4bff3deed6b34cfc05df17794f4a52eeb26cf8928f7c1a0fb85
-fasttext-wheel==0.9.2
+fasttext-predict==0.9.2.4
 filelock==3.13.1
 fsspec==2024.6.1
 hf-xet==1.1.10

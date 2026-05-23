@@ -44,10 +44,10 @@ Hemmatian, B., Kurdi, B. (2025). The Illinois Social Attitudes Aggregate Corpus 
 ### BibTex Format
 ```
 **BibTex: **
-@misc{Hemmatian2025,
+@misc{Hemmatian2026,
   author       = {Hemmatian, Babak and Kurdi, Benedek},
   title        = {Illinois_Social_Attitudes},
-  year         = {2025},
+  year         = {2026},
   publisher    = {GitHub},
   journal      = {GitHub repository},
   howpublished = {\url{[https://github.com/yourusername/your-repository](https://github.com/BabakHemmatian/Illinois_Social_Attitudes)}},
@@ -60,37 +60,35 @@ Install [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) on 
 
 Download [this folder](https://drive.google.com/drive/folders/1TqxjRRMZ3LTGWRCMkK6_tnIo_Zg1vms1?usp=sharing) into the newly created ```Illinois_Social_Attitudes``` folder.
 
-The raw Reddit data that the ```filter_keywords``` resource requires can be found and downloaded [here](https://academictorrents.com/details/ba051999301b109eab37d16f027b3f49ade2de13). The relevant .zst files for a given timeframe are to be placed in ```data/data_reddit_raw/comments/``` or ```data/data_reddit_raw/submissions/``` depending on the type of Reddit post you running the command for. 
+The raw Reddit data that the ```filter_keywords``` resource requires can be found and downloaded [here](https://academictorrents.com/details/ba051999301b109eab37d16f027b3f49ade2de13). The relevant .zst files for a given timeframe are to be placed in ```data/data_reddit_raw/comments/``` or ```data/data_reddit_raw/submissions/``` depending on the type of Reddit post you are targeting with your command. 
 
 ### Virtual Environment Setup
 Follow the steps [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html) to install the desired version of Anaconda. 
 
-Once finished, navigate to ```Illinois_Social_attitudes``` on the command line and enter ```conda create --name ISAAC python=3.11 pip```. Answer 'y' to the question. When finished, run ```conda activate ISAAC```. Once the environment is activated, run the following command to install the necessary packages: ```pip install -r requirements.txt```. 
+Once finished, navigate to the ```Illinois_Social_attitudes``` folder in the command line and enter ```conda create --name ISAAC python=3.11 pip```. Answer 'y' to the question. When finished, run ```conda activate ISAAC```. Once the environment is activated, run the following command to install the necessary packages: ```pip install -r requirements.txt```. 
 
 ### Commands
 You can now use command line arguments to make use of the resources. Use ```python ./code/cli.py --help``` to receive more information about the available options. 
 
 **Example:**
 ```
-python ./code/cli.py --type comments --resource filter_keywords --group sexuality --years 2007-2009
+python ./code/cli.py --type comments --resource filter_keywords --group sexuality --years 2007-2009,2010
 ```
-This example command will use the appropriate keyword lists from this repository to identify comments in the complete Pushshift-format dataset that are potentially related to sexuality, and which come from 2007-2009. 
+This example command will use the appropriate keyword lists from this repository to identify comments in the complete Pushshift-format dataset that are potentially related to sexuality, and which come from 2007-2009 and 2010. Every per-month CSV produced by a resource propagates or generates a `source_row` column. If a run fails, _any future runs will skip the already written rows and resume the work of the previous invocation_.
 
-**NOTE:** ```filter_keywords``` should always be the first resource called as the only resource interfacing with raw reddit data. If you would like to apply the remaining resources to a dataset from sources other than the Reddit data dump indicated above, simply edit this resource as needed to properly read in the month-by-month input rows. The resulting ISAAC-compatible output can then be directly fed to the later resources.
+**NOTE:** ```filter_keywords``` should always be the first resource called as the only resource interfacing with raw reddit data. If you would like to apply the remaining resources to a dataset from sources other than the Reddit data dump indicated above, simply edit this resource as needed to properly read in the month-by-month input rows. The resulting ISAAC-compatible outputs can then be directly fed to the later resources.
 
 **NOTE:** _label_ resources require the batch size argument (```-batchsize [integer]``` or ```-b [integer]```). Set it based on your RAM and GPU RAM capacity. Values between 200 and 4096 were used based on the resource and system parameters while developing ISAAC. Parallelization and GPU acceleration are recommended for these more resource-intensive resources (see [CPU and GPU Acceleration](#cpu-and-gpu-acceleration)).
 
 #### Custom Resource Use Order
 
-```filter_keywords``` must be used first. ```organize``` resources need ```filtered``` or ```labeled``` outputs to work. Otherwise, the resources can be used in customized order by adding ```--input``` and ```--output``` path arguments to a command pointing to the desired input/output directories. If not provided, the paths default to the resource order indicated below.
+```filter_keywords``` must be used first. ```organize``` resources need ```filtered``` or ```labeled``` outputs to work. Otherwise, the resources can be used in customized order by adding ```--input``` and ```--output``` path arguments to a command pointing to the desired input/output directories. If not provided, the paths default to the [Default Resource Use Order](#default-resource-use-order).
 
-#### Resumable Runs and the `source_row` Column
-
-Every per-month CSV produced by a resource propagates or generates a `source_row` column. If a run fails, any future runs will skip the already written rows and resume the work of the previous invocation.
+**NOTE:** 
 
 ### Default Resource Use Order
 
-The scripts may be used without any changes to recreate the ISAAC corpus. To do so, call the resources without ```--input``` and ```--output``` path arguments in the following order for a given social group and year range:
+The scripts may be used without any changes to recreate the ISAAC corpus. To do so, call the resources without custom ```--input``` and ```--output``` path arguments in the following order for the desired social group and year range:
 
 1. ```filter_keywords```: Uses an extremely fast algorithm to parse trillions of Reddit posts for large sets of keywords that suggest potential relevance to ISAAC's key social distinctions. 
 2. ```filter_language```: Uses a pre-trained language detection model from FastText to filter out non-English posts. 
@@ -98,10 +96,10 @@ The scripts may be used without any changes to recreate the ISAAC corpus. To do 
 4. ```filter_keywords_adv```: Uses highly-optimized complex pattern matching to remove irrelevant content not filtered by steps (1) and (3). 
 5. _```label_moralization```_: Generates binary labels for whether a post's content is moralized using a custom neural network trained on [this](https://arxiv.org/pdf/2208.05545) dataset.
 6. _```label_sentiment```_: Generates a range of sentiment labels for a post based on [Stanza](https://stanfordnlp.github.io/stanza/sentiment.html), [TextBlob](https://textblob.readthedocs.io/en/dev/quickstart.html) and [Vader](https://github.com/cjhutto/vaderSentiment) models. The combination of multiple models supports reliable inference.
-7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. 
+7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. See the [variables list](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md) for more details.
 8. _```label_emotion```_: Generates a range of emotion labels for a post based on the neural network models found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
-9. _```label_location```_: Estimates a submission/comment author's home location down to the state-level for US users and to global region for non-US users based on Reddit posting history. This is the slowest resource, whose behavior can be managed using unique command line arguments. Defaults are stringent through 2019 and relaxed for 2020–2023 (where raw activity per month is several times higher) — CLI flags can override. Expect ~5-8 GB peak RAM per task and a 1-5 GB persistent scan-progress cache on disk. See [Label Location Internals](label_location_internals.md) for details on the algorithm and adjustable knobs.  
-10. ```organize_types```: Combines corresponding Reddit 'comment' and 'submissions' datasets into a single timestamp-organized dataset.
+9. _```label_location```_: Estimates a post author's home location down to the state-level for US users and to global region for non-US users based on Reddit posting history. This is the slowest resource with a unique set of command line arguments and environment variables. Defaults are stringent through 2019 and comparatively relaxed for 2020–2023 to support processing within a reasonable timeframe, but can be overriden. Expect ~5-8 GB peak RAM per task and a 1-5 GB persistent scan-progress cache on disk. See [Label Location Internals](label_location_internals.md) for details.  
+10. ```organize_types```: Combines one-to-one Reddit 'comment' and 'submissions' datasets into a unified timestamp-organized dataset.
 11. ```organize_anonymize```: Replaces author usernames with persistent random IDs to safeguard Reddit users' privacy. 
 
 ### Batch Processing Support

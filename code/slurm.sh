@@ -63,15 +63,24 @@ years = sys.argv[1]
 files_per_job = max(int(sys.argv[2]), 1)
 task_id = int(sys.argv[3])
 
-if "-" in years:
-    start_year, end_year = map(int, years.split("-", 1))
-else:
-    start_year = end_year = int(years)
+# Mirror utils.parse_range: accept comma-separated combinations of single
+# years and contiguous ranges (e.g. "2019", "2019-2023", "2007,2009,2011-2017"),
+# returning a sorted/deduplicated list. Keeping this in lock-step with
+# parse_range is what guarantees the array-index -> month mapping stays aligned
+# with the file_list each python script computes internally.
+parsed_years = set()
+for tok in years.split(","):
+    tok = tok.strip()
+    if not tok:
+        continue
+    if "-" in tok:
+        s, e = map(int, tok.split("-", 1))
+    else:
+        s = e = int(tok)
+    parsed_years.update(range(s, e + 1))
+parsed_years = sorted(parsed_years)
 
-months = []
-for year in range(start_year, end_year + 1):
-    for month in range(1, 13):
-        months.append(f"{year:04d}-{month:02d}")
+months = [f"{y:04d}-{m:02d}" for y in parsed_years for m in range(1, 13)]
 
 start_idx = task_id * files_per_job
 end_idx = min(start_idx + files_per_job, len(months))

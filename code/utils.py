@@ -50,53 +50,89 @@ default_resource = ["filtered_keywords","filtered_language","filtered_relevance"
 
 # Basic parsing / validation helpers (used by multiple scripts)
 
-# confirm that input year range is valid
+# confirm that input year spec is valid
 def validate_years(years_str: str, parser: argparse.ArgumentParser) -> None:
-    """Validate either 'YYYY' or 'YYYY-YYYY' with bounds 2007..2023."""
-    match = re.fullmatch(r"(\d{4})(?:-(\d{4}))?", years_str)
-    if not match:
-        parser.error("--years must be a 4-digit year or a range like 2010-2015.")
+    """Validate a year spec.
 
-    start = int(match.group(1))
-    end = int(match.group(2)) if match.group(2) else start
+    Accepts any comma-separated combination of single years ('YYYY') and
+    contiguous ranges ('YYYY-YYYY'); e.g. '2019', '2019-2023', or
+    '2007,2009,2011-2017'. All years must satisfy 2007 <= y <= 2023.
+    Whitespace around commas/tokens is tolerated.
+    """
+    tokens = [t.strip() for t in years_str.split(",") if t.strip()]
+    if not tokens:
+        parser.error("--years must not be empty.")
 
-    if not (2007 <= start <= 2023 and 2007 <= end <= 2023):
-        parser.error("Years must be between 2007 and 2023.")
-    if start > end:
-        parser.error("Start year must be less than or equal to end year.")
+    for tok in tokens:
+        match = re.fullmatch(r"(\d{4})(?:-(\d{4}))?", tok)
+        if not match:
+            parser.error(
+                "--years tokens must each be a 4-digit year or a range like "
+                f"2010-2015; got '{tok}'."
+            )
+        start = int(match.group(1))
+        end = int(match.group(2)) if match.group(2) else start
 
-# process input year range
+        if not (2007 <= start <= 2023 and 2007 <= end <= 2023):
+            parser.error(f"Years must be between 2007 and 2023; got '{tok}'.")
+        if start > end:
+            parser.error(f"Start year must be ≤ end year in '{tok}'.")
+
+# process input year spec
 def parse_range(value: str) -> List[int]:
-    """Parse 'YYYY' or 'YYYY-YYYY' into a list of years with bounds 2007..2023."""
-    try:
-        if "-" in value:
-            start, end = map(int, value.split("-", 1))
-            if start > end:
-                raise argparse.ArgumentTypeError(f"Invalid range '{value}': start must be ≤ end.")
-        else:
-            start = end = int(value)
+    """Parse a year spec into a sorted, deduplicated list of years.
 
-        if start < 2007:
-            raise argparse.ArgumentTypeError(f"Invalid value '{value}': years must be ≥ 2007.")
-        if end > 2023:
-            raise argparse.ArgumentTypeError(f"Invalid value '{value}': years must be ≤ 2023.")
-
-        return list(range(start, end + 1))
-    except ValueError:
+    Accepts a single year ('YYYY'), a contiguous range ('YYYY-YYYY'), or any
+    comma-separated combination thereof (e.g. '2007,2009,2011-2017'). All
+    years must satisfy 2007 <= y <= 2023. Overlapping or duplicate tokens are
+    collapsed; the returned list is sorted ascending so it lines up with the
+    chronological file ordering used downstream by check_reqd_files callers.
+    """
+    tokens = [t.strip() for t in value.split(",") if t.strip()]
+    if not tokens:
         raise argparse.ArgumentTypeError(
-            f"Invalid value '{value}': must be an integer or a range (e.g., 2007 or 2008-2010)."
+            f"Invalid value '{value}': must contain at least one year."
         )
 
-# Calculate SLURM array span from year range string.
+    years: set = set()
+    for tok in tokens:
+        try:
+            if "-" in tok:
+                start, end = map(int, tok.split("-", 1))
+                if start > end:
+                    raise argparse.ArgumentTypeError(
+                        f"Invalid range '{tok}': start must be ≤ end."
+                    )
+            else:
+                start = end = int(tok)
+
+            if start < 2007:
+                raise argparse.ArgumentTypeError(
+                    f"Invalid value '{tok}': years must be ≥ 2007."
+                )
+            if end > 2023:
+                raise argparse.ArgumentTypeError(
+                    f"Invalid value '{tok}': years must be ≤ 2023."
+                )
+
+            years.update(range(start, end + 1))
+        except ValueError:
+            raise argparse.ArgumentTypeError(
+                f"Invalid token '{tok}' in '{value}': must be an integer or a "
+                f"range (e.g., 2007 or 2008-2010)."
+            )
+
+    return sorted(years)
+
+# Calculate SLURM array span from a year spec.
 def array_span_from_years(years_str: str) -> int:
-    if "-" in years_str:
-        start, end = years_str.split("-", 1)
-        start_y, end_y = int(start), int(end)
-        if end_y < start_y:
-            start_y, end_y = end_y, start_y
-        return (end_y - start_y + 1) * 12
-    else:
-        return 12
+    """Number of monthly array tasks needed to cover the given year spec.
+
+    Equals 12 × (number of unique years parsed from `years_str`). Supports
+    sparse specs like '2007,2009,2011-2017' as well as the legacy 'YYYY' /
+    'YYYY-YYYY' forms.
+    """
+    return len(parse_range(years_str)) * 12
 
 # Load newline-delimited keywords, lowercased; skip blanks.
 def load_terms(file_path: str) -> List[str]:

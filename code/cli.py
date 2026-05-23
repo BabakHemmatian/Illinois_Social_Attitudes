@@ -58,7 +58,15 @@ def _build_job_tag(args) -> str:
     if args.group:
         parts.append(args.group)
     if args.years:
-        parts.append(args.years)
+        # Normalize the years spec before _slug runs so the tag stays readable:
+        # (1) drop whitespace (a user-written '2019, 2021-2023' would otherwise
+        #     leave behind '_-' artifacts after slugging), and (2) rewrite
+        #     commas as underscores -- otherwise _slug turns ',' into '-' and a
+        #     spec like '2019,2021-2023' becomes '2019-2021-2023', which is
+        #     indistinguishable from a contiguous range. With underscores the
+        #     tag reads as '2019_2021-2023', preserving the disjoint/range split.
+        years_for_tag = "".join(args.years.split()).replace(",", "_")
+        parts.append(years_for_tag)
     return _slug("__".join(parts))
 
 
@@ -186,7 +194,7 @@ def get_args(argv=None):
     argparser.add_argument(
         '-y', '--years',
         type=str,
-        help='Determine the range of years to which the tool should be applied for the indicated groups. Must be either a number between 2007 and 2023 or a range in that time frame with the start and end separated by a dash.'
+        help='Determine the years to which the tool should be applied for the indicated groups. Accepts a single year (e.g. 2019), a contiguous range with a dash (e.g. 2019-2023), or any comma-separated combination of those (e.g. 2007,2009,2011-2017). All years must fall between 2007 and 2023.'
     )
     argparser.add_argument(
         '-b', '--batchsize',

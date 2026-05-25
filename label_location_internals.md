@@ -90,5 +90,4 @@ On resubmission, `get_last_source_row` reads the partial output and the resource
 
 ## Known limitations
 
-- Location labels for authors appearing in **2007–2018 sexuality/comments** were produced before the per-post dedup landed. They carry a ~2–10% feature bias that favors target-month group-relevant language. A future corrective run is planned. If unbiased labels on those months matter immediately for a downstream analysis, run a fresh `label_location` pass.
 - **The dedup pass forces a rescan of the target month's `.zst` even when fully cached.** This is ~3% of the spiral's I/O and is the price of the dedup correction. Other spiral files retain full cache benefit.

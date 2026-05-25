@@ -1020,62 +1020,70 @@ def _sqlite_retry_on_locked(operation, *, max_attempts: int = 8, base_delay: flo
 #       prob beats the cached prob).
 def init_location_cache(db_path: str) -> None:
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=60)
-    try:
-        cur = conn.cursor()
-        # DELETE journal mode (not WAL): the cache DB lives on NFS, and WAL's
-        # shared-memory coordination file (-shm) requires real mmap-based
-        # shared memory that NFS does not provide. Under concurrent writes
-        # from multiple array tasks across nodes, WAL silently corrupts the
-        # DB. DELETE mode uses POSIX file locks, which NFS implements
-        # correctly (just more slowly). Combined with batching writes to
-        # one per label_location_month, the contention is low enough that
-        # the slower lock path is irrelevant.
-        cur.execute("PRAGMA journal_mode=DELETE;")
-        cur.execute("PRAGMA synchronous=NORMAL;")
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS author_location (
-                author TEXT PRIMARY KEY,
-                location TEXT NOT NULL,
-                location_prob REAL,
-                updated_at INTEGER NOT NULL
-            );
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
+
+    def _do() -> None:
+        conn = sqlite3.connect(db_path, timeout=60)
+        try:
+            cur = conn.cursor()
+            # DELETE journal mode (not WAL): the cache DB lives on NFS, and WAL's
+            # shared-memory coordination file (-shm) requires real mmap-based
+            # shared memory that NFS does not provide. Under concurrent writes
+            # from multiple array tasks across nodes, WAL silently corrupts the
+            # DB. DELETE mode uses POSIX file locks, which NFS implements
+            # correctly (just more slowly). Combined with batching writes to
+            # one per label_location_month, the contention is low enough that
+            # the slower lock path is irrelevant.
+            cur.execute("PRAGMA journal_mode=DELETE;")
+            cur.execute("PRAGMA synchronous=NORMAL;")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS author_location (
+                    author TEXT PRIMARY KEY,
+                    location TEXT NOT NULL,
+                    location_prob REAL,
+                    updated_at INTEGER NOT NULL
+                );
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    _sqlite_retry_on_locked(_do)
 
 # Initialize the detail table (per-author top/contender labels with probs and tier).
 # NOTE: Pre-create alongside init_location_cache from a single process before launching
 # parallel Slurm array tasks to avoid "database is locked" races on first WAL setup.
 def init_location_detail_cache(db_path: str) -> None:
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=60)
-    try:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS author_location_detail (
-                author TEXT PRIMARY KEY,
-                location TEXT NOT NULL,
-                location_prob REAL,
-                contender_location TEXT,
-                contender_location_prob REAL,
-                top_location TEXT,
-                top_location_prob REAL,
-                top_contender_location TEXT,
-                top_contender_location_prob REAL,
-                tier TEXT,
-                seen_count INTEGER,
-                updated_at INTEGER NOT NULL
-            );
-            """
-        )
-        conn.commit()
-    finally:
-        conn.close()
+
+    def _do() -> None:
+        conn = sqlite3.connect(db_path, timeout=60)
+        try:
+            cur = conn.cursor()
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS author_location_detail (
+                    author TEXT PRIMARY KEY,
+                    location TEXT NOT NULL,
+                    location_prob REAL,
+                    contender_location TEXT,
+                    contender_location_prob REAL,
+                    top_location TEXT,
+                    top_location_prob REAL,
+                    top_contender_location TEXT,
+                    top_contender_location_prob REAL,
+                    tier TEXT,
+                    seen_count INTEGER,
+                    updated_at INTEGER NOT NULL
+                );
+                """
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    _sqlite_retry_on_locked(_do)
 
 # Fetch cached locations for a set of authors. Wrapped in a retry loop because
 # concurrent Slurm array tasks can briefly contend on schema-touching writes
@@ -1171,41 +1179,45 @@ def cache_put_locations(db_path: str, details_by_author: Dict[str, Dict[str, Any
 
 
 def init_author_file_counts_cache(db_path: str) -> None:
-    """Create the author_file_counts table if missing. Idempotent; pre-create
-    once from a single process before launching parallel array tasks to
-    avoid 'database is locked' on first WAL setup."""
+    """Create the author_file_counts table if missing. Idempotent; the inner
+    _sqlite_retry_on_locked wrap absorbs brief 'database is locked' contention
+    when many array tasks initialize the shared NFS-backed DB simultaneously."""
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=60)
-    try:
-        cur = conn.cursor()
-        # DELETE journal mode (not WAL): the cache DB lives on NFS, and WAL's
-        # shared-memory coordination file (-shm) requires real mmap-based
-        # shared memory that NFS does not provide. Under concurrent writes
-        # from multiple array tasks across nodes, WAL silently corrupts the
-        # DB. DELETE mode uses POSIX file locks, which NFS implements
-        # correctly (just more slowly). Combined with batching writes to
-        # one per label_location_month, the contention is low enough that
-        # the slower lock path is irrelevant.
-        cur.execute("PRAGMA journal_mode=DELETE;")
-        cur.execute("PRAGMA synchronous=NORMAL;")
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS author_file_counts (
-                author TEXT NOT NULL,
-                raw_file TEXT NOT NULL,
-                counts_blob BLOB NOT NULL,
-                seen_count INTEGER NOT NULL,
-                scanned_at REAL NOT NULL,
-                PRIMARY KEY (author, raw_file)
-            );
-            """
-        )
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_author_file_counts_author ON author_file_counts(author);"
-        )
-        conn.commit()
-    finally:
-        conn.close()
+
+    def _do() -> None:
+        conn = sqlite3.connect(db_path, timeout=60)
+        try:
+            cur = conn.cursor()
+            # DELETE journal mode (not WAL): the cache DB lives on NFS, and WAL's
+            # shared-memory coordination file (-shm) requires real mmap-based
+            # shared memory that NFS does not provide. Under concurrent writes
+            # from multiple array tasks across nodes, WAL silently corrupts the
+            # DB. DELETE mode uses POSIX file locks, which NFS implements
+            # correctly (just more slowly). Combined with batching writes to
+            # one per label_location_month, the contention is low enough that
+            # the slower lock path is irrelevant.
+            cur.execute("PRAGMA journal_mode=DELETE;")
+            cur.execute("PRAGMA synchronous=NORMAL;")
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS author_file_counts (
+                    author TEXT NOT NULL,
+                    raw_file TEXT NOT NULL,
+                    counts_blob BLOB NOT NULL,
+                    seen_count INTEGER NOT NULL,
+                    scanned_at REAL NOT NULL,
+                    PRIMARY KEY (author, raw_file)
+                );
+                """
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_author_file_counts_author ON author_file_counts(author);"
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+    _sqlite_retry_on_locked(_do)
 
 
 def _zstd_compress_json(obj: Any) -> bytes:

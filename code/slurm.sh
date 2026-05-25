@@ -192,4 +192,44 @@ if [[ -n "${SLURM_JOB_ID:-}" ]]; then
 fi
 
 echo "Running: python ${ARGS[*]}"
-python "${ARGS[@]}"
+
+# Run python, mirroring stderr into a temp file so we can post-mortem on
+# transient node-side CUDA/NVML driver failures. If detected (and we haven't
+# already requeued too many times), call `scontrol requeue` so SLURM puts
+# the job back in the queue, almost certainly landing it on a different
+# node. afterok dependents stay PD while the requeued attempt runs, instead
+# of getting cascade-cancelled by --kill-on-invalid-dep=yes.
+#
+# Only the known transient patterns trigger a requeue; real code failures
+# fall through with the original exit code so they surface as FAILED.
+ERR_TMP="$(mktemp -t isaac_slurm_stderr.XXXXXX)"
+# shellcheck disable=SC2064
+trap "rm -f '${ERR_TMP}'" EXIT
+
+set +e
+python "${ARGS[@]}" 2> >(tee -a "${ERR_TMP}" >&2)
+PY_RC=$?
+set -e
+
+TRANSIENT_RE="Can't initialize NVML|NVML_SUCCESS == DriverAPI|INTERNAL ASSERT FAILED.*CUDACachingAllocator|CUDA error: no CUDA-capable device"
+MAX_REQUEUES=2
+RESTART_COUNT="${SLURM_RESTART_COUNT:-0}"
+
+if [[ "${PY_RC}" -ne 0 ]] \
+   && [[ "${RESTART_COUNT}" -lt "${MAX_REQUEUES}" ]] \
+   && [[ -n "${SLURM_JOB_ID:-}" ]] \
+   && grep -qE "${TRANSIENT_RE}" "${ERR_TMP}" 2>/dev/null; then
+  NODE="${SLURMD_NODENAME:-unknown}"
+  echo "[slurm.sh] Detected transient CUDA/NVML failure on node ${NODE} (restart=${RESTART_COUNT}/${MAX_REQUEUES}); requeueing ${SLURM_JOB_ID}" >&2
+  if scontrol requeue "${SLURM_JOB_ID}"; then
+    # scontrol requeue sends SIGTERM shortly after returning; the lines below
+    # may not execute. Exit 0 just in case it doesn't, so we don't trip
+    # --kill-on-invalid-dep=yes between the requeue call and the SIGTERM.
+    sleep 5
+    exit 0
+  else
+    echo "[slurm.sh] scontrol requeue failed; surfacing original exit code ${PY_RC}" >&2
+  fi
+fi
+
+exit "${PY_RC}"

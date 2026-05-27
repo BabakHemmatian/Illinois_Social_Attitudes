@@ -348,9 +348,9 @@ if __name__ == "__main__":
             slurm_vars.append(f"sample={args.sample}")
         if args.target is not None:
             slurm_vars.append(f"target={args.target}")
-        if args.num_annotators is not None:
+        if args.resource in ("filter_sample", "metrics_interrater") and args.num_annotators is not None:
             slurm_vars.append(f"num_annotators={args.num_annotators}")
-        if args.perc_overlap is not None:
+        if args.resource == "filter_sample" and args.perc_overlap is not None:
             slurm_vars.append(f"perc_overlap={args.perc_overlap}")
 
         # Location-labeling sampling controls (forwarded to label_location)
@@ -429,9 +429,9 @@ if __name__ == "__main__":
             cmd_parts.extend(["-c", str(args.sample)])
         if args.target is not None:
             cmd_parts.extend(["-S", args.target])
-        if args.num_annotators is not None:
+        if args.resource in ("filter_sample", "metrics_interrater") and args.num_annotators is not None:
             cmd_parts.extend(["-n", str(args.num_annotators)])
-        if args.perc_overlap is not None:
+        if args.resource == "filter_sample" and args.perc_overlap is not None:
             cmd_parts.extend(["-p", str(args.perc_overlap)])
         if getattr(args, "maxitems", None) is not None:
             cmd_parts.extend(["--maxitems", str(args.maxitems)])

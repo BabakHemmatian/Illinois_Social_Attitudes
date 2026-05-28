@@ -117,6 +117,10 @@ if [[ -n "${perc_overlap:-}" ]]; then
   ARGS+=( "-p" "${perc_overlap}" )
 fi
 
+if [[ -n "${stratify:-}" ]]; then
+  ARGS+=( "--stratify" "${stratify}" )
+fi
+
 # Forward optional input/output overrides
 if [[ -n "${input:-}" ]]; then
   ARGS+=( "-i" "${input}" )

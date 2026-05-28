@@ -54,10 +54,19 @@ unique_per = sample_size - shared_count
 shared_quotas_per_year = compute_quotas(shared_count, len(years))   # [top, bot, rand] shared sub-quota per year
 unique_quotas_per_year = compute_quotas(unique_per, len(years))     # [top, bot, rand] per-annotator unique sub-quota per year
 
-# Top/bottom keyword-count stratification only makes sense at the filter_* stage, where
-# keyword-match breadth is the dimension worth contrasting. For label_* / organize_* and
-# anything else downstream, collapse the three buckets into a single random reservoir.
-stratify = target.startswith("filter_")
+# Top/bottom keyword-count stratification only makes sense when the source files carry the
+# keyword column (index 7) worth contrasting on — natively true at the filter_* stage. The
+# 'auto' default keeps that stage heuristic: stratify for filter_* targets, fully random
+# otherwise. '--stratify on' forces stratification regardless of target, which is what lets
+# us draw filter-style top/bottom/random samples from label_ outputs that still descend from
+# filter_keywords_adv and thus retain the keyword column. '--stratify off' forces fully random.
+stratify_mode = getattr(args, "stratify", "auto")
+if stratify_mode == "on":
+    stratify = True
+elif stratify_mode == "off":
+    stratify = False
+else:  # "auto"
+    stratify = target.startswith("filter_")
 if not stratify:
     shared_quotas_per_year = [[0, 0, sum(cells)] for cells in shared_quotas_per_year]
     unique_quotas_per_year = [[0, 0, sum(cells)] for cells in unique_quotas_per_year]

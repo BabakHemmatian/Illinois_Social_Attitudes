@@ -163,6 +163,18 @@ def get_args(argv=None):
         help='Identifies the resource from whose outputs filter_sample is to extract a subset of documents. Only applicable to filter and label resources.'
     )
     argparser.add_argument(
+        '--stratify',
+        type=str,
+        dest='stratify',
+        choices=['auto', 'on', 'off'],
+        default='auto',
+        help="filter_sample only: control top/bottom/random keyword-count stratification. "
+             "'auto' (default) stratifies only for filter_* targets and is fully random for "
+             "label_*/organize_* targets. 'on' forces stratification regardless of target — "
+             "use this to draw filter-style samples from label_ outputs that still carry the "
+             "keyword column (index 7). 'off' forces a fully random sample."
+    )
+    argparser.add_argument(
         '-i', '--input',
         type=str,
         help="The input folder for the resource. Defaults to the order of resources indicated in the repository."
@@ -352,6 +364,8 @@ if __name__ == "__main__":
             slurm_vars.append(f"num_annotators={args.num_annotators}")
         if args.resource == "filter_sample" and args.perc_overlap is not None:
             slurm_vars.append(f"perc_overlap={args.perc_overlap}")
+        if args.resource == "filter_sample" and getattr(args, "stratify", "auto") != "auto":
+            slurm_vars.append(f"stratify={args.stratify}")
 
         # Location-labeling sampling controls (forwarded to label_location)
         if getattr(args, "maxitems", None) is not None:
@@ -433,6 +447,8 @@ if __name__ == "__main__":
             cmd_parts.extend(["-n", str(args.num_annotators)])
         if args.resource == "filter_sample" and args.perc_overlap is not None:
             cmd_parts.extend(["-p", str(args.perc_overlap)])
+        if args.resource == "filter_sample" and getattr(args, "stratify", "auto") != "auto":
+            cmd_parts.extend(["--stratify", args.stratify])
         if getattr(args, "maxitems", None) is not None:
             cmd_parts.extend(["--maxitems", str(args.maxitems)])
         if getattr(args, "maxfiles", None) is not None:

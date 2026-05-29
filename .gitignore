@@ -8,6 +8,13 @@
 *.jsonl
 *.sqlite
 
+# Atomic-write temp files from the pipeline (e.g. .RC_2014-12.csv.b8cWe1).
+# These escape the *.csv / *.jsonl rules because the real extension is the
+# random suffix; they are renamed to their final name on completion.
+.*.csv.*
+.*.jsonl.*
+.*.sqlite.*
+
 # Whitelist the relevance training samples and the post-filter QA samples so
 # reviewers can audit the FPR / kappa / classifier-performance claims.
 !data/data_relevance_ratings/**/*.csv

@@ -8,10 +8,12 @@ This repository contains tools for the development and evaluation of the **Illin
 
 **Corpus size (comments): 554,464,184 posts**
 
-**Corpus size (submissions): TBA**
+**Corpus size (submissions): 66,159,494 posts**
 
-![Number of comments per social distinction. sexuality (gay-straight; 62,256,049 comments); race (Black-White; 135,912,999 comments); age (young-old; 250,834,691); ability (abled-disabled; 20,342,248); weight (fat-thin; 17,193,412); skin_tone (dark-light; 62,256,049)](./freq_aggregate.png)
-![Number of documents over time for all distinctions](./line_overlay_distinctions.png)
+**Corpus size (combined): 620,623,678 posts**
+
+![Number of documents (comments + submissions) per social distinction. Each bar stacks comments (bottom) and submissions (top); the combined total is annotated above each bar. sexuality (gay-straight; 67,924,785 comments + 12,014,516 submissions = 79,939,301); race (Black-White; 135,912,999 + 10,777,312 = 146,690,311); age (young-old; 250,834,691 + 29,411,923 = 280,246,614); ability (abled-disabled; 20,342,248 + 3,672,777 = 24,015,025); weight (fat-thin; 17,193,412 + 5,165,709 = 22,359,121); skin_tone (dark-light; 62,256,049 + 5,117,257 = 67,373,306)](./freq_aggregate.png)
+![Number of documents per month over time for all distinctions, pooling comments and submissions per distinction. Submission monthly counts are exact; the monthly comment series is estimated by digitizing the previous comments-only figure (each per-distinction digitized total is within ~1-5% of the authoritative comment total) and will be replaced with exact monthly counts once available.](./line_overlay_distinctions.png)
 
 ## Corpus Access
 

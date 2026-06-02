@@ -8,7 +8,7 @@ import re
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
-from collections import Counter
+from collections import Counter, defaultdict
 from pathlib import Path
 from typing import List, Dict, Literal, NamedTuple, Tuple, Optional, Any
 import zstandard
@@ -1218,6 +1218,98 @@ def init_author_file_counts_cache(db_path: str) -> None:
             conn.close()
 
     _sqlite_retry_on_locked(_do)
+
+
+# ---------------------------------------------------------------------------
+# Year-sharded layout for the location cache.
+#
+# The author_location / author_location_detail label tables stay in ONE DB
+# (keyed by author, which is year-independent -- splitting by year would destroy
+# the cross-year dedup that gives the cache its hit rate). The large, regenerable
+# author_file_counts table is sharded into one DB per year of raw_file, because
+# a file_counts row is intrinsically tied to one raw_file = one year. This spreads
+# write contention across year DBs and limits a corruption's blast radius to a
+# single (regenerable) year.
+# ---------------------------------------------------------------------------
+
+_RAW_FILE_YEAR_RE = re.compile(r"(\d{4})-\d{2}")
+
+
+def year_of_raw_file(raw_file: str) -> Optional[str]:
+    """Extract the YYYY year from a raw-file basename like 'RC_2018-01.zst'."""
+    m = _RAW_FILE_YEAR_RE.search(raw_file or "")
+    return m.group(1) if m else None
+
+
+def location_label_db_path(cache_dir: str, rtype: str) -> str:
+    """Path to the single DB holding author_location + author_location_detail."""
+    return os.path.join(cache_dir, f"author_location_label_{rtype}.sqlite")
+
+
+def author_file_counts_db_path(cache_dir: str, rtype: str, year) -> str:
+    """Path to the per-year author_file_counts DB."""
+    return os.path.join(cache_dir, f"author_file_counts_{rtype}_{year}.sqlite")
+
+
+def init_author_file_counts_caches(cache_dir: str, rtype: str, years) -> None:
+    """Pre-create the per-year author_file_counts DBs from a single process so
+    parallel array tasks don't race on first-touch CREATE TABLE."""
+    for y in years:
+        init_author_file_counts_cache(author_file_counts_db_path(cache_dir, rtype, str(y)))
+
+
+def cache_get_author_file_counts_sharded(
+    cache_dir: str,
+    rtype: str,
+    years,
+    authors,
+    exclude_basenames: Optional[set] = None,
+) -> Dict[str, Tuple[set, Dict[str, int], int]]:
+    """Read and merge per-author file-counts across the given year-sharded DBs.
+
+    Each raw_file lives in exactly one year DB, so summing the per-DB aggregates
+    never double-counts a file. Missing year DBs (no rows scanned yet) are
+    skipped. Return shape matches cache_get_author_file_counts."""
+    if not authors:
+        return {}
+    merged: Dict[str, Tuple[set, Dict[str, int], int]] = {}
+    for y in years:
+        p = author_file_counts_db_path(cache_dir, rtype, str(y))
+        if not os.path.exists(p):
+            continue
+        part = cache_get_author_file_counts(p, authors, exclude_basenames)
+        for a, (scanned, counts, seen) in part.items():
+            if a not in merged:
+                merged[a] = (set(), {}, 0)
+            ms, mc, msn = merged[a]
+            ms |= scanned
+            for k, v in counts.items():
+                mc[k] = mc.get(k, 0) + v
+            merged[a] = (ms, mc, msn + seen)
+    return merged
+
+
+def cache_put_author_file_counts_sharded(cache_dir: str, rtype: str, rows) -> int:
+    """Route (author, raw_file, counts, seen) rows to per-year DBs by raw_file
+    year, lazily creating a year DB on first write. Rows whose raw_file has no
+    parseable year are dropped. Returns the number of rows written."""
+    rows = list(rows)
+    if not rows:
+        return 0
+    buckets: Dict[str, list] = defaultdict(list)
+    for entry in rows:
+        y = year_of_raw_file(entry[1])
+        if not y:
+            continue
+        buckets[y].append(entry)
+    written = 0
+    for y, yrows in buckets.items():
+        p = author_file_counts_db_path(cache_dir, rtype, y)
+        if not os.path.exists(p):
+            init_author_file_counts_cache(p)
+        cache_put_author_file_counts(p, yrows)
+        written += len(yrows)
+    return written
 
 
 def _zstd_compress_json(obj: Any) -> bytes:

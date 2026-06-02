@@ -13,8 +13,11 @@ from utils import (
     array_span_from_years,
     groups,
     init_author_file_counts_cache,
+    init_author_file_counts_caches,
     init_location_cache,
     init_location_detail_cache,
+    location_label_db_path,
+    parse_range,
     validate_years,
 )
 
@@ -320,10 +323,16 @@ if __name__ == "__main__":
     if args.resource == "label_location":
         location_cache_dir = DATA_DIR / "data_reddit_curated" / "data_reddit_location"
         location_cache_dir.mkdir(parents=True, exist_ok=True)
-        location_cache_db_path = str(location_cache_dir / f"author_location_cache_{args.type}.sqlite")
-        init_location_cache(location_cache_db_path)
-        init_location_detail_cache(location_cache_db_path)
-        init_author_file_counts_cache(location_cache_db_path)
+        # Label tables (author_location + author_location_detail) live in one DB,
+        # keyed by author so cross-year/-group dedup is preserved. The large,
+        # regenerable author_file_counts table is sharded into one DB per year.
+        label_db_path = location_label_db_path(str(location_cache_dir), args.type)
+        init_location_cache(label_db_path)
+        init_location_detail_cache(label_db_path)
+        # Pre-create the per-year file_counts DBs for the requested years from
+        # this single process so parallel array tasks don't race on CREATE TABLE.
+        years_list = parse_range(args.years) if args.years else []
+        init_author_file_counts_caches(str(location_cache_dir), args.type, years_list)
 
     if args.slurm:
         slurm_vars = [f"resource={args.resource}", f"type={args.type}"]

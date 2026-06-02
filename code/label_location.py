@@ -25,8 +25,12 @@ from utils import (
     build_author_feature_map_from_raw_zst_with_seen,
     iter_author_feature_map_streaming,
     init_author_file_counts_cache,
+    init_author_file_counts_caches,
     cache_get_author_file_counts,
     cache_put_author_file_counts,
+    cache_get_author_file_counts_sharded,
+    cache_put_author_file_counts_sharded,
+    location_label_db_path,
     cache_get_locations,
     cache_put_locations,
     check_reqd_files,
@@ -49,10 +53,15 @@ UNKNOWN_LABEL = "UNK"
 MIN_SAMPLES_FOR_INFERENCE = 10
 MIN_SAMPLES_FOR_CACHE = 25
 # After every FLUSH_EVERY_N_RAW raw .zst files complete, infer locations for
-# now-saturated authors and write their rows incrementally. Caps the worst-case
-# lost-work window on a mid-scan crash to ~N/total_raw_files of the month's
-# scan time; with default N=3 and ~30-50 raw files per month that is ~6-10%.
-FLUSH_EVERY_N_RAW = 3
+# now-saturated authors and write their rows incrementally to the OUTPUT csv.
+# Set to 1 (flush after EVERY completed raw file) for the most frequent output
+# the streaming structure allows: each flush re-walks the curated csv from the
+# last written source_row, so flushing per inference-batch instead would mean
+# hundreds of full-csv rescans per month -- file granularity is the right unit.
+# This shrinks the worst-case lost-output window on a wall-time kill to a single
+# raw file's scan time. (Distinct from CACHE_FLUSH_ROWS, which drives how often
+# the scan/label CACHES are persisted and is batchsize-driven -- see below.)
+FLUSH_EVERY_N_RAW = 1
 # When an author has at least this many items in the curated (group-filtered)
 # input for the current month, the local seed features dominate the inference
 # enough that any cross-group cached label is least trustworthy. Skip the cache
@@ -120,6 +129,16 @@ def _resolve_scan_knobs_for_year(year: int) -> Tuple[int, int, int]:
 
 
 batch_size = max(1, int(getattr(args, "batchsize", DEFAULT_BATCH_SIZE) or DEFAULT_BATCH_SIZE))
+# Persist accumulated caches once this many pending (author, file) rows buffer
+# up, instead of only at end-of-month. Tied to batch_size so one knob scales
+# both the inference micro-batch and the write cadence (approach a): a larger
+# batch_size -> larger buffer -> fewer, bigger writes. This bounds the peak
+# memory held in pending_file_cache_rows AND banks scan progress mid-month, so a
+# 4-day wall-time kill no longer discards the whole month's work (the old design
+# wrote once at end-of-month, so timed-out months cached nothing). Year-sharded
+# file_counts DBs keep these mid-month writes cheap enough to be safe under
+# concurrency. Tune via batch_size; floor keeps small batches from over-writing.
+CACHE_FLUSH_ROWS = max(100_000, batch_size * 100)
 # Parallel file scan: enabled only for SLURM array tasks (single-process); falls back to 1 locally
 # and in multi-process mode to avoid compounding memory with ProcessPoolExecutor workers.
 _slurm_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", 0))
@@ -162,9 +181,14 @@ output_path.mkdir(parents=True, exist_ok=True)
 # default), submissions and comments runs share the same cache and all six
 # social groups within a raw type share one cache.
 CACHE_DIR = DATA_DIR / "data_reddit_curated" / "data_reddit_location"
-CACHE_DB_PATH = str(CACHE_DIR / f"author_location_cache_{RAW_TYPE}.sqlite")
-init_location_cache(CACHE_DB_PATH)
-init_author_file_counts_cache(CACHE_DB_PATH)
+# Label tables (author_location + author_location_detail) live in ONE DB, keyed
+# by author (year-independent) to preserve cross-year/-group dedup. The big,
+# regenerable author_file_counts table is sharded into one DB per raw_file year
+# (see utils); reads merge across the spiral's years, writes route by file year.
+LABEL_DB_PATH = str(CACHE_DIR / f"author_location_label_{RAW_TYPE}.sqlite")
+init_location_cache(LABEL_DB_PATH)
+# Year-sharded file_counts DBs are pre-created by cli.py for the requested years
+# and lazily created on write for any spiral year outside that set.
 report_file_path = os.path.join(output_path, "report_label_location.csv")
 
 
@@ -298,7 +322,7 @@ def month_spiral(year: int, month: int, max_files_to_scan: int = 60, max_radius:
 ### Cache detail helpers
 
 
-init_location_detail_cache(CACHE_DB_PATH)
+init_location_detail_cache(LABEL_DB_PATH)
 
 
 def cache_get_location_details(db_path: str, authors: Sequence[str]) -> Dict[str, Dict[str, object]]:
@@ -1199,8 +1223,8 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         return (stem, remaining_row_count, n_total, 0)
 
     # Cache lookups are restricted to authors that still need a row written.
-    cached_locations = cache_get_locations(CACHE_DB_PATH, target_row_authors)
-    cached_details = cache_get_location_details(CACHE_DB_PATH, list(target_row_authors))
+    cached_locations = cache_get_locations(LABEL_DB_PATH, target_row_authors)
+    cached_details = cache_get_location_details(LABEL_DB_PATH, list(target_row_authors))
 
     detail_by_author: Dict[str, Dict[str, object]] = {}
     n_skipped_bias = 0
@@ -1264,8 +1288,14 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     # this month's raw .zst. Those rows still live in the cache (other-target
     # months' spirals can use them); they just don't contribute to *this*
     # run's cached_counts because we will scan the target month fresh below.
-    scan_state_existing = cache_get_author_file_counts(
-        CACHE_DB_PATH,
+    # The spiral can straddle a few years; read+merge only those year-sharded
+    # file_counts DBs. Each raw_file lives in exactly one year DB, so the merge
+    # never double-counts.
+    spiral_years = sorted({str(y) for (y, _m) in scan_months})
+    scan_state_existing = cache_get_author_file_counts_sharded(
+        str(CACHE_DIR),
+        RAW_TYPE,
+        spiral_years,
         remaining_authors_set,
         exclude_basenames=target_month_basenames,
     )
@@ -1351,6 +1381,14 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     n_cache_skipped_lowconf = 0
     n_cache_skipped_lowsamples = 0
     n_stream_flushes = 0
+
+    # Emit a [scan-progress] line roughly every 10% of the spiral so a long
+    # silent raw-scan phase is observable without flooding the log. Capped at
+    # ~10 lines per month regardless of year: with the default spirals that is
+    # every ~6 files (early years, 60-file spiral) / ~4 files (later years,
+    # ~41-file spiral). max(1, ...) keeps it sane for tiny spirals.
+    scan_log_every = max(1, len(files_to_scan) // 10)
+    next_scan_log = scan_log_every
 
     def _infer_and_flush(saturated_chunk: List[str], trigger: str) -> Tuple[int, int]:
         """Infer for a list of authors, cache the confident ones, flush rows.
@@ -1445,6 +1483,22 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     raw_overlap_seen_state: Dict[str, int] = {}
     pending_file_cache_rows: List[Tuple[str, str, Dict[str, int], int]] = []
     n_file_cache_rows_written = 0
+
+    def _persist_caches() -> None:
+        """Write accumulated confident label details (single label DB) and
+        per-(author, file) scan rows (year-sharded file_counts DBs), then clear
+        the buffers. Called periodically mid-month to bound memory and bank
+        progress against a wall-time kill, and once more at end-of-month."""
+        nonlocal n_file_cache_rows_written
+        if to_cache_running:
+            cache_put_locations(LABEL_DB_PATH, to_cache_running)
+            cache_put_location_details(LABEL_DB_PATH, to_cache_running)
+            to_cache_running.clear()
+        if pending_file_cache_rows:
+            n_file_cache_rows_written += cache_put_author_file_counts_sharded(
+                str(CACHE_DIR), RAW_TYPE, pending_file_cache_rows
+            )
+            pending_file_cache_rows.clear()
     # Per-author remaining quota: total sampling cap for this run is
     # max_items_per_author MINUS whatever the persistent cache already
     # contributed for this author. Restores the original semantics that the
@@ -1475,6 +1529,22 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         files_done += len(yld.files_just_done)
         files_since_flush += len(yld.files_just_done)
 
+        # Progress heartbeat for the otherwise-silent raw scan (every ~10% of
+        # the spiral). Reports files scanned, authors collected from raw so far,
+        # the unflushed cache backlog, and elapsed scan minutes -- enough to
+        # estimate per-month completion against the wall-time limit.
+        if files_to_scan and files_done >= next_scan_log:
+            pct = 100.0 * files_done / len(files_to_scan)
+            log_report(
+                report_file_path,
+                f"[scan-progress] {stem}: {files_done}/{len(files_to_scan)} files ({pct:.0f}%) "
+                f"raw_for={len(raw_counts_state):,} authors "
+                f"pending_cache_rows={len(pending_file_cache_rows):,} "
+                f"elapsed={(time.time() - raw_scan_start) / 60:.1f}m",
+            )
+            while next_scan_log <= files_done:
+                next_scan_log += scan_log_every
+
         # Persist per-(author, file) rows for everything actually found.
         # "scanned-but-empty" rows (seen=0) are deliberately NOT cached:
         # next month's overlapping spiral may re-open files where this
@@ -1494,12 +1564,14 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
                     counts,
                     seen,
                 ))
-        # NOTE: we deliberately do NOT write pending_file_cache_rows here.
-        # The cache DB lives on NFS, which can corrupt under bursts of
-        # concurrent writes (SQLite + NFS + multiple writers is a known
-        # fragile combination). We accumulate per-file rows in memory and
-        # write them all in a single transaction at the end of
-        # label_location_month -- one cache write per task per month.
+        # Periodically persist the accumulated per-file rows (and any confident
+        # label details) once a buffer grows past CACHE_FLUSH_ROWS. This bounds
+        # peak memory and banks scan progress mid-month, so a wall-time kill no
+        # longer discards the whole month. Writes go to the year-sharded
+        # file_counts DBs (contention spread across years) plus the single label
+        # DB; DELETE-journal POSIX locks keep concurrent NFS writers safe.
+        if len(pending_file_cache_rows) >= CACHE_FLUSH_ROWS or len(to_cache_running) >= CACHE_FLUSH_ROWS:
+            _persist_caches()
 
         if files_since_flush < FLUSH_EVERY_N_RAW and files_remaining > 0:
             continue
@@ -1578,22 +1650,10 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
             to_cache_running[author] = detail
             n_cache_confident += 1
 
-    if to_cache_running:
-        cache_put_locations(CACHE_DB_PATH, to_cache_running)
-        cache_put_location_details(CACHE_DB_PATH, to_cache_running)
-        to_cache_running.clear()
-
-    # Per-(author, file) scan-state cache: persist ALL accumulated rows now
-    # in a single transaction. Doing this once per task (instead of after
-    # every scanned file) keeps the NFS-mediated write traffic low enough
-    # that the DB stays consistent under %25 concurrency. Within-month
-    # crash resilience is provided by the streaming source_row writer; on
-    # crash the cache for this task is lost, but the next month's
-    # overlapping-spiral re-scan is the only cost.
-    if pending_file_cache_rows:
-        cache_put_author_file_counts(CACHE_DB_PATH, pending_file_cache_rows)
-        n_file_cache_rows_written = len(pending_file_cache_rows)
-        pending_file_cache_rows.clear()
+    # Final persist of any remaining confident labels + per-file scan rows.
+    # Mid-month _persist_caches calls have already banked most of the work to
+    # the single label DB and the year-sharded file_counts DBs.
+    _persist_caches()
 
     n_dedup_authors = sum(1 for v in raw_overlap_seen_state.values() if v > 0)
     n_dedup_items = sum(int(v) for v in raw_overlap_seen_state.values())

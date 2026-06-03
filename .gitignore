@@ -20,6 +20,12 @@
 !data/data_relevance_ratings/**/*.csv
 !data/data_relevance_QAratings/**/*.csv
 
+# Local-only de-identification artifacts for the QA samples — NEVER commit.
+# Keys map the blinded random_id back to author/id/metadata; backups are the
+# pre-anonymization originals. Both still contain the stripped PII.
+data/data_relevance_QAratings_keys/
+data/data_relevance_QAratings_ORIGINAL_BACKUP/
+
 # trained models #
 models/
 

@@ -2,7 +2,7 @@
 
 # Import functions and objects
 from cli import get_args, MODELS_DIR, DATA_DIR
-from utils import parse_range, headers, check_reqd_files, log_report, log_error, get_last_source_row, detect_source_row
+from utils import parse_range, headers, check_reqd_files, log_report, log_error, get_last_source_row, detect_source_row, reraise_fatal
 
 # fasttext-wheel 0.9.2 calls np.array(probs, copy=False) inside its predict()
 # path, which raises ValueError under numpy 2.x. Patch np.array to fall back
@@ -187,9 +187,11 @@ def filter_language_file(file):
             # Return counters for overall statistics
             return filtered_counter, passed_counter, error_counter
     except Exception as e:
-        # Capture full traceback as string
-        tb_str = traceback.format_exc()
-        log_report(report_file_path, f"Fatal error during processing:\n{tb_str}")
+        # Fatal error mid-processing leaves a TRUNCATED output file; never
+        # swallow it (that would exit 0 / COMPLETED with partial data). Log an
+        # actionable message (OS I/O errors get errno detail) and re-raise so
+        # the task fails and any --dependency=afterok gate trips.
+        reraise_fatal(report_file_path, Path(file).name, e)
 
 ### Main execution
 

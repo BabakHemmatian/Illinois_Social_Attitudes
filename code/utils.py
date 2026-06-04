@@ -244,6 +244,41 @@ def log_report(report_file_path: Optional[str] = None, message: Optional[str] = 
     print(f"{timestamp} - {message}")
     sys.stdout.flush()
 
+
+def reraise_fatal(report_file_path: Optional[str], context: str, error: BaseException) -> None:
+    """Log a fatal processing error and RE-RAISE so the task exits non-zero.
+
+    Use this in a resource script's top-level processing handler instead of
+    logging-and-continuing. Swallowing an error there is dangerous: an OS I/O
+    error mid-write (e.g. ENOSPC / "Disk quota exceeded", errno 122) leaves a
+    TRUNCATED output file on disk while the task still exits 0 and shows as
+    COMPLETED in sacct -- silently corrupting that month's output. OS I/O
+    errors get a specific, actionable message; everything else gets a full
+    traceback. The log write may itself fail when the disk is full, so it is
+    guarded; the original exception is re-raised regardless, and its traceback
+    still reaches the Slurm .err file.
+
+    `context` is a human-readable label for the unit of work (filename or
+    group/years scope). Must be called from within an `except` block.
+    """
+    import traceback
+    if isinstance(error, OSError):
+        errno_val = getattr(error, "errno", None)
+        detail = os.strerror(errno_val) if errno_val is not None else str(error)
+        msg = (
+            f"[fatal] OS I/O error while processing {context} "
+            f"(errno={errno_val}: {detail}). Output is likely TRUNCATED and must "
+            f"be re-run. Re-raising to fail the task."
+        )
+    else:
+        msg = f"[fatal] Unexpected error while processing {context}:\n{traceback.format_exc()}"
+    try:
+        log_report(report_file_path, msg)
+    except Exception:
+        pass
+    raise error
+
+
 def log_error(
     function_name: str,
     file: str,

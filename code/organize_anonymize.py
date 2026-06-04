@@ -20,6 +20,7 @@ from utils import (
     find_latest_resource_dir,
     validate_resource_dir,
     get_last_source_row,
+    reraise_fatal,
 )
 
 ### Argument Handling
@@ -387,7 +388,7 @@ if __name__ == "__main__":
     try:
         organize_anonymize()
     except Exception as e:
-        log_report(report_file_path, f"Fatal error during anonymization: {e}")
+        reraise_fatal(report_file_path, "organize_anonymize", e)
 
     total_time = (time.time() - overall_start_time) / 60
 

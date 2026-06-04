@@ -2,7 +2,7 @@
 
 # Import functions and objects
 from cli import get_args, DATA_DIR, PROJECT_ROOT
-from utils import parse_range, log_report, log_error, load_terms, groups, check_reqd_files, get_last_source_row, detect_source_row
+from utils import parse_range, log_report, log_error, load_terms, groups, check_reqd_files, get_last_source_row, detect_source_row, reraise_fatal
 
 # Import Python packages
 import os, time
@@ -309,6 +309,6 @@ if __name__ == "__main__":
     try:
         filter_keyword_adv_parallel()
     except Exception as e:
-        log_report(report_file_path, f"Fatal error during processing [{ENGINE}]: {e}")
+        reraise_fatal(report_file_path, f"filter_keywords_adv {group} {args.years} [{ENGINE}]", e)
     total_time = (time.time() - overall_start_time) / 60
     log_report(report_file_path, f"Advanced keyword filtering for {group} for {args.years} finished in {total_time:.2f} minutes [{ENGINE}]")

@@ -9,7 +9,8 @@ from utils import (
     check_reqd_files,
     find_latest_resource_dir,
     validate_resource_dir,
-    detect_reddit_folder_type
+    detect_reddit_folder_type,
+    reraise_fatal,
 )
 
 # import Python packages
@@ -482,7 +483,7 @@ if __name__ == "__main__":
     try:
         organize_types_parallel()
     except Exception as e:
-        log_report(report_file_path, f"Fatal error during type integration: {e}")
+        reraise_fatal(report_file_path, "organize_types integration", e)
 
     total_time = (time.time() - overall_start_time) / 60
 

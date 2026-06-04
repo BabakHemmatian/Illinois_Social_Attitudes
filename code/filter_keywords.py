@@ -16,7 +16,7 @@ from pathlib import Path
 
 # Import functions and objects from local modules
 from cli import get_args, PROJECT_ROOT,RAW_DIR, DATA_DIR
-from utils import load_terms, groups, headers, parse_range, log_report, log_error, get_last_source_row
+from utils import load_terms, groups, headers, parse_range, log_report, log_error, get_last_source_row, reraise_fatal
 
 ### Argument handling
 
@@ -328,7 +328,7 @@ if __name__ == "__main__":
     try:
         filter_keyword_parallel()
     except Exception as e:
-        log_report(report_file_path, f"Fatal error during processing: {e}")
+        reraise_fatal(report_file_path, f"filter_keywords {group} {args.years}", e)
 
     total_time = (time.time() - overall_start_time) / 60
 

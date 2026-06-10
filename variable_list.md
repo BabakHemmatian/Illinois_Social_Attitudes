@@ -1,6 +1,6 @@
 # Information about Corpus Variables 
 
-Each row in ISAAC represents a Reddit submission or comment associated with its target social group. Below you can find definitions and additional information about the variables included with ISAAC for each post, organized based on the columns within the data files. If you have any questions or concerns about the corpus contents, please write to [Babak Hemmatian](mailto:bhemmatian2@unl.edu).
+Each row in ISAAC represents a Reddit submission or comment associated with its target social group. Below you can find definitions and additional information about the variables included with ISAAC for each post, organized based on the columns within the data files. If you have any questions or concerns about the corpus contents, please write to [Babak Hemmatian, Ph.D](mailto:babak.hemmatian@gmail.com).
 
 1. **id**: a Reddit submission or comment's unique identifier. 
 2. **parent id**: the unique identifier for the submission under which a comment appears.

@@ -10,7 +10,7 @@ Defective
 Cripple
 Handicap
 Paretic
-\bblind(?!er\b|ly\b|ing\b|age\b|side\b|fold\b|\s+(?:guardian|with|review|trial|pick|controlled)\b)
+\bblind(?!er\b|ly\b|ing\b|age\b|side\b|fold\b|s\b|\s+(?:guardian|with|review|trial|pick|controlled|faith|followers?|item|items|spot|spots|date|dates|eye|loyalty|obedience|allegiance|devotion|adherence|rage|luck|trust|leap|panic|justice|ambition|audition|casting|box|tasting|taste)\b)
 Deaf
 visually-impaired
 Paraly[sz]e
@@ -28,7 +28,7 @@ Midget
 Munchkin
 Mute
 Mutant
-Vegetable
+\bvegetable(?!s\b|[-\s]+(?:oil|garden|gardens|soup|patch|stock|broth|juice|seeds?|peeler|steamer|matter|plot|stand|market|soups?|curry|stew|dish|dishes|farm)\b)
 \bvegetative[-\s]?state\b
 Gimp
 Stump

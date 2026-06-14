@@ -6,14 +6,16 @@
 
 This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, generalization, sentiment, emotions and state-level US location mapping. The resources are designed to be easily adapted for developing similar datasets targeting other distinctions (see [Adaptations](#adaptations)). 
 
-**Corpus size (comments): 554,464,184 posts**
+**ATTENTION:** By using this repository or the associated data and tools you agree to the [Terms of Use](./Terms_of_Use.md). 
+
+**Corpus size (comments): 466,041,060 posts**
 
 **Corpus size (submissions): 66,159,494 posts**
 
-**Corpus size (combined): 620,623,678 posts**
+**Corpus size (combined): 532,200,554 posts**
 
-![Number of documents (comments + submissions) per social distinction. Each bar stacks comments (bottom) and submissions (top); the combined total is annotated above each bar. sexuality (gay-straight; 67,924,785 comments + 12,014,516 submissions = 79,939,301); race (Black-White; 135,912,999 + 10,777,312 = 146,690,311); age (young-old; 250,834,691 + 29,411,923 = 280,246,614); ability (abled-disabled; 20,342,248 + 3,672,777 = 24,015,025); weight (fat-thin; 17,193,412 + 5,165,709 = 22,359,121); skin_tone (dark-light; 62,256,049 + 5,117,257 = 67,373,306)](./freq_aggregate.png)
-![Number of documents per month over time for all distinctions, pooling comments and submissions per distinction. Submission monthly counts are exact; the monthly comment series is estimated by digitizing the previous comments-only figure (each per-distinction digitized total is within ~1-5% of the authoritative comment total) and will be replaced with exact monthly counts once available.](./line_overlay_distinctions.png)
+![Number of documents (comments + submissions) per social distinction. Each bar stacks comments (bottom) and submissions (top); the combined total is annotated above each bar. sexuality (gay-straight; 67,699,057 comments + 12,014,516 submissions = 79,713,573); race (Black-White; 74,270,404 + 10,777,312 = 85,047,716); age (young-old; 250,834,691 + 29,411,923 = 280,246,614); ability (abled-disabled; 19,494,449 + 3,672,777 = 23,167,226); weight (fat-thin; 17,193,412 + 5,165,709 = 22,359,121); skin_tone (dark-light; 36,549,047 + 5,117,257 = 41,666,304)](./freq_aggregate.png)
+![Number of documents per month over time for all distinctions, pooling comments and submissions per distinction. Counts are exact monthly row counts (proper CSV parsing) from the final curated data for each set.](./line_overlay_distinctions.png)
 
 ## Corpus Access
 

@@ -1,6 +1,6 @@
 # Information about Corpus Variables 
 
-Each row in ISAAC represents a Reddit submission or comment associated with its target social group. Below you can find definitions and additional information about the variables included with ISAAC for each post, organized based on the columns within the data files. If you have any questions or concerns about the corpus contents, please write to [Babak Hemmatian](mailto:bhemmatian2@unl.edu).
+Each row in ISAAC represents a Reddit submission or comment associated with its target social group. Below you can find definitions and additional information about the variables included with ISAAC for each post, organized based on the columns within the data files. If you have any questions or concerns about the corpus contents, please write to [Babak Hemmatian, Ph.D](mailto:babak.hemmatian@gmail.com).
 
 1. **id**: a Reddit submission or comment's unique identifier. 
 2. **parent id**: the unique identifier for the submission under which a comment appears.
@@ -32,11 +32,16 @@ Each row in ISAAC represents a Reddit submission or comment associated with its 
 
 27-34. **[attribute]\_[value]\_[proportion]**: Similar to 19-26, but showing the proportion of clauses that are of a certain type, rather than the frequency.
 
-35-54. **[model_no]_[emotion]**: A 0-1 score from the ```[model_no]``` AI model for how much the text represents the specified ```[emotion]```. More information about models 1-3 can be found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base). 
+35-54. **[model_no]_[emotion]**: A 0-1 score from the ```[model_no]``` AI model for how much the text represents the specified ```[emotion]```. More information about models 1-3 can be found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
+
 55. **location**: The user's home location based on a weighted, hierarchical model of their Reddit history (word usage, subreddit activity and post timestamps). At the coarsest level, it separates 'US' from 'Non-US' users. Non-US users are further divided into 'ASIA-OCEANIA','AMERICAS','AFRICA' and 'EUROPE' subgroups. US users are divided down to the state level using two letter codes (e.g., AK for Arkansas). If confidence thresholds are not met for predictions at a finer level, the higher level label is listed. If no high-confidence labels could be assigned, this field says UNK for 'unknown'. 
+
 56. **location_prob**: The model-assigned probability for the label in column 55. Empty if assigned location is UNK. 
+
 57. **contender_location**: The second-most likely label for the user's home location per the model. Could be the top non-UNK label if the assigned location is UNK. 
+
 58. **contender_location_prob**: The model-assigned probability for the contender location in column 57.
+
 59. **type**: The Reddit post type (comment or submission) that represents the current row's entry. 
 
  <figure>

@@ -2,40 +2,81 @@
 #SBATCH --mail-user=babak.hemmatian@stonybrook.edu
 #SBATCH --mail-type=END,FAIL
 #SBATCH --time=96:00:00
-#SBATCH --mem=32G
-# --cpus-per-task=8
+#SBATCH --mem=48G
+#SBATCH --cpus-per-task=8
 #SBATCH --export=ALL
 
 set -euo pipefail
 
-# Activate the project's conda env (the README documents creating one named
-# ISAAC). On HPC clusters with Environment Modules / Lmod, 'module load conda'
-# is tried first; on clusters where conda is already on PATH (system install
-# or user-init in ~/.bashrc), the module step is a silent no-op. The activate
-# step is what actually puts the project's python on PATH, so an sbatch
-# launched from any shell (interactive or not) works without the caller
-# having to 'conda activate ISAAC' first.
+# Activate the project's ISAAC conda env on whatever node Slurm picked.
+#
+# defq is heterogeneous: h100/orion can see the shared miniforge3 base on
+# /shared, but the quadro*/tesla* nodes do NOT mount /shared at all, so no
+# `conda` is reachable there and the old "module load / source /shared" path
+# hard-failed the instant a task landed on one of them. The env itself lives
+# under $HOME (~/.conda/envs/ISAAC), which IS mounted on every node and is
+# self-contained, so we can always activate it -- with `conda` when a base is
+# reachable, or directly off $HOME when it is not.
+#
+# Order: (1) module load conda, (2) source the shared base, then EITHER
+# `conda activate ISAAC` if we now have conda, OR a direct $HOME activation
+# fallback (prepend the env bin to PATH + run its activate.d hooks). $HOME is
+# the only path guaranteed visible cluster-wide, so the fallback is what makes
+# placement on quadro*/tesla* work instead of failing.
+ISAAC_ENV="${HOME}/.conda/envs/ISAAC"
+
 if command -v module >/dev/null 2>&1; then
     module load conda >/dev/null 2>&1 || true
 fi
 if ! command -v conda >/dev/null 2>&1; then
-    echo "[slurm.sh] ERROR: 'conda' not found on PATH. See README.md for ISAAC env setup." >&2
+    if [[ -f /shared/software/miniforge3/etc/profile.d/conda.sh ]]; then
+        # shellcheck disable=SC1091
+        source /shared/software/miniforge3/etc/profile.d/conda.sh
+    fi
+fi
+
+# Conda's activation hooks (and the env's activate.d scripts) reference some
+# unset shell variables (e.g. ADDR2LINE in binutils' hook), which trips
+# 'set -u'. Disable nounset around activation, then restore it.
+set +u
+if command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook)"
+    # Pop any conda envs inherited from the submitter shell (--export=ALL can
+    # propagate CONDA_DEFAULT_ENV/CONDA_PREFIX). Without this, 'conda activate
+    # ISAAC' short-circuits as a no-op when ISAAC is already marked active, and
+    # ISAAC/bin can end up behind miniforge3/bin in PATH -> wrong python.
+    while [[ "${CONDA_SHLVL:-0}" -gt 0 ]]; do
+        conda deactivate
+    done
+    conda activate ISAAC
+elif [[ -x "${ISAAC_ENV}/bin/python" ]]; then
+    # No conda base reachable on this node (e.g. /shared not mounted on
+    # quadro*/tesla*). The ISAAC env under $HOME is self-contained, so put it
+    # on PATH directly and run its activate.d hooks for any lib/CUDA env vars.
+    echo "[slurm.sh] conda base unreachable on $(hostname); activating ISAAC directly from ${ISAAC_ENV}" >&2
+    export CONDA_PREFIX="${ISAAC_ENV}"
+    export PATH="${ISAAC_ENV}/bin:${PATH}"
+    if [[ -d "${ISAAC_ENV}/etc/conda/activate.d" ]]; then
+        for _f in "${ISAAC_ENV}"/etc/conda/activate.d/*.sh; do
+            [[ -r "${_f}" ]] && source "${_f}"
+        done
+        unset _f
+    fi
+else
+    echo "[slurm.sh] ERROR: no conda base reachable AND ${ISAAC_ENV}/bin/python missing on $(hostname)." >&2
     exit 1
 fi
-# Conda's activation hooks reference some unset shell variables (e.g.
-# ADDR2LINE in binutils' activation hook), which trips 'set -u'. Disable
-# nounset around the activation, then restore it.
-set +u
-eval "$(conda shell.bash hook)"
-# Pop any conda envs inherited from the submitter shell (--export=ALL can
-# propagate CONDA_DEFAULT_ENV/CONDA_PREFIX). Without this, 'conda activate
-# ISAAC' short-circuits as a no-op when ISAAC is already marked active, and
-# ISAAC/bin can end up behind miniforge3/bin in PATH -> wrong python.
-while [[ "${CONDA_SHLVL:-0}" -gt 0 ]]; do
-    conda deactivate
-done
-conda activate ISAAC
 set -u
+
+# Guard against a silently-wrong python (e.g. a system python on PATH): the
+# active interpreter must be the ISAAC env's. Fail loudly here rather than
+# deep inside label_location.py with a confusing ImportError.
+ACTIVE_PY="$(command -v python || true)"
+case "${ACTIVE_PY}" in
+    "${ISAAC_ENV}/bin/"*) : ;;
+    */ISAAC/bin/*) : ;;
+    *) echo "[slurm.sh] ERROR: active python is '${ACTIVE_PY}', not the ISAAC env on $(hostname)." >&2; exit 1 ;;
+esac
 
 export PYTHONUNBUFFERED=TRUE
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
@@ -135,6 +176,12 @@ fi
 # Only pass --array if Slurm provided it
 if [[ -n "${SLURM_ARRAY_TASK_ID:-}" ]]; then
   ARGS+=( "--array" "${SLURM_ARRAY_TASK_ID}" )
+fi
+
+# Forward the optional spread schedule (file_list-index permutation). When set,
+# the python script uses the array slot to index this list instead of file_list.
+if [[ -n "${array_order:-}" ]]; then
+  ARGS+=( "--array-order" "${array_order}" )
 fi
 
 # Conditionally add --years (and enforce if required)

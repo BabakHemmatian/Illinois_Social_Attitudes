@@ -1685,14 +1685,42 @@ def label_location_parallel() -> None:
     array_idx = getattr(args, "array", None)
     if array_idx is not None:
         try:
-            idx = int(array_idx)
+            slot = int(array_idx)
         except (ValueError, TypeError):
             log_report(report_file_path, f"[error] --array '{array_idx}' is not an integer; aborting")
             raise SystemExit(2)
+        # Optional spread schedule: --array-order remaps the SLURM array slot to
+        # a file_list index, so the months running concurrently under %cap are
+        # chronologically far apart. Disjoint spirals route their cache writes to
+        # different year-sharded file_counts DBs (less SQLite lock contention)
+        # and avoid two concurrent tasks decompressing the same overlapping raw
+        # .zst files. Accepts a path to a file of indices or an inline
+        # comma/whitespace-separated list; absent -> slot indexes file_list
+        # directly (original behavior).
+        order_spec = getattr(args, "array_order", None)
+        if order_spec:
+            raw = order_spec
+            if os.path.exists(order_spec):
+                with open(order_spec) as fh:
+                    raw = fh.read()
+            try:
+                order = [int(tok) for tok in re.split(r"[,\s]+", raw.strip()) if tok]
+            except ValueError:
+                log_report(report_file_path, f"[error] --array-order '{order_spec}' is not a list of ints; aborting")
+                raise SystemExit(2)
+            if not (0 <= slot < len(order)):
+                log_report(
+                    report_file_path,
+                    f"[error] --array slot {slot} out of range for --array-order (len={len(order)}); aborting",
+                )
+                raise SystemExit(2)
+            idx = order[slot]
+        else:
+            idx = slot
         if not (0 <= idx < len(file_list)):
             log_report(
                 report_file_path,
-                f"[error] --array {idx} out of range (file_list size={len(file_list)}); aborting",
+                f"[error] resolved index {idx} (slot {slot}) out of range (file_list size={len(file_list)}); aborting",
             )
             raise SystemExit(2)
         try:

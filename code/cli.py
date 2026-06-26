@@ -464,9 +464,52 @@ if __name__ == "__main__":
             cmd_parts.extend(["--array", array_flag])
         cmd_parts.append(str(slurm_script))
 
-        cmd = _shell_join(cmd_parts)
-        print(f"[cli] submitting: {cmd}")
-        os.system(cmd)
+        # Submit the array, capturing its job id (--parsable) so label_location
+        # can chain an automatic post-array merge below.
+        submit_parts = cmd_parts[:1] + ["--parsable"] + cmd_parts[1:]
+        print(f"[cli] submitting: {_shell_join(submit_parts)}")
+        res = subprocess.run(submit_parts, capture_output=True, text=True)
+        sys.stdout.write(res.stdout)
+        if res.returncode != 0:
+            sys.stderr.write(res.stderr)
+            raise SystemExit(res.returncode)
+        array_job_id = res.stdout.strip().splitlines()[-1].split(";")[0] if res.stdout.strip() else ""
+
+        # label_location: automatically queue a SINGLE post-array merge that
+        # folds the per-task scan-state shards (written automatically by every
+        # array task) into the canonical year DBs. --dependency=afterany so it
+        # ALSO runs after wall-time-killed tasks -- those killed-task shards are
+        # exactly the banked progress we must rescue, and an in-task merge would
+        # miss them. It is a single writer with nothing else running, so no NFS
+        # write contention; LABEL_LOCATION_MERGE=1 puts label_location.py into
+        # merge mode (GPU-free, no --array). The merge job's own guard waits out
+        # any other still-running same-type array.
+        if args.resource == "label_location" and array_flag and array_job_id:
+            # slurm.sh requires resource/type/years/batchsize for label_location
+            # (and label_location.py parses them at import); merge mode then
+            # ignores everything but the cache paths. Forward exactly those.
+            merge_keys = ("resource", "type", "group", "years", "batchsize")
+            merge_vars = [v for v in slurm_vars if v.split("=", 1)[0] in merge_keys]
+            merge_vars.append("LABEL_LOCATION_MERGE=1")
+            merge_tag = f"{job_tag}__merge"
+            merge_parts = [
+                "sbatch", "--parsable",
+                "--job-name", merge_tag,
+                "--output", str(log_dir / f"{merge_tag}__%j.out"),
+                "--error", str(log_dir / f"{merge_tag}__%j.err"),
+                "--export", f"ALL,{','.join(merge_vars)}",
+                "--dependency", f"afterany:{array_job_id}",
+                "--mem", "8G", "--cpus-per-task", "1",
+                str(slurm_script),
+            ]
+            print(f"[cli] queuing post-array merge: {_shell_join(merge_parts)}")
+            mres = subprocess.run(merge_parts, capture_output=True, text=True)
+            sys.stdout.write(mres.stdout)
+            if mres.returncode != 0:
+                sys.stderr.write("[cli] WARNING: post-array merge submit failed; run it manually after the array:\n")
+                sys.stderr.write("[cli]   LABEL_LOCATION_MERGE=1 python code/label_location.py "
+                                 f"-r label_location -t {args.type} -g {args.group} -y {args.years} -b {args.batchsize}\n")
+                sys.stderr.write(mres.stderr)
     else:
         # Robust path to the resource script inside code/
         resource_script = CODE_DIR / f"{args.resource}.py"

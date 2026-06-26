@@ -221,6 +221,11 @@ fi
 if [[ -n "${maxradius:-}" ]]; then
   ARGS+=( "--maxradius" "${maxradius}" )
 fi
+# NOTE: label_location's writer-sharded scan-state turns on automatically for
+# SLURM array tasks (it reads SLURM_ARRAY_TASK_ID), and its post-array merge runs
+# via the LABEL_LOCATION_MERGE env var that cli.py sets on the auto-submitted
+# dependency job -- both are read directly by label_location.py, so no ARGS
+# forwarding is needed here.
 
 # Update the visible Slurm job name for array tasks so squeue reflects the concrete month span.
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then

@@ -7,6 +7,8 @@ import os
 import pickle
 import re
 import sqlite3
+import subprocess
+import sys
 import time
 import traceback
 from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
@@ -24,6 +26,8 @@ from utils import (
     _sqlite_retry_on_locked,
     build_author_feature_map_from_raw_zst_with_seen,
     iter_author_feature_map_streaming,
+    merge_author_file_counts_shards,
+    location_scan_state_shard_root,
     init_author_file_counts_cache,
     init_author_file_counts_caches,
     cache_get_author_file_counts,
@@ -190,6 +194,47 @@ init_location_cache(LABEL_DB_PATH)
 # Year-sharded file_counts DBs are pre-created by cli.py for the requested years
 # and lazily created on write for any spiral year outside that set.
 report_file_path = os.path.join(output_path, "report_label_location.csv")
+
+# --- Writer-sharded scan-state (automatic for SLURM array tasks) -----------
+# When running as a SLURM array task, write per-(author, file) scan-state to a
+# PRIVATE shard DB under CACHE_DIR/shards/<run_id>/ instead of the shared
+# canonical year DBs, and checkpoint after EVERY raw file. No two tasks ever
+# write the same file, so the NFS POSIX-lock contention/corruption risk is gone
+# and scan progress is banked against the 4-day wall-time kill. cli.py
+# auto-submits a single post-array merge job (afterany, LABEL_LOCATION_MERGE=1)
+# that folds the shards into the canonical year DBs idempotently (INSERT OR
+# IGNORE on immutable (author, raw_file) rows) once the whole array is terminal.
+#
+# Sharding keys off the array context, not a flag or a year: the risks it
+# addresses -- concurrent canonical writers and wall-time kills -- exist for
+# EVERY array task. Early/small months shard too, but finish fast and merge
+# trivially. A non-array (local) run writes canonical directly (single writer,
+# safe) exactly as before. READS always use the canonical CACHE_DIR, so a task
+# only sees prior progress after the merge has run.
+SHARD_CACHE = bool(os.environ.get("SLURM_ARRAY_TASK_ID"))
+
+
+def _compute_run_id() -> str:
+    """Unique per task per submission, so a re-run of the same month writes a
+    NEW shard dir rather than colliding with a prior (e.g. wall-time-killed)
+    run -- both dirs then merge idempotently. SLURM requeue keeps the same job
+    id, so a requeued attempt correctly appends to its own existing shard."""
+    aj = os.environ.get("SLURM_ARRAY_JOB_ID")
+    at = os.environ.get("SLURM_ARRAY_TASK_ID")
+    if aj and at:
+        return f"{aj}_{at}"
+    jid = os.environ.get("SLURM_JOB_ID")
+    if jid:
+        return str(jid)
+    return f"local-{os.getpid()}"
+
+
+RUN_ID = _compute_run_id()
+# Scan-state WRITE target. cache_put_author_file_counts_sharded year-shards
+# within whatever base dir it is handed, so flipping this dir is the entire
+# switch between canonical (legacy) and per-task-shard writes. Reads always go
+# to the canonical CACHE_DIR.
+SCAN_STATE_WRITE_DIR = (CACHE_DIR / "shards" / RUN_ID) if SHARD_CACHE else CACHE_DIR
 
 
 ### Local helpers aligned with train_location_preprocess.py
@@ -1332,7 +1377,8 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
         f"raw_type={RAW_TYPE} scan_months={len(scan_months)} months_with_files={months_with_files} "
         f"raw_files_in_spiral={len(raw_files)} raw_files_to_scan={len(files_to_scan)} "
         f"samples_per_author={max_items_per_author} batch_size={batch_size} max_files_to_scan={max_files_to_scan} max_radius={max_radius} "
-        f"local_seen_bias_threshold={LOCAL_SEEN_BIAS_THRESHOLD} flush_every_n_raw={FLUSH_EVERY_N_RAW}",
+        f"local_seen_bias_threshold={LOCAL_SEEN_BIAS_THRESHOLD} flush_every_n_raw={FLUSH_EVERY_N_RAW} "
+        f"shard_cache={SHARD_CACHE} run_id={RUN_ID}",
     )
 
     # Pass 2: seed curated features ONLY for the authors that still need
@@ -1484,21 +1530,35 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
     pending_file_cache_rows: List[Tuple[str, str, Dict[str, int], int]] = []
     n_file_cache_rows_written = 0
 
-    def _persist_caches() -> None:
-        """Write accumulated confident label details (single label DB) and
-        per-(author, file) scan rows (year-sharded file_counts DBs), then clear
-        the buffers. Called periodically mid-month to bound memory and bank
-        progress against a wall-time kill, and once more at end-of-month."""
-        nonlocal n_file_cache_rows_written
+    def _persist_labels() -> None:
+        """Write accumulated confident label details to the single canonical
+        label DB. Low-frequency by design (confident authors per month), so it
+        stays on canonical even in --shard-cache mode -- labels are cheap to
+        regenerate, and keeping the write cadence coarse avoids adding contention
+        on the one shared label DB."""
         if to_cache_running:
             cache_put_locations(LABEL_DB_PATH, to_cache_running)
             cache_put_location_details(LABEL_DB_PATH, to_cache_running)
             to_cache_running.clear()
+
+    def _persist_scan_state() -> None:
+        """Write accumulated per-(author, file) scan rows. Routes to the
+        canonical year DBs normally, or to this task's private shard dir under
+        --shard-cache (SCAN_STATE_WRITE_DIR). This is the expensive-to-recompute
+        progress we bank against the wall-time kill; in shard mode it is flushed
+        after every raw file (no contention on a private DB)."""
+        nonlocal n_file_cache_rows_written
         if pending_file_cache_rows:
             n_file_cache_rows_written += cache_put_author_file_counts_sharded(
-                str(CACHE_DIR), RAW_TYPE, pending_file_cache_rows
+                str(SCAN_STATE_WRITE_DIR), RAW_TYPE, pending_file_cache_rows
             )
             pending_file_cache_rows.clear()
+
+    def _persist_caches() -> None:
+        """Bank both buffers (labels + scan-state). Called at the coarse
+        mid-month threshold and once at end-of-month."""
+        _persist_labels()
+        _persist_scan_state()
     # Per-author remaining quota: total sampling cap for this run is
     # max_items_per_author MINUS whatever the persistent cache already
     # contributed for this author. Restores the original semantics that the
@@ -1564,12 +1624,22 @@ def label_location_month(curated_csv_path: str) -> Tuple[str, int, int, int]:
                     counts,
                     seen,
                 ))
+        # --shard-cache: checkpoint scan-state after EVERY raw file. Writes go
+        # to this task's private shard DB, so there is no NFS lock contention to
+        # amortize -- finishing one of the multi-GB spiral files and dying to the
+        # wall-time limit now banks that file's scan-state, and the next window
+        # (after a merge into canonical) skips it. Labels stay on the coarse
+        # threshold below.
+        if SHARD_CACHE and pending_file_cache_rows:
+            _persist_scan_state()
         # Periodically persist the accumulated per-file rows (and any confident
         # label details) once a buffer grows past CACHE_FLUSH_ROWS. This bounds
         # peak memory and banks scan progress mid-month, so a wall-time kill no
-        # longer discards the whole month. Writes go to the year-sharded
-        # file_counts DBs (contention spread across years) plus the single label
-        # DB; DELETE-journal POSIX locks keep concurrent NFS writers safe.
+        # longer discards the whole month. In canonical mode writes go to the
+        # year-sharded file_counts DBs (contention spread across years) plus the
+        # single label DB; DELETE-journal POSIX locks keep concurrent NFS writers
+        # safe. In shard mode the scan-state buffer was just drained above, so
+        # this mainly flushes labels at the threshold.
         if len(pending_file_cache_rows) >= CACHE_FLUSH_ROWS or len(to_cache_running) >= CACHE_FLUSH_ROWS:
             _persist_caches()
 
@@ -1778,7 +1848,74 @@ def label_location_parallel() -> None:
     log_report(report_file_path, f"[summary] total rows written: {total_rows:,} total authors: {total_authors:,} raw-scanned authors: {total_raw:,}")
 
 
+def _label_location_array_running() -> bool:
+    """True if any of this user's SLURM jobs is a RUNNING label_location ARRAY
+    (any curated type or social group) that could still be writing scan-state
+    shards. NOT keyed on curated type: every label_location run defaults to
+    RAW_TYPE=comments (a submissions run locates submitters from their comment
+    history), so comments AND submissions arrays write into the SAME shared
+    author_file_counts_<RAW_TYPE>_*.sqlite shards. A merge therefore has to wait
+    out EVERY running array, or it could fold/archive another array's in-flight
+    shard dir. Merge jobs themselves (name '...__merge') are excluded so a merge
+    never blocks on itself. Best-effort: squeue absent -> False."""
+    user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
+    try:
+        out = subprocess.run(
+            ["squeue", "-h", "-u", user, "-o", "%j %t"],
+            capture_output=True, text=True, timeout=30,
+        )
+    except (FileNotFoundError, subprocess.SubprocessError):
+        return False
+    if out.returncode != 0:
+        return False
+    for line in out.stdout.splitlines():
+        parts = line.split()
+        if (len(parts) >= 2 and parts[0].startswith("label_location__")
+                and not parts[0].endswith("__merge") and parts[-1] == "R"):
+            return True
+    return False
+
+
+def run_shard_merge() -> None:
+    """Merge mode (env LABEL_LOCATION_MERGE=1; auto-submitted by cli.py as an
+    afterany post-array job): fold this raw type's per-task scan-state shards
+    into the canonical year DBs, then exit. Idempotent and resume-safe (immutable
+    (author, raw_file) rows, INSERT OR IGNORE), so re-running is harmless and
+    orphaned shards from a wall-time-killed run still contribute.
+
+    Defers (exits 0 without merging) while ANY other label_location array is
+    still running -- those arrays share the same RAW_TYPE shards, so the
+    last-finishing array's merge folds everyone's accumulated shards (the
+    deferred shards stay on disk, nothing is lost). LABEL_LOCATION_MERGE_FORCE=1
+    overrides."""
+    shards_root = location_scan_state_shard_root(str(CACHE_DIR))
+    if not os.path.isdir(shards_root):
+        print(f"[merge] nothing to do: no shards dir at {shards_root}")
+        return
+    force = bool(os.environ.get("LABEL_LOCATION_MERGE_FORCE"))
+    if not force and _label_location_array_running():
+        print(
+            "[merge] DEFERRING: another label_location array is still RUNNING and writing "
+            "shards (all runs share the RAW_TYPE shards). Its own post-array merge will fold "
+            "everything once it is the last one finished; shards stay on disk meanwhile. "
+            "Set LABEL_LOCATION_MERGE_FORCE=1 to merge now anyway."
+        )
+        return
+    print(f"[merge] folding shards under {shards_root} (type={RAW_TYPE}) into canonical {CACHE_DIR}")
+    stats = merge_author_file_counts_shards(str(CACHE_DIR), RAW_TYPE, archive=True)
+    print(
+        f"[merge] done: run_dirs={stats['run_dirs']} shard_dbs={stats['shard_dbs']} "
+        f"rows={stats['rows_merged']:,} skipped_active={stats['skipped_active']}"
+    )
+
+
 if __name__ == "__main__":
+    # Merge mode is a fast, GPU-free maintenance pass over the cache; short-
+    # circuit before the labeling pipeline (and its lazy model loading).
+    if os.environ.get("LABEL_LOCATION_MERGE"):
+        run_shard_merge()
+        raise SystemExit(0)
+
     overall = time.time()
     try:
         label_location_parallel()

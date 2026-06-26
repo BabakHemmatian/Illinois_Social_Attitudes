@@ -695,6 +695,55 @@ def iter_zst_json_lines(file_path: str | Path):
             except Exception:
                 continue
 
+# Pre-compiled byte pattern for the cheap author pre-filter below. Reddit
+# usernames contain no '"' or '\', so [^"\\]* captures the whole value; the
+# leading `"author":"` (note the colon) does NOT match the "author_fullname" /
+# "author_flair_*" keys, only the real author field.
+_AUTHOR_FIELD_RE = re.compile(rb'"author":"([^"\\]*)"')
+
+
+def iter_zst_json_lines_filtered(file_path: str | Path, target_authors):
+    """Like iter_zst_json_lines, but only fully JSON-parses lines whose author
+    is in `target_authors`, using a cheap byte-level pre-scan to skip the
+    (typically >99%) of lines belonging to non-target authors WITHOUT paying for
+    a full decode + json.loads.
+
+    This is the dominant raw-scan cost: a month file has hundreds of millions of
+    lines and a spiral wants a few hundred thousand authors, so parsing every
+    line just to discard it is what makes the scan take days. Skipping the parse
+    for non-target lines is a 10-50x single-threaded speedup (no GIL/process
+    complexity), proportional to how selective the author set is.
+
+    Correctness: the real top-level "author" field is one of the `"author":"..."`
+    byte occurrences on the line, so a target author's line is NEVER skipped (we
+    skip only when NO occurrence names a target). A line that merely *contains* a
+    target author inside body text is parsed and then correctly handled by the
+    caller's `author in file_targets` check on the real field -- a rare wasted
+    parse, never a wrong inclusion. With a falsy `target_authors` this degrades
+    to parsing every line (parity with iter_zst_json_lines)."""
+    file_path = str(file_path)
+    targets_b = {a.encode("utf-8") for a in target_authors} if target_authors else None
+    with open(file_path, "rb") as fh:
+        dctx = zstandard.ZstdDecompressor(max_window_size=2 ** 31)
+        stream_reader = dctx.stream_reader(fh, read_across_frames=True)
+        buffered = io.BufferedReader(stream_reader, buffer_size=1 << 20)
+        for raw in buffered:
+            if not raw:
+                continue
+            if targets_b is not None:
+                hit = False
+                for m in _AUTHOR_FIELD_RE.finditer(raw):
+                    if m.group(1) in targets_b:
+                        hit = True
+                        break
+                if not hit:
+                    continue
+            try:
+                yield json.loads(raw)
+            except Exception:
+                continue
+
+
 # Stream one or more raw .zst month files and build sparse features per author.
 # NOTE: Only collects up to max_items_per_author posts/comments per author to cap work. For submissions, text is title + selftext.
 # NOTE: Returns author -> counts dict with keys w:/s:/h:
@@ -776,7 +825,11 @@ def _scan_raw_file_chunk(
         file_seen: Dict[str, int] = {}
         file_overlap_counts: Dict[str, Dict[str, int]] = {}
         file_overlap_seen: Dict[str, int] = {}
-        for obj in iter_zst_json_lines(rf):
+        # Pre-filter on the author field at the byte level so we skip the full
+        # JSON parse for the ~99%+ of lines whose author isn't in file_targets.
+        # The `author not in file_targets` guard below still runs, so rare
+        # false-positive matches (a target name inside body text) stay correct.
+        for obj in iter_zst_json_lines_filtered(rf, file_targets):
             author = (obj.get("author") or "").strip()
             if not author or author not in file_targets:
                 continue
@@ -1357,6 +1410,116 @@ def _zstd_decompress_json(blob: bytes) -> Any:
     dctx = zstandard.ZstdDecompressor()
     raw = dctx.decompress(blob)
     return json.loads(raw)
+
+
+# ---------------------------------------------------------------------------
+# Writer-sharded scan-state + idempotent merge
+#
+# Under high write frequency (per-file checkpointing) and many concurrent array
+# tasks, writing the shared canonical author_file_counts year-DBs over NFS
+# raises both lock contention and (if NFS POSIX locks are ever flaky) corruption
+# exposure. The fix: each task writes its (author, raw_file) rows to a PRIVATE
+# shard DB under <cache_dir>/shards/<run_id>/, so no two processes ever write
+# the same file -- locking is never engaged. A later merge pass folds the shards
+# into the canonical year DBs.
+#
+# The merge is idempotent and resume-safe BECAUSE the rows are immutable
+# (author, raw_file) facts written with INSERT OR IGNORE: re-merging a shard,
+# merging overlapping shards from a re-run, or merging a half-finished
+# failed-run shard can never double-count. A shard from a wall-time-killed run
+# still contributes whatever fully-scanned files it banked -- nothing is wasted.
+# ---------------------------------------------------------------------------
+
+def iter_author_file_counts_rows(db_path: str, batch: int = 10000):
+    """Yield (author, raw_file, counts_dict, seen_count) for every row in a
+    shard's author_file_counts table, decompressing the stored counts blob."""
+    conn = sqlite3.connect(db_path, timeout=60)
+    try:
+        cur = conn.cursor()
+        cur.execute("SELECT author, raw_file, counts_blob, seen_count FROM author_file_counts")
+        while True:
+            chunk = cur.fetchmany(batch)
+            if not chunk:
+                break
+            for author, raw_file, blob, seen in chunk:
+                yield author, raw_file, _zstd_decompress_json(blob), int(seen)
+    finally:
+        conn.close()
+
+
+def location_scan_state_shard_root(cache_dir: str) -> str:
+    """Root dir holding per-task scan-state shards (and the merged/ archive)."""
+    return os.path.join(str(cache_dir), "shards")
+
+
+def merge_author_file_counts_shards(
+    canonical_cache_dir: str,
+    rtype: str,
+    shards_root: Optional[str] = None,
+    archive: bool = True,
+    min_age_seconds: float = 0.0,
+    now: Optional[float] = None,
+) -> Dict[str, int]:
+    """Fold per-task scan-state shards under <canonical_cache_dir>/shards/<run>/
+    into the canonical year-sharded author_file_counts DBs.
+
+    Idempotent and resume-safe (see module note): rows go through
+    cache_put_author_file_counts_sharded, which INSERT OR IGNOREs immutable
+    (author, raw_file) rows into the canonical year DBs. A run dir is archived
+    to shards/merged/<run> only after all its shard DBs are drained, so a crash
+    mid-merge just re-drains the un-archived remainder harmlessly on the next
+    call.
+
+    min_age_seconds: skip (do not merge/archive) run dirs whose newest shard was
+    modified within this window -- a coarse "looks still-active" guard. Default
+    0 (merge everything); the canonical contract is to run this while no
+    label_location array is writing.
+    """
+    import glob
+    import shutil
+
+    shards_root = shards_root or location_scan_state_shard_root(canonical_cache_dir)
+    archive_dir = os.path.join(shards_root, "merged")
+    stats: Dict[str, int] = {"run_dirs": 0, "shard_dbs": 0, "rows_merged": 0, "skipped_active": 0}
+    if not os.path.isdir(shards_root):
+        return stats
+
+    ref_now = now if now is not None else time.time()
+    for run_id in sorted(os.listdir(shards_root)):
+        if run_id == "merged":
+            continue
+        run_dir = os.path.join(shards_root, run_id)
+        if not os.path.isdir(run_dir):
+            continue
+        shard_dbs = sorted(glob.glob(os.path.join(run_dir, f"author_file_counts_{rtype}_*.sqlite")))
+        if not shard_dbs:
+            continue
+        if min_age_seconds > 0:
+            newest = max(os.path.getmtime(p) for p in shard_dbs)
+            if ref_now - newest < min_age_seconds:
+                stats["skipped_active"] += 1
+                continue
+        stats["run_dirs"] += 1
+        for shard_db in shard_dbs:
+            buf: list = []
+            for row in iter_author_file_counts_rows(shard_db):
+                buf.append(row)
+                if len(buf) >= 50000:
+                    stats["rows_merged"] += cache_put_author_file_counts_sharded(canonical_cache_dir, rtype, buf)
+                    buf = []
+            if buf:
+                stats["rows_merged"] += cache_put_author_file_counts_sharded(canonical_cache_dir, rtype, buf)
+            stats["shard_dbs"] += 1
+        if archive:
+            os.makedirs(archive_dir, exist_ok=True)
+            dest = os.path.join(archive_dir, run_id)
+            if os.path.exists(dest):
+                # A prior run_id collision (e.g. re-merge after a partial move):
+                # fold-in already happened, so just drop the now-redundant dir.
+                shutil.rmtree(run_dir, ignore_errors=True)
+            else:
+                shutil.move(run_dir, dest)
+    return stats
 
 
 # Returns Dict[author, (scanned_files: set[str], aggregated_counts: dict,

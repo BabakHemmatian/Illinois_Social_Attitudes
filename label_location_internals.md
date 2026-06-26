@@ -71,11 +71,11 @@ The relaxation for 2020+ roughly halves per-author sampling cost on the largest 
 
 ## Memory and disk budget
 
-**Per-month peak RAM** climbs to ~5–8 GB on the largest months (2021–2023) because of:
+**Per-month peak RAM** scales with the month's raw volume because of:
 - The curated CSV row pass.
 - Per-author count dictionaries during Pass 2 and Pass 3 aggregation.
 - The bundle of pickled logistic-regression models (~few hundred MB resident).
-SLURM batch tasks for `label_location` should request at least `--mem 16G`; the relaxed-band 2020+ tasks comfortably fit in that envelope, and the stringent-band early-corpus tasks use much less.
+Measured across ISAAC development runs (`comments`), per-task `MaxRSS` had a **median of ~19 GB and a maximum of ~35 GB**; the heaviest tasks are the high-volume months from 2018 onward, while small early-corpus months use only a few GB. Size `--mem` to the months you are processing: a `--mem 16G` request is enough for the stringent-band early-corpus months but OOMs on the high-volume later months — request `--mem 24G` (or more) for tasks covering 2018 and onward.
 
 **Persistent cache disk usage** is bounded by the cumulative cap: each author has at most `--maxitems` samples across the entire corpus regardless of how many months they appear in. Combined with only persisting rows where the author was actually found:
 - ~100–300 bytes per `author_file_counts` row after zstd compression.

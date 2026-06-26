@@ -252,6 +252,26 @@ def get_args(argv=None):
         help="Index from SLURM_ARRAY_TASK_ID; if set, process only that indexed file. If omitted, process all files."
     )
     argparser.add_argument(
+        "--dependency",
+        dest="dependency",
+        default=None,
+        help="Forwarded verbatim to sbatch --dependency (e.g. 'afterany:43472') "
+             "so this submission waits for another job to reach a terminal state "
+             "instead of running concurrently and adding contention."
+    )
+    argparser.add_argument(
+        "--array-order",
+        dest="array_order",
+        default=None,
+        help="Path to a file (or inline comma/space list) of file_list indices. "
+             "When set, the SLURM array slot indexes THIS list instead of "
+             "file_list directly, so concurrent tasks under %%cap can be spread "
+             "far apart (less cache-DB lock contention and no duplicate raw-file "
+             "decompression). The array span is auto-set to 0..len-1. Pass a "
+             "file path for SLURM runs (the value is forwarded via --export, "
+             "which cannot carry commas)."
+    )
+    argparser.add_argument(
         "--maxitems", "--max-items", "--max_items_per_author",
         dest="maxitems",
         type=int,
@@ -359,6 +379,17 @@ if __name__ == "__main__":
                 months = array_span_from_years(args.years)
                 num_jobs = ceil(months / args.files_per_job)
                 array_spec = f"0-{num_jobs - 1}"
+                # --array-order overrides the span: one slot per listed index.
+                if getattr(args, "array_order", None):
+                    order_path = Path(args.array_order)
+                    if order_path.exists():
+                        raw = order_path.read_text()
+                    else:
+                        raw = args.array_order
+                    n_order = len([t for t in re.split(r"[,\s]+", raw.strip()) if t])
+                    if n_order:
+                        array_spec = f"0-{n_order - 1}"
+                    slurm_vars.append(f"array_order={args.array_order}")
 
         if args.batchsize:
             slurm_vars.append(f"batchsize={args.batchsize}")
@@ -412,6 +443,12 @@ if __name__ == "__main__":
             "--export", f"ALL,{','.join(slurm_vars)}",
         ]
 
+        # Optional Slurm dependency so a new chain waits for a running job to
+        # finish instead of adding concurrent load (e.g. afterany:<jobid> to
+        # start only once a prior array reaches a terminal state).
+        if getattr(args, "dependency", None):
+            cmd_parts.extend(["--dependency", str(args.dependency)])
+
         if args.resource in gpu_resources and use_gpu:
             cmd_parts.extend(["--gres", "gpu:1"])
 
@@ -448,6 +485,8 @@ if __name__ == "__main__":
         # Forward array index and location-labeling knobs when running locally
         if args.array is not None:
             cmd_parts.extend(["--array", str(args.array)])
+        if getattr(args, "array_order", None):
+            cmd_parts.extend(["--array-order", str(args.array_order)])
         if args.sample is not None:
             cmd_parts.extend(["-c", str(args.sample)])
         if args.target is not None:

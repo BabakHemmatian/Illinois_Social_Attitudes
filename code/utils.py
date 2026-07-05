@@ -166,58 +166,89 @@ def get_last_source_row(output_file_path: str | Path,
     if not os.path.exists(output_file_path):
         return -1
 
+    # This function MUST NOT depend on the caller having raised the global
+    # csv field-size limit. Curated rows can carry very large text fields
+    # (>128 KB seen in practice). Under Python's default 128 KB limit,
+    # csv.reader raises csv.Error partway through such a file; the previous
+    # implementation swallowed that error and returned the max source_row seen
+    # SO FAR (a truncated value). The caller then resumed in append mode from
+    # that too-low point and RE-WROTE every well-formed row after it, producing
+    # large duplicate blocks in the output (observed: sexuality/comments
+    # RC_2023-10 re-appended ~136k rows). Raise the limit locally (restore on
+    # exit) so the whole file is scanned.
     try:
-        with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore", newline="") as f:
-            reader = csv.reader(f)
-            header = next(reader, None)
+        _prev_limit = csv.field_size_limit(2**31 - 1)
+    except Exception:
+        _prev_limit = None
 
-            if not header:
-                return -1
+    try:
+        try:
+            with open(output_file_path, "r", encoding="utf-8-sig", errors="ignore", newline="") as f:
+                reader = csv.reader(f)
+                header = next(reader, None)
 
+                if not header:
+                    return -1
+
+                try:
+                    source_idx = header.index("source_row")
+                except ValueError:
+                    if report_file_path and file_for_log:
+                        log_report(
+                            report_file_path,
+                            f"Warning: Could not find 'source_row' column in existing output "
+                            f"for {Path(file_for_log).name}. Restarting from beginning."
+                        )
+                    return -1
+
+                last_good_source_row = -1
+                try:
+                    for row in reader:
+                        if source_idx >= len(row):
+                            continue
+                        try:
+                            src = int(row[source_idx])
+                        except (ValueError, TypeError):
+                            continue
+                        # source_row is monotonic in our pipeline; max() is
+                        # equivalent to last-seen but tolerant of any future
+                        # writer that flushes rows out of order.
+                        if src > last_good_source_row:
+                            last_good_source_row = src
+                except csv.Error as e:
+                    # A parse error even at the raised limit means the existing
+                    # output is genuinely malformed (e.g. a prior run killed
+                    # mid-row). Returning the partial max here would make the
+                    # caller APPEND from that point, duplicating every
+                    # well-formed row after it. Force a clean re-run instead:
+                    # returning -1 makes the caller open the file in mode 'w'
+                    # and overwrite it from scratch.
+                    if report_file_path and file_for_log:
+                        log_report(
+                            report_file_path,
+                            f"ERROR: existing output for {Path(file_for_log).name} is unparseable "
+                            f"(csv.Error even at the raised field-size limit); a prior run was likely "
+                            f"killed mid-row. Forcing a clean re-run (overwrite) to avoid duplicating "
+                            f"rows on resume. ({e})"
+                        )
+                    return -1
+
+                return last_good_source_row
+
+        except Exception as e:
+            if report_file_path and file_for_log:
+                log_report(
+                    report_file_path,
+                    f"Warning: Could not determine resume position for {Path(file_for_log).name}. "
+                    f"Restarting from beginning. Error: {e}"
+                )
+            return -1
+    finally:
+        if _prev_limit is not None:
             try:
-                source_idx = header.index("source_row")
-            except ValueError:
-                if report_file_path and file_for_log:
-                    log_report(
-                        report_file_path,
-                        f"Warning: Could not find 'source_row' column in existing output "
-                        f"for {Path(file_for_log).name}. Restarting from beginning."
-                    )
-                return -1
-
-            last_good_source_row = -1
-            try:
-                for row in reader:
-                    if source_idx >= len(row):
-                        continue
-                    try:
-                        src = int(row[source_idx])
-                    except (ValueError, TypeError):
-                        continue
-                    # source_row is monotonic in our pipeline; max() is
-                    # equivalent to last-seen but tolerant of any future
-                    # writer that flushes rows out of order.
-                    if src > last_good_source_row:
-                        last_good_source_row = src
-            except csv.Error as e:
-                if report_file_path and file_for_log:
-                    log_report(
-                        report_file_path,
-                        f"Warning: CSV parse error in existing output for {Path(file_for_log).name}; "
-                        f"resuming from source_row={last_good_source_row}. If a prior run was killed "
-                        f"mid-row, delete the file to force a clean re-run. ({e})"
-                    )
-
-            return last_good_source_row
-
-    except Exception as e:
-        if report_file_path and file_for_log:
-            log_report(
-                report_file_path,
-                f"Warning: Could not determine resume position for {Path(file_for_log).name}. "
-                f"Restarting from beginning. Error: {e}"
-            )
-        return -1
+                csv.field_size_limit(_prev_limit)
+            except Exception:
+                pass
 
 
 # Inspect an input CSV header. Returns (source_row_idx, has_source_row).

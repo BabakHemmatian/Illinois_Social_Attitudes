@@ -127,7 +127,7 @@ month,distinction,data_type,count
 2017-06,ability,comments,99146
 2017-07,ability,comments,106601
 2017-08,ability,comments,104307
-2017-09,ability,comments,104739
+2017-09,ability,comments,100530
 2017-10,ability,comments,98026
 2017-11,ability,comments,97204
 2017-12,ability,comments,103307
@@ -199,7 +199,7 @@ month,distinction,data_type,count
 2023-06,ability,comments,243474
 2023-07,ability,comments,267948
 2023-08,ability,comments,280051
-2023-09,ability,comments,272702
+2023-09,ability,comments,272701
 2023-10,ability,comments,280535
 2023-11,ability,comments,260494
 2023-12,ability,comments,264076
@@ -535,15 +535,15 @@ month,distinction,data_type,count
 2017-06,age,comments,1101382
 2017-07,age,comments,1147257
 2017-08,age,comments,1124626
-2017-09,age,comments,1143398
+2017-09,age,comments,1100276
 2017-10,age,comments,1121352
 2017-11,age,comments,1163586
 2017-12,age,comments,1167777
-2018-01,age,comments,1273832
+2018-01,age,comments,1273796
 2018-02,age,comments,1288669
 2018-03,age,comments,1385300
 2018-04,age,comments,1342277
-2018-05,age,comments,1446447
+2018-05,age,comments,1446446
 2018-06,age,comments,1535740
 2018-07,age,comments,1541259
 2018-08,age,comments,1513798
@@ -943,7 +943,7 @@ month,distinction,data_type,count
 2017-06,race,comments,412802
 2017-07,race,comments,407415
 2017-08,race,comments,634837
-2017-09,race,comments,488989
+2017-09,race,comments,472651
 2017-10,race,comments,444280
 2017-11,race,comments,393820
 2017-12,race,comments,397051
@@ -1351,11 +1351,11 @@ month,distinction,data_type,count
 2017-06,sexuality,comments,315818
 2017-07,sexuality,comments,302468
 2017-08,sexuality,comments,287760
-2017-09,sexuality,comments,289295
+2017-09,sexuality,comments,278897
 2017-10,sexuality,comments,291041
 2017-11,sexuality,comments,282585
 2017-12,sexuality,comments,307052
-2018-01,sexuality,comments,291121
+2018-01,sexuality,comments,291109
 2018-02,sexuality,comments,295755
 2018-03,sexuality,comments,340480
 2018-04,sexuality,comments,342813
@@ -1424,7 +1424,7 @@ month,distinction,data_type,count
 2023-07,sexuality,comments,992194
 2023-08,sexuality,comments,996698
 2023-09,sexuality,comments,954621
-2023-10,sexuality,comments,1077497
+2023-10,sexuality,comments,941533
 2023-11,sexuality,comments,889619
 2023-12,sexuality,comments,958784
 2007-01,sexuality,submissions,103
@@ -1759,7 +1759,7 @@ month,distinction,data_type,count
 2017-06,skin_tone,comments,203119
 2017-07,skin_tone,comments,204552
 2017-08,skin_tone,comments,277994
-2017-09,skin_tone,comments,230357
+2017-09,skin_tone,comments,222676
 2017-10,skin_tone,comments,220164
 2017-11,skin_tone,comments,202407
 2017-12,skin_tone,comments,194708
@@ -2167,7 +2167,7 @@ month,distinction,data_type,count
 2017-06,weight,comments,46262
 2017-07,weight,comments,49709
 2017-08,weight,comments,45109
-2017-09,weight,comments,43466
+2017-09,weight,comments,41955
 2017-10,weight,comments,45921
 2017-11,weight,comments,39889
 2017-12,weight,comments,41153

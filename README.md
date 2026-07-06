@@ -88,8 +88,6 @@ This example command will use the appropriate keyword lists from this repository
 
 ```filter_keywords``` must be used first. ```organize``` resources need ```filtered``` or ```labeled``` outputs to work. Otherwise, the resources can be used in customized order by adding ```--input``` and ```--output``` path arguments to a command pointing to the desired input/output directories. If not provided, the paths default to the [Default Resource Use Order](#default-resource-use-order).
 
-**NOTE:** 
-
 ### Default Resource Use Order
 
 The scripts may be used without any changes to recreate the ISAAC corpus. To do so, call the resources without custom ```--input``` and ```--output``` path arguments in the following order for the desired social group and year range:

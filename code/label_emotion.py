@@ -13,7 +13,7 @@ import time
 import torch
 import datetime
 import re
-from transformers import RobertaTokenizerFast, RobertaForSequenceClassification, DistilBertForSequenceClassification, DistilBertTokenizerFast
+from transformers import RobertaTokenizerFast, RobertaForSequenceClassification, AutoTokenizer, AutoModelForSequenceClassification
 from pathlib import Path
 import threading
 from queue import Queue
@@ -63,15 +63,24 @@ log_report(report_file_path,f"Using device: {device}")
 model1_path = os.path.join(MODELS_DIR,
                           "label_emotion_1")
 model2_path = os.path.join(MODELS_DIR,
-                          "label_emotion_2")
+                          "label_emotion_2_goemotions")
 model3_path = os.path.join(MODELS_DIR,
                           "label_emotion_3")
 tokenizer1 = RobertaTokenizerFast.from_pretrained(model1_path)
-tokenizer2 = DistilBertTokenizerFast.from_pretrained(model2_path)
+tokenizer2 = AutoTokenizer.from_pretrained(model2_path)
 # NOTE: Model 3 uses the same tokenizer as model 1.
 model1 = RobertaForSequenceClassification.from_pretrained(model1_path,use_safetensors=True).to(device)
-model2 = DistilBertForSequenceClassification.from_pretrained(model2_path,use_safetensors=True).to(device)
+# Model 2 is roberta-base-go_emotions (SamLowe), a 28-label multi-label classifier
+# trained on the Reddit-sourced GoEmotions corpus (Demszky et al., 2020). It replaces
+# the earlier 6-class emotion-detector (sickboi25). Only the seven Ekman+neutral
+# labels are recorded, via sigmoid scores (see EMOTION2_LABELS below).
+model2 = AutoModelForSequenceClassification.from_pretrained(model2_path,use_safetensors=True).to(device)
 model3 = RobertaForSequenceClassification.from_pretrained(model3_path,use_safetensors=True).to(device)
+
+# Column order for model 2 outputs (alphabetical, matching model 1's convention).
+EMOTION2_LABELS = ["anger", "disgust", "fear", "joy", "neutral", "sadness", "surprise"]
+_label2id2 = {v: int(k) for k, v in model2.config.id2label.items()} if isinstance(next(iter(model2.config.id2label)), str) else {v: k for k, v in model2.config.id2label.items()}
+EMOTION2_KEEP_IDX = [_label2id2[lab] for lab in EMOTION2_LABELS]
 
 if torch.cuda.device_count() > 1: # if more than one GPU is available
     model1 = torch.nn.DataParallel(model1) # parallelize
@@ -114,10 +123,20 @@ def predict_tokenized(tokenized, model):
     inputs = {k: v.to(device, non_blocking=True) for k, v in tokenized.items()}
     with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
         outputs = model(**inputs)
-        probs = torch.nn.functional.softmax(outputs.logits, dim=1)
+        probs = torch.nn.functional.softmax(outputs.logits.float(), dim=1)
         predictions = probs.argmax(dim=1).tolist()
-    probs = torch.softmax(probs, dim=1).tolist()
-    return predictions, probs
+    return predictions, probs.tolist()
+
+# GPU-side inference for the multi-label model 2: independent sigmoid per label,
+# restricted to the seven Ekman+neutral labels in EMOTION2_LABELS order.
+@torch.no_grad()
+def predict_tokenized_multilabel(tokenized, model, keep_idx=None):
+    keep_idx = keep_idx if keep_idx is not None else EMOTION2_KEEP_IDX
+    inputs = {k: v.to(device, non_blocking=True) for k, v in tokenized.items()}
+    with torch.amp.autocast("cuda" if torch.cuda.is_available() else "cpu"):
+        outputs = model(**inputs)
+        probs = torch.sigmoid(outputs.logits.float())[:, keep_idx]
+    return probs.tolist()
 
 # generates labels for a month's worth of documents. Resumes labeling if it finds incomplete output files. 
 def label_emotion_file(file):
@@ -161,7 +180,7 @@ def label_emotion_file(file):
         if mode == "w":
             emotion_headers = [
                 "1_anger","1_disgust","1_fear","1_joy","1_neutral","1_sadness","1_surprise",
-                "2_sadness","2_joy","2_love","2_anger","2_fear","2_surprise",
+                "2_anger","2_disgust","2_fear","2_joy","2_neutral","2_sadness","2_surprise",
                 "3_neutral","3_joy","3_surprise","3_anger","3_sadness","3_disgust","3_fear"
             ]
             new_headers = in_header + emotion_headers
@@ -248,8 +267,11 @@ def label_emotion_file(file):
 
             ids, batch_lines, tok1, tok2, is_last = item
 
-            for tok, model_ref in [(tok1, model1), (tok2, model2), (tok1, model3)]:
-                _, probs = predict_tokenized(tok, model_ref)
+            for tok, model_ref, multilabel in [(tok1, model1, False), (tok2, model2, True), (tok1, model3, False)]:
+                if multilabel:
+                    probs = predict_tokenized_multilabel(tok, model_ref)
+                else:
+                    _, probs = predict_tokenized(tok, model_ref)
                 for idx in range(len(batch_lines)):
                     batch_lines[idx] = batch_lines[idx] + probs[idx]
 

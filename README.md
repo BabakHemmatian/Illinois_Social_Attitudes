@@ -8,13 +8,13 @@ This repository contains tools for the development and evaluation of the **Illin
 
 **ATTENTION:** By using this repository or the associated data and tools you agree to the [Terms of Use](./Terms_of_Use.md). 
 
-**Corpus size (comments): 466,041,060 posts**
+**Corpus size (comments): 462,479,309 posts**
 
-**Corpus size (submissions): 66,159,494 posts**
+**Corpus size (submissions): 64,581,610 posts**
 
-**Corpus size (combined): 532,200,554 posts**
+**Corpus size (combined): 527,060,919 posts**
 
-![Number of documents (comments + submissions) per social distinction. Each bar stacks comments (bottom) and submissions (top); the combined total is annotated above each bar. sexuality (gay-straight; 67,699,057 comments + 12,014,516 submissions = 79,713,573); race (Black-White; 74,270,404 + 10,777,312 = 85,047,716); age (young-old; 250,834,691 + 29,411,923 = 280,246,614); ability (abled-disabled; 19,494,449 + 3,672,777 = 23,167,226); weight (fat-thin; 17,193,412 + 5,165,709 = 22,359,121); skin_tone (dark-light; 36,549,047 + 5,117,257 = 41,666,304)](./freq_aggregate.png)
+![Number of documents (comments + submissions) per social distinction. Each bar stacks comments (bottom) and submissions (top); the combined total is annotated above each bar. sexuality (gay-straight; 67,552,683 comments + 12,014,516 submissions = 79,567,199); race (Black-White; 72,641,057 + 9,707,554 = 82,348,611); age (young-old; 250,791,532 + 29,411,923 = 280,203,455); ability (abled-disabled; 19,322,244 + 3,633,138 = 22,955,382); weight (fat-thin; 17,191,901 + 5,165,709 = 22,357,610); skin_tone (dark-light; 34,979,892 + 4,648,770 = 39,628,662)](./freq_aggregate.png)
 ![Number of documents per month over time for all distinctions, pooling comments and submissions per distinction. Counts are exact monthly row counts (proper CSV parsing) from the final curated data for each set.](./line_overlay_distinctions.png)
 
 ## Corpus Access
@@ -87,8 +87,6 @@ This example command will use the appropriate keyword lists from this repository
 #### Custom Resource Use Order
 
 ```filter_keywords``` must be used first. ```organize``` resources need ```filtered``` or ```labeled``` outputs to work. Otherwise, the resources can be used in customized order by adding ```--input``` and ```--output``` path arguments to a command pointing to the desired input/output directories. If not provided, the paths default to the [Default Resource Use Order](#default-resource-use-order).
-
-**NOTE:** 
 
 ### Default Resource Use Order
 

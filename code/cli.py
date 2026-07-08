@@ -132,8 +132,8 @@ def get_args(argv=None):
             'comments',
             'all',
         ],
-        required=True,
-        help="Indicate the type of Reddit post (submission, comment, or all) you want processed. 'all' is implemented for 'filter_sample', 'train' and 'organize' resources. For other resources, you can use 'organize_types' to aggregate outputs post-hoc."
+        required=False,
+        help="Indicate the type of Reddit post (submission, comment, or all) you want processed. 'all' is implemented for 'filter_sample', 'train' and 'organize' resources. For other resources, you can use 'organize_types' to aggregate outputs post-hoc. Not required for 'organize_types', which always merges comments and submissions into an 'all' output."
     )
     argparser.add_argument(
         '-c', '--sample',
@@ -297,6 +297,16 @@ def get_args(argv=None):
     )
 
     args = argparser.parse_args(argv)
+
+    # --type is meaningful for every resource except organize_types, which always
+    # merges comments and submissions into a single 'all' output. Default it there
+    # so downstream code (job tags, slurm/-t forwarding) keeps a valid value; for
+    # every other resource --type remains required.
+    if args.resource == "organize_types":
+        if args.type is None:
+            args.type = "all"
+    elif args.type is None:
+        argparser.error("--type is required for this resource")
 
     # Restrict -t all to the location training resources only.
     if args.type == "all" and "train" not in args.resource and "organize" not in args.resource and "sample" not in args.resource:

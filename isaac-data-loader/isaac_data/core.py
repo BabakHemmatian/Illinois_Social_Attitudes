@@ -22,7 +22,7 @@ from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import requests
 
-from .terms import require_acceptance
+from .agreement import require_acceptance
 
 __all__ = [
     "BASE_URL", "DATA_BASE", "MANIFEST_URL", "CATEGORIES",
@@ -98,7 +98,7 @@ def catalog(refresh: bool = False):
     The manifest is the authoritative list of every downloadable file and is the
     basis for `files`, `load`, and `download`. It is cached locally and only
     re-fetched when older than 24h (or when ``refresh=True``). Browsing the
-    catalog does not require Terms-of-Use acceptance.
+    catalog does not require Data-Use-Agreement acceptance.
 
     Args:
         refresh: Force a re-download of the manifest instead of using the local
@@ -216,7 +216,7 @@ def download(
 
     Skips files already fully downloaded and resumes partial ones via HTTP range
     requests. Use this for offline work, very large pulls, or feeding the parquet
-    to other tools (DuckDB, Spark). Requires Terms-of-Use acceptance.
+    to other tools (DuckDB, Spark). Requires Data-Use-Agreement acceptance.
 
     Args:
         category: One category or a list; None = all.
@@ -234,7 +234,7 @@ def download(
 
     Raises:
         ValueError: if no files match the selection.
-        TermsNotAccepted: if the Terms of Use have not been accepted.
+        AgreementNotAccepted: if the Data Use Agreement has not been accepted.
     """
     require_acceptance()
     sel = files(category, start, end, fmt, refresh=refresh)
@@ -263,7 +263,7 @@ def read_parquet(url: str, columns: Optional[Sequence[str]] = None):
         A pandas DataFrame.
 
     Raises:
-        TermsNotAccepted: for http URLs, if the Terms of Use are not accepted.
+        AgreementNotAccepted: for http URLs, if the Data Use Agreement is not accepted.
     """
     import pyarrow.parquet as pq
 
@@ -335,7 +335,7 @@ def load(
     """Load selected files into pandas.
 
     Selects files with `files`, reads each (parquet by default), and returns them
-    combined or per file. Requires Terms-of-Use acceptance.
+    combined or per file. Requires Data-Use-Agreement acceptance.
 
     Args:
         category: One category or a list; None = all.
@@ -371,7 +371,7 @@ def load(
     Raises:
         ValueError: if no files match, or the selection exceeds ``max_bytes``
             without ``columns`` or ``n``.
-        TermsNotAccepted: if the Terms of Use have not been accepted.
+        AgreementNotAccepted: if the Data Use Agreement has not been accepted.
     """
     import pandas as pd
 

@@ -220,6 +220,120 @@ def get_last_source_row(output_file_path: str | Path,
         return -1
 
 
+class _OffsetTrackingLines:
+    """Yields decoded lines from a binary handle while tracking bytes consumed.
+
+    csv.reader pulls exactly the lines a record needs and no more, so reading
+    `offset` right after a record is returned gives that record's end position
+    in the file. That is what lets get_resume_position truncate at a row
+    boundary rather than guessing.
+    """
+
+    def __init__(self, handle):
+        self._handle = handle
+        self.offset = 0
+
+    def __iter__(self):
+        first = True
+        for raw in self._handle:
+            self.offset += len(raw)
+            # Splitting on b"\n" is safe for UTF-8: no multi-byte sequence
+            # contains 0x0A, so a line never cuts a character in half.
+            text = raw.decode("utf-8", "ignore")
+            if first:
+                text = text.lstrip("﻿")  # tolerate a BOM
+                first = False
+            yield text
+
+
+def get_resume_position(output_file_path: str | Path,
+                        report_file_path: Optional[str] = None,
+                        file_for_log: Optional[str] = None) -> int:
+    """Return how many complete data rows `output_file_path` already holds,
+    truncating any torn trailing row so the file is safe to append to.
+
+    Use this instead of get_last_source_row whenever the rows being written may
+    carry more than one 'source_row' sequence. Merged ALL_ files interleave two
+    independent sequences -- one from the comments file, one from the
+    submissions file -- so a max-based watermark silently discards every row of
+    whichever stream is numerically behind. That cost 100 submission rows in
+    age/all ALL_2007-01.csv before it was caught on 2026-07-26.
+
+    Counting rows is correct for both merged and single-stream files because
+    the stages that resume this way are row- and order-preserving: output row N
+    always corresponds to input row N.
+
+    Return convention matches get_last_source_row so both resume helpers plug
+    into the same call site shape used across the pipeline:
+
+        resume_from = get_resume_position(out, report_file_path=..., file_for_log=...)
+        mode = "a" if resume_from >= 0 else "w"
+
+    Returns -1 when there is nothing usable to resume from (file absent, empty,
+    headerless, or unreadable), meaning start over in write mode. Returns 0 for
+    a header-only file, which is appended to rather than rewritten.
+    """
+    output_file_path = Path(output_file_path)
+    if not output_file_path.exists():
+        return -1
+
+    complete_rows = 0
+    safe_offset = 0
+
+    try:
+        with open(output_file_path, "rb") as handle:
+            lines = _OffsetTrackingLines(handle)
+            reader = csv.reader(lines)
+
+            header = next(reader, None)
+            if not header:
+                return -1
+            safe_offset = lines.offset
+            width = len(header)
+
+            try:
+                for row in reader:
+                    # A row of the wrong width means the writer died partway
+                    # through it. Everything before it is still trustworthy.
+                    if len(row) != width:
+                        break
+                    complete_rows += 1
+                    safe_offset = lines.offset
+            except csv.Error:
+                pass  # torn final record; safe_offset still marks the last good row
+
+    except OSError as e:
+        if report_file_path and file_for_log:
+            log_report(
+                report_file_path,
+                f"Warning: Could not read existing output for {Path(file_for_log).name}. "
+                f"Restarting from beginning. Error: {e}"
+            )
+        return -1
+
+    # Drop any partial trailing row so append mode starts on a clean boundary.
+    try:
+        if safe_offset < output_file_path.stat().st_size:
+            with open(output_file_path, "r+b") as handle:
+                handle.truncate(safe_offset)
+            if report_file_path and file_for_log:
+                log_report(
+                    report_file_path,
+                    f"Discarded a partial trailing row from existing output for "
+                    f"{Path(file_for_log).name}; resuming after {complete_rows} complete rows."
+                )
+    except OSError as e:
+        if report_file_path and file_for_log:
+            log_report(
+                report_file_path,
+                f"Warning: Could not truncate partial trailing row in "
+                f"{Path(file_for_log).name}; restarting from beginning. Error: {e}"
+            )
+        return -1
+
+    return complete_rows
+
+
 # Inspect an input CSV header. Returns (source_row_idx, has_source_row).
 # When has_source_row is True, callers should propagate values from input
 # instead of generating their own.

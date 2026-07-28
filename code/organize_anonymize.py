@@ -19,7 +19,7 @@ from utils import (
     log_report,
     find_latest_resource_dir,
     validate_resource_dir,
-    get_last_source_row,
+    get_resume_position,
     reraise_fatal,
 )
 
@@ -123,8 +123,36 @@ def select_target_files(
 
 ### SQLite cache helpers
 
-def open_cache(db_path: str | Path) -> sqlite3.Connection:
+# read_only=True opens the map with SQLite's ro URI mode, so the connection is
+# physically incapable of writing. Used by parallel shards after
+# warm_author_map.py has pre-assigned every author: with no writer there is no
+# write lock to contend for, which is the whole point of warming. It is a
+# stronger guarantee than trusting BEGIN IMMEDIATE to serialize correctly, and
+# it turns "an author was missed during warming" into an immediate, named error
+# instead of silent lock thrash.
+def open_cache(db_path: str | Path, read_only: bool = False) -> sqlite3.Connection:
     db_path = str(db_path)
+
+    if read_only:
+        if not os.path.exists(db_path):
+            raise FileNotFoundError(
+                f"Author map not found at {db_path}. Run warm_author_map.py before "
+                f"anonymizing in read-only (sharded) mode."
+            )
+        conn = sqlite3.connect(
+            f"file:{Path(db_path).as_posix()}?mode=ro",
+            uri=True,
+            timeout=120,
+            isolation_level=None,
+        )
+        cur = conn.cursor()
+        cur.execute("PRAGMA busy_timeout=120000;")
+        # Same reasoning as the read-write path below: the anonymizer streams
+        # multi-GB CSVs alongside its lookups, so the OS file cache cannot be
+        # relied on to keep author-map pages resident.
+        cur.execute("PRAGMA cache_size=-524288;")   # 512 MB
+        return conn
+
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
     conn = sqlite3.connect(
@@ -136,6 +164,11 @@ def open_cache(db_path: str | Path) -> sqlite3.Connection:
     cur.execute("PRAGMA journal_mode=WAL;")
     cur.execute("PRAGMA synchronous=NORMAL;")
     cur.execute("PRAGMA busy_timeout=120000;")
+    # 512 MB rather than SQLite's 2 MB default. Streaming a month's CSV evicts
+    # the OS file cache, so without a large private cache every author lookup
+    # falls through to a physical read on a spinning USB disk.
+    cur.execute("PRAGMA cache_size=-524288;")
+    cur.execute("PRAGMA temp_store=MEMORY;")
     cur.execute(
         """
         CREATE TABLE IF NOT EXISTS author_map (
@@ -252,15 +285,27 @@ def anonymize_one_file(
     input_file: str | Path,
     output_file: str | Path,
     db_path: str | Path,
+    read_only_cache: bool = False,
 ) -> Tuple[int, int]:
     input_file = Path(input_file)
     output_file = Path(output_file)
     output_file.parent.mkdir(parents=True, exist_ok=True)
 
-    last_processed = get_last_source_row(output_file)
+    # determine resume position from any existing output
+    #
+    # Row ordinal rather than source_row (get_last_source_row, used by the
+    # filter_/label_ resources): 'all' inputs are merged files interleaving a
+    # comments and a submissions source_row sequence, so a max-based watermark
+    # silently drops every row of the trailing stream. This also truncates a row
+    # torn by a crash mid-write.
+    last_processed = get_resume_position(
+        output_file,
+        report_file_path=report_file_path,
+        file_for_log=input_file,
+    )
     mode = "a" if last_processed >= 0 else "w"
 
-    conn = open_cache(db_path)
+    conn = open_cache(db_path, read_only=read_only_cache)
     local_cache: Dict[str, str] = {}
     rows_written = 0
     new_ids_created = 0
@@ -277,21 +322,15 @@ def anonymize_one_file(
             if "author" not in reader.fieldnames:
                 raise ValueError(f"Input file {input_file.name} does not contain an 'author' column.")
 
-            has_source_row = "source_row" in reader.fieldnames
-
             writer = csv.DictWriter(out_f, fieldnames=reader.fieldnames)
             if mode == "w":
                 writer.writeheader()
 
-            for row in reader:
-                # Resume: skip rows already anonymized in a prior run.
-                if has_source_row and last_processed >= 0:
-                    sval = (row.get("source_row") or "").strip()
-                    try:
-                        if int(sval) <= last_processed:
-                            continue
-                    except ValueError:
-                        pass
+            for row_index, row in enumerate(reader):
+                # Resume: input row N maps to output row N, so skipping the
+                # rows already written is exact regardless of source_row order.
+                if row_index < last_processed:
+                    continue
 
                 author = row.get("author", "")
 
@@ -300,16 +339,20 @@ def anonymize_one_file(
 
                     anon_id = local_cache.get(author)
                     if anon_id is None:
-                        # Check DB in case it already exists from earlier runs / other tasks
-                        cached = get_cached_ids(conn, [author])
-                        anon_id = cached.get(author)
+                        # One lookup, not three: the previous form called
+                        # get_cached_ids twice and then let get_or_create_author_id
+                        # repeat the SELECT internally.
+                        anon_id = get_cached_ids(conn, [author]).get(author)
 
                         if anon_id is None:
-                            before = get_cached_ids(conn, [author]).get(author)
+                            if read_only_cache:
+                                raise RuntimeError(
+                                    f"Author {author!r} in {input_file.name} has no ID and the "
+                                    f"author map is open read-only. Re-run warm_author_map.py "
+                                    f"for this month, then retry this shard."
+                                )
                             anon_id = get_or_create_author_id(conn, author)
-                            after = anon_id
-                            if before is None and after is not None:
-                                new_ids_created += 1
+                            new_ids_created += 1
 
                         local_cache[author] = anon_id
 
@@ -340,9 +383,14 @@ def organize_anonymize() -> None:
         log_report(report_file_path, "No target files assigned to this run.")
         return
 
+    # A shard run (--array) means sibling processes are active, so the map must
+    # already be warmed and is opened read-only. A plain single-process run keeps
+    # the read-write path and can still assign IDs on the fly.
+    read_only_cache = args.array is not None
     log_report(
         report_file_path,
-        f"Preparing to anonymize {len(target_files)} file(s) for group={group}, type={type_}."
+        f"Preparing to anonymize {len(target_files)} file(s) for group={group}, type={type_}"
+        + (" [author map read-only: sharded run]" if read_only_cache else "") + "."
     )
 
     processed = 0
@@ -358,7 +406,8 @@ def organize_anonymize() -> None:
             rows_written, new_ids_created = anonymize_one_file(
                 input_file=input_file,
                 output_file=output_file,
-                db_path=USER_CACHE
+                db_path=USER_CACHE,
+                read_only_cache=read_only_cache,
             )
             processed += 1
             total_rows += rows_written

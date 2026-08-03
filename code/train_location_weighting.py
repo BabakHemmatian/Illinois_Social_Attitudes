@@ -80,7 +80,7 @@ DEBUG_TOP_N = int(os.environ.get("DEBUG_TOP_N", "15"))
 PRF_TOPK = int(os.environ.get("PRF_TOPK", "5"))
 
 # smoothing
-TEMPERATURE = float(os.environ.get("TEMPERATURE", "1.25")) # to reduce overconfidence in the chosen label
+TEMPERATURE = float(os.environ.get("TEMPERATURE", "1.0")) # p^(1/T) on the reported held-out probabilities only; 1.0 = identity
 ENABLE_GEO_SMOOTHING = os.environ.get("ENABLE_GEO_SMOOTHING", "0") == "1"
 DISTANCE_RADII_KM: Tuple[int, ...] = (100, 300, 500, 1000)
 GEO_SMOOTHING_SIGMA_KM = float(os.environ.get("GEO_SMOOTHING_SIGMA_KM", "400.0")) # Geosmoothing SD in kilometers
@@ -772,6 +772,16 @@ def align_and_blend_probabilities(
     words_weight: float,
     struct_weight: float,
 ) -> Tuple[np.ndarray, np.ndarray]:
+    """Mix the two models' full class distributions onto a common class axis.
+
+    NOTE -- the deployed labeler does NOT use this function. label_location.py
+    mixes the models' top-2 candidate lists instead (see blend_rankings there), so
+    the probabilities evaluated in this script are systematically sharper than the
+    location_prob values shipped with the corpus, and the two can disagree on the
+    argmax. Metrics reported here therefore describe the mixture model, not the
+    labels as released; metrics_location_calibration.py reports both paths side
+    by side.
+    """
     words_weight, struct_weight = _normalize_weights(words_weight, struct_weight)
     classes_union = sorted(set(map(str, classes_words)) | set(map(str, classes_struct)))
     class_to_idx = {c: i for i, c in enumerate(classes_union)}

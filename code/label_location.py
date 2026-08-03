@@ -691,6 +691,41 @@ def _rankings_to_prob_map(rankings: List[Tuple[str, float]]) -> Dict[str, float]
 
 
 def blend_rankings(rankings_by_name: Dict[str, List[Tuple[str, float]]], weights: Dict[str, float], topk: int = 2) -> List[Tuple[str, float]]:
+    """Weighted mixture of the per-model rankings.
+
+    NOTE -- this is NOT the same operation as align_and_blend_probabilities() in
+    train_location_weighting.py, which mixes the two models' FULL class
+    distributions and renormalises. Callers here pass predict_topk(topk=2), so
+    each model contributes only its two leading candidates: a label outside a
+    model's top-2 receives that model's weight times zero, and the sum is divided
+    by the summed weights without renormalising. Scores therefore do not sum to 1.
+
+    Measured effect of the truncation on the held-out split
+    (metrics_location_calibration.py, deployed vs full blend):
+
+        level    accuracy           mean confidence     ECE
+        top      .9149 / .9149      .8289 / .8289       .0861 / .0861
+        region   .8810 / .8814      .7195 / .7233       .1616 / .1581
+        state    .7502 / .7542      .1825 / .1897       .5681 / .5649
+
+    So the truncation is close to harmless: identical at the binary top level
+    (topk=2 of 2 classes truncates nothing), and at state level it costs 0.4pp of
+    accuracy and 0.007 of mean confidence. It is NOT the reason the confidences are
+    low -- the state mixture is already badly under-confident (.19 mean confidence
+    against .75 accuracy) when the full distributions are blended.
+
+    metrics_location_weight_sweep.py decomposes that. At state level the words model
+    on its own reports .34 mean confidence at .76 accuracy, so roughly three quarters
+    of the deflation is inherited from the base classifier and only a quarter is added
+    by mixing in the near-uniform structured model. Re-tuning the mixture weights
+    therefore cannot fix the scale; recalibration is required regardless.
+
+    The two-candidate limit follows the output schema (location + contender_location).
+    Raising topk or renormalising would change the labels the pipeline emits and
+    invalidate the thresholds below, so it must not be done without re-labelling and
+    re-tuning TOP_CONF_THRESHOLD / REG_CONF_MARGIN / STA_CONF_MARGIN -- and on the
+    evidence above it would buy very little.
+    """
     totals: Dict[str, float] = {}
     weight_sum = 0.0
     for name, rankings in rankings_by_name.items():

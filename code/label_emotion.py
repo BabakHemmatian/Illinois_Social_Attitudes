@@ -8,7 +8,7 @@ from utils import parse_range, log_report, check_reqd_files, get_last_source_row
 import os
 import csv
 import sys
-csv.field_size_limit(sys.maxsize)
+csv.field_size_limit(2**31 - 1) # sys.maxsize overflows C long on Windows
 import time
 import torch
 import datetime
@@ -63,7 +63,7 @@ log_report(report_file_path,f"Using device: {device}")
 model1_path = os.path.join(MODELS_DIR,
                           "label_emotion_1")
 model2_path = os.path.join(MODELS_DIR,
-                          "label_emotion_2_goemotions")
+                          "label_emotion_2")
 model3_path = os.path.join(MODELS_DIR,
                           "label_emotion_3")
 tokenizer1 = RobertaTokenizerFast.from_pretrained(model1_path)

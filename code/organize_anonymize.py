@@ -65,12 +65,16 @@ if not args.input:
 else:
     input_path = validate_resource_dir(args.input, default_resource)
 
-file_list = check_reqd_files(years=years, type_=type_, check_path=input_path)
+# strict=False: select_target_files() below matches on the YYYY-MM parsed from
+# each filename, never on position in file_list, so months already anonymized
+# (and whose inputs have since been deleted to reclaim storage) can be absent
+# without shifting any task -> month mapping.
+file_list = check_reqd_files(years=years, type_=type_, check_path=input_path, strict=False)
 file_list = sorted(file_list, key=lambda p: Path(p).name)
 
 # parse the output path
 if not args.output:
-    output_path = PROJECT_ROOT / "data" / "data_reddit_curated" / group / type_ / f"{Path(input_path).name}_anon"
+    output_path = DATA_DIR / "data_reddit_curated" / group / type_ / f"{Path(input_path).name}_anon"
 else:
     output_path = Path(args.output)
 
@@ -157,32 +161,14 @@ def generate_candidate_id(num_digits: int = 12) -> str:
     upper = (10 ** num_digits) - 1
     return str(secrets.randbelow(upper - lower + 1) + lower)
 
-# Batch-fetch existing IDs for a group of authors.
-def get_cached_ids(conn: sqlite3.Connection, authors: List[str]) -> Dict[str, str]:
-
-    if not authors:
-        return {}
-
-    out: Dict[str, str] = {}
-    cur = conn.cursor()
-
-    # SQLite variable limit safety
-    for i in range(0, len(authors), 900):
-        chunk = authors[i:i + 900]
-        qmarks = ",".join(["?"] * len(chunk))
-        cur.execute(
-            f"SELECT author, anon_id FROM author_map WHERE author IN ({qmarks})",
-            chunk
-        )
-        for author, anon_id in cur.fetchall():
-            out[author] = anon_id
-
-    return out
-
-# Concurrency-safe get-or-create: returns existing ID if present, otherwise assigns exactly one new unique random numeric ID
-def get_or_create_author_id(conn: sqlite3.Connection, author: str, num_digits: int = 12) -> str:
+# Concurrency-safe get-or-create: returns existing ID if present, otherwise assigns exactly one new unique random numeric ID.
+# Returns (anon_id, created), where created is True only when THIS call performed
+# the INSERT. Callers must not infer that from a separate read-then-write pair:
+# with parallel array tasks two processes can both observe "absent" before either
+# writes, and would then both count the same author as new.
+def get_or_create_author_id(conn: sqlite3.Connection, author: str, num_digits: int = 12) -> Tuple[str, bool]:
     if not author:
-        return author
+        return author, False
 
     cur = conn.cursor()
 
@@ -190,7 +176,7 @@ def get_or_create_author_id(conn: sqlite3.Connection, author: str, num_digits: i
     cur.execute("SELECT anon_id FROM author_map WHERE author = ?", (author,))
     row = cur.fetchone()
     if row is not None:
-        return row[0]
+        return row[0], False
 
     while True:
         try:
@@ -202,7 +188,7 @@ def get_or_create_author_id(conn: sqlite3.Connection, author: str, num_digits: i
             row = cur.fetchone()
             if row is not None:
                 conn.commit()
-                return row[0]
+                return row[0], False
 
             candidate = generate_candidate_id(num_digits=num_digits)
             now = int(time.time())
@@ -212,7 +198,7 @@ def get_or_create_author_id(conn: sqlite3.Connection, author: str, num_digits: i
                 (author, candidate, now),
             )
             conn.commit()
-            return candidate
+            return candidate, True
 
         except sqlite3.IntegrityError:
             # Either anon_id collided or another process inserted first.
@@ -221,7 +207,7 @@ def get_or_create_author_id(conn: sqlite3.Connection, author: str, num_digits: i
             cur.execute("SELECT anon_id FROM author_map WHERE author = ?", (author,))
             row = cur.fetchone()
             if row is not None:
-                return row[0]
+                return row[0], False
 
             # Otherwise anon_id collision; retry with a fresh random number.
             continue
@@ -300,16 +286,11 @@ def anonymize_one_file(
 
                     anon_id = local_cache.get(author)
                     if anon_id is None:
-                        # Check DB in case it already exists from earlier runs / other tasks
-                        cached = get_cached_ids(conn, [author])
-                        anon_id = cached.get(author)
-
-                        if anon_id is None:
-                            before = get_cached_ids(conn, [author]).get(author)
-                            anon_id = get_or_create_author_id(conn, author)
-                            after = anon_id
-                            if before is None and after is not None:
-                                new_ids_created += 1
+                        # get_or_create_author_id already does its own read-first
+                        # fast path, so no separate lookup is needed here.
+                        anon_id, created = get_or_create_author_id(conn, author)
+                        if created:
+                            new_ids_created += 1
 
                         local_cache[author] = anon_id
 

@@ -401,7 +401,17 @@ def detect_reddit_folder_type(folder: str | Path) -> FolderType:
         f"Folder {folder} contains no Reddit CSV files with RC or RS prefixes."
     )
 
-def check_reqd_files(years: List[int], check_path: str | Path, type_: str) -> List[str]:
+def check_reqd_files(
+    years: List[int],
+    check_path: str | Path,
+    type_: str,
+    strict: bool = True,
+) -> List[str]:
+    # strict=False is ONLY safe for callers that map an array task to a month by
+    # NAME rather than by position in the returned list. organize_anonymize does
+    # this (select_target_files filters on the parsed YYYY-MM), so a gap in the
+    # list cannot shift its task -> month mapping. Every other caller indexes
+    # file_list[task_id] and must keep the default.
     PREFIX_MAP = {
         "comments": "RC",
         "submissions": "RS",
@@ -452,6 +462,15 @@ def check_reqd_files(years: List[int], check_path: str | Path, type_: str) -> Li
             f"  {y}: {', '.join(months)}"
             for y, months in sorted(missing_by_year.items())
         )
+        if not strict:
+            print(
+                f"WARNING: {check_path} is missing months for type_={type_}; "
+                f"proceeding with {len(matched_files)} file(s) because the caller "
+                f"selects months by name, not by list position.\n"
+                f"Missing months by year:\n{summary}",
+                file=sys.stderr,
+            )
+            return matched_files
         raise FileNotFoundError(
             f"Missing required {type_} input files in {check_path}.\n"
             f"Strict mode: refusing to return a partial file_list because doing so "

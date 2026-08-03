@@ -105,12 +105,19 @@ if input_comments.name != input_submissions.name:
     )
 
 # generate input file lists
+# strict=False: build_merge_jobs() below matches months by the YYYY-MM parsed
+# from each filename, never by position in these lists, so months whose inputs
+# have already been consumed and deleted can be absent without shifting any
+# task -> month mapping. A month missing from BOTH sides is reported as
+# "Missing mergeable input file pair"; one missing from only ONE side still
+# raises in build_merge_jobs, and under Slurm that fails only the task owning
+# that month.
 input_comments_file_list = sorted(
-    check_reqd_files(years, input_comments, "comments"),
+    check_reqd_files(years, input_comments, "comments", strict=False),
     key=lambda p: Path(p).name,
 )
 input_submissions_file_list = sorted(
-    check_reqd_files(years, input_submissions, "submissions"),
+    check_reqd_files(years, input_submissions, "submissions", strict=False),
     key=lambda p: Path(p).name,
 )
 
@@ -360,24 +367,6 @@ def get_target_jobs(
 def organize_types_parallel() -> None:
     start_time = time.time()
 
-    # Clean up any .tmp files left behind by a crashed prior run before we
-    # build the processed_files set; otherwise their stems would falsely look
-    # complete to build_merge_jobs.
-    for f in os.listdir(output_path):
-        if f.endswith(".csv.tmp"):
-            try:
-                (output_path / f).unlink()
-                log_report(report_file_path, f"Removed stale temp file from prior crashed run: {f}")
-            except OSError as e:
-                log_report(report_file_path, f"Warning: could not remove stale temp file {f}: {e}")
-
-    # Track already-produced month files by stem, e.g. ALL_2012-01
-    processed_files = {
-        Path(f).stem
-        for f in os.listdir(output_path)
-        if f.endswith(".csv")
-    }
-
     files_per_job = getattr(args, "files_per_job", 1) or 1
     requested_months = build_requested_months(years)
     target_months = requested_months if args.array is None else requested_months[
@@ -388,6 +377,31 @@ def organize_types_parallel() -> None:
     if not target_months:
         log_report(report_file_path, "No target months assigned to this run.")
         return
+
+    # Clean up .tmp files left behind by a crashed prior run before we build the
+    # processed_files set; otherwise their stems would falsely look complete to
+    # build_merge_jobs.
+    # Scoped to THIS run's months: under Slurm the tasks share one output
+    # directory, so deleting every .tmp would destroy the in-flight temp file of
+    # a concurrently running task and make its final os.replace() fail.
+    for f in os.listdir(output_path):
+        if not f.endswith(".csv.tmp"):
+            continue
+        m = re.search(r"(\d{4})-(\d{2})", f)
+        if not m or (int(m.group(1)), m.group(2)) not in target_month_set:
+            continue
+        try:
+            (output_path / f).unlink()
+            log_report(report_file_path, f"Removed stale temp file from prior crashed run: {f}")
+        except OSError as e:
+            log_report(report_file_path, f"Warning: could not remove stale temp file {f}: {e}")
+
+    # Track already-produced month files by stem, e.g. ALL_2012-01
+    processed_files = {
+        Path(f).stem
+        for f in os.listdir(output_path)
+        if f.endswith(".csv")
+    }
 
     # Build independent jobs
     all_jobs = build_merge_jobs(

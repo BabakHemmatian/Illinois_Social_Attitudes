@@ -44,9 +44,14 @@ RESOURCE_SLURM_RESOURCES = {
 dir_path = os.path.dirname(os.path.realpath(__file__))  # kept for backward-compat
 CODE_DIR = Path(__file__).resolve().parent              # absolute /code
 PROJECT_ROOT = CODE_DIR.parent                          # absolute project root
-DATA_DIR = PROJECT_ROOT / "data"
-RAW_DIR = DATA_DIR / "data_reddit_raw"
-MODELS_DIR = PROJECT_ROOT / "models"                    # models folder
+# ISAAC_DATA_DIR / ISAAC_MODELS_DIR redirect all reads/writes that are not
+# covered by per-stage -i/-o overrides (the label_location cache dir, the
+# anonymization user_map, report files). Worker scripts import these constants
+# from cli, so the override propagates to every stage. Used by the workshop GUI
+# to give hosted sessions isolated workspaces; defaults preserve behavior.
+DATA_DIR = Path(os.environ.get("ISAAC_DATA_DIR", PROJECT_ROOT / "data"))
+RAW_DIR = Path(os.environ.get("ISAAC_RAW_DIR", DATA_DIR / "data_reddit_raw"))
+MODELS_DIR = Path(os.environ.get("ISAAC_MODELS_DIR", PROJECT_ROOT / "models"))
 
 ### Utilities
 
@@ -378,6 +383,11 @@ if __name__ == "__main__":
             "label_generalization",
             "label_emotion",
             "label_location",
+            # Both organize_* stages select their months by the YYYY-MM parsed
+            # from each filename rather than by position in the file list, so a
+            # Slurm array slot maps to a fixed month regardless of gaps.
+            "organize_types",
+            "organize_anonymize",
         }
 
         if args.group:

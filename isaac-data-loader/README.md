@@ -21,11 +21,11 @@ pip install isaac-data
 pip install git+https://github.com/BabakHemmatian/Illinois_Social_Attitudes.git#subdirectory=isaac-data-loader
 ```
 
-### Terms of Use
+### Data Use Agreement
 
 The first time you **access data** (`load`, `download`, or a remote `read_parquet`),
 the package shows the ISAAC
-[Terms of Use](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Terms_of_Use.md)
+[Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md)
 and asks you to accept. Acceptance is recorded **only on your machine** (in your
 OS config dir); nothing is sent anywhere. Browsing the catalog (`catalog`, `files`)
 needs no acceptance.
@@ -33,11 +33,16 @@ needs no acceptance.
 For non-interactive use (CI, headless notebooks), accept ahead of time:
 
 ```bash
-isaac-data accept-terms          # interactive review + accept
-isaac-data accept-terms --yes    # accept non-interactively
-isaac-data accept-terms --status # show / --withdraw to revoke
+isaac-data accept-agreement          # interactive review + accept
+isaac-data accept-agreement --yes    # accept non-interactively
+isaac-data accept-agreement --status # show / --withdraw to revoke
 ```
-…or set `ISAAC_ACCEPT_TERMS=1`. Otherwise data access raises `TermsNotAccepted`.
+…or set `ISAAC_ACCEPT_AGREEMENT=1`. Otherwise data access raises `AgreementNotAccepted`.
+
+> **Renamed in 0.1.2** — this document was previously the "Terms of Use". The old
+> names still work: `isaac-data accept-terms`, `ISAAC_ACCEPT_TERMS`,
+> `TermsNotAccepted`, `isaac_data.accept_terms`, and `import isaac_data.terms`.
+> Existing local acceptance records remain valid; no need to re-accept.
 
 ## Quick start
 
@@ -86,7 +91,7 @@ The package is three layers — **discover → read/fetch → configure**:
      (DuckDB, Spark).
 3. **Configure.** Reads and downloads are cached under an OS-native directory
    (`cache_dir()` / `set_cache_dir()` / `$ISAAC_DATA_CACHE`), and the first data
-   access prompts for Terms-of-Use acceptance (recorded locally).
+   access prompts for Data-Use-Agreement acceptance (recorded locally).
 
 In short: *catalog tells you what exists → files narrows it → load streams just
 the columns you need (or download grabs whole files) → the cache avoids repeat

@@ -25,20 +25,29 @@ from .core import (
     read_parquet,
     set_cache_dir,
 )
-from .terms import (
-    TermsNotAccepted,
-    accept_terms,
+from .agreement import (
+    AgreementNotAccepted,
+    accept_agreement,
     is_accepted,
-    status as terms_status,
-    withdraw as withdraw_terms,
+    status as agreement_status,
+    withdraw as withdraw_agreement,
 )
 
-__version__ = "0.1.1"
+# Pre-2026-07-25 names ("Terms of Use" era), kept importable for compatibility.
+TermsNotAccepted = AgreementNotAccepted
+accept_terms = accept_agreement
+terms_status = agreement_status
+withdraw_terms = withdraw_agreement
+
+__version__ = "0.1.2"
 
 __all__ = [
     "__version__",
     "BASE_URL", "DATA_BASE", "MANIFEST_URL", "CATEGORIES",
     "cache_dir", "set_cache_dir", "catalog", "files",
     "download", "read_parquet", "load",
-    "accept_terms", "is_accepted", "terms_status", "withdraw_terms", "TermsNotAccepted",
+    "accept_agreement", "is_accepted", "agreement_status", "withdraw_agreement",
+    "AgreementNotAccepted",
+    # deprecated aliases
+    "accept_terms", "terms_status", "withdraw_terms", "TermsNotAccepted",
 ]

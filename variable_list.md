@@ -36,11 +36,11 @@ Each row in ISAAC represents a Reddit submission or comment associated with its 
 
 55. **location**: The user's home location based on a weighted, hierarchical model of their Reddit history (word usage, subreddit activity and post timestamps). At the coarsest level, it separates 'US' from 'Non-US' users. Non-US users are further divided into 'ASIA-OCEANIA','AMERICAS','AFRICA' and 'EUROPE' subgroups. US users are divided down to the state level using two letter codes (e.g., AK for Arkansas). If confidence thresholds are not met for predictions at a finer level, the higher level label is listed. If no high-confidence labels could be assigned, this field says UNK for 'unknown'. 
 
-56. **location_prob**: The model-assigned probability for the label in column 55. Empty if assigned location is UNK. 
+56. **location_prob**: The model's confidence score for the label in column 55. Empty if assigned location is UNK. Treat this as an ordinal ranking signal, not as a calibrated probability: accuracy increases monotonically with the score at every level of the hierarchy, so the column is reliable for ordering users or selecting a high-confidence subset, but its face value understates the true accuracy. The understatement is mild for the US/Non-US decision and severe at the state level, where held-out authors scoring .06 are in fact correct 61% of the time and those scoring .46 are correct 92% of the time. Most of the deflation is inherited from the underlying logistic-regression classifiers, which spread probability mass broadly across a large label set: at the state level the word-feature model alone already reports a mean score of .34 for predictions that are 76% accurate. Mixing in the structured-feature model, which carries little state-level signal, flattens the scores further without harming accuracy. The mixture weights were selected to maximise top-1 accuracy, a criterion that constrains the ordering of candidates but not the scale of their scores. Compare scores only within a level (see column 55): a state-level .30 and a US/Non-US .30 do not mean the same thing. 
 
 57. **contender_location**: The second-most likely label for the user's home location per the model. Could be the top non-UNK label if the assigned location is UNK. 
 
-58. **contender_location_prob**: The model-assigned probability for the contender location in column 57.
+58. **contender_location_prob**: The model's confidence score for the contender location in column 57, on the same scale and with the same caveats as column 56.
 
 59. **type**: The Reddit post type (comment or submission) that represents the current row's entry. 
 

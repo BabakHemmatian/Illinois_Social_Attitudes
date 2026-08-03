@@ -31,7 +31,12 @@ def _fmt(args) -> str | None:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="isaac-data", description="ISAAC corpus direct-download helper.")
     parser.add_argument("--version", action="version", version=f"isaac-data {__version__}")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    # metavar lists only the public commands; `accept-terms` is a hidden
+    # pre-2026-07-25 alias that still parses.
+    sub = parser.add_subparsers(
+        dest="cmd", required=True,
+        metavar="{ls,info,download,accept-agreement}",
+    )
 
     p_ls = sub.add_parser("ls", help="list matching files")
     _add_selection_args(p_ls)
@@ -42,26 +47,31 @@ def main(argv=None) -> int:
     _add_selection_args(p_dl)
     p_dl.add_argument("-d", "--dest", help="destination directory (default: cache)")
 
-    p_acc = sub.add_parser("accept-terms", help="review & accept the Terms of Use (recorded locally)")
-    p_acc.add_argument("-y", "--yes", action="store_true", help="accept without the interactive prompt")
-    p_acc.add_argument("--status", action="store_true", help="show current acceptance record and exit")
-    p_acc.add_argument("--withdraw", action="store_true", help="delete the local acceptance record")
+    for _name, _kw in (
+        ("accept-agreement", {"help": "review & accept the Data Use Agreement (recorded locally)"}),
+        # Pre-2026-07-25 name, kept working; no `help` so it stays out of --help.
+        ("accept-terms", {}),
+    ):
+        p_acc = sub.add_parser(_name, **_kw)
+        p_acc.add_argument("-y", "--yes", action="store_true", help="accept without the interactive prompt")
+        p_acc.add_argument("--status", action="store_true", help="show current acceptance record and exit")
+        p_acc.add_argument("--withdraw", action="store_true", help="delete the local acceptance record")
 
     args = parser.parse_args(argv)
 
-    if args.cmd == "accept-terms":
-        from .terms import accept_terms, status, withdraw, TermsNotAccepted
+    if args.cmd in ("accept-agreement", "accept-terms"):
+        from .agreement import accept_agreement, status, withdraw, AgreementNotAccepted
         if args.status:
             s = status()
-            print(json.dumps(s, indent=2) if s else "Terms of Use not yet accepted on this machine.")
+            print(json.dumps(s, indent=2) if s else "Data Use Agreement not yet accepted on this machine.")
             return 0
         if args.withdraw:
             print("Removed local acceptance record." if withdraw() else "No acceptance record to remove.")
             return 0
         try:
-            accept_terms(assume_yes=args.yes)
+            accept_agreement(assume_yes=args.yes)
             return 0
-        except TermsNotAccepted as e:
+        except AgreementNotAccepted as e:
             print(str(e), file=sys.stderr)
             return 2
 

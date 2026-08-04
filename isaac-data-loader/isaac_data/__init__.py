@@ -17,6 +17,7 @@ from .core import (
     CATEGORIES,
     DATA_BASE,
     MANIFEST_URL,
+    DataHostUnavailable,
     cache_dir,
     catalog,
     download,
@@ -45,7 +46,7 @@ __all__ = [
     "__version__",
     "BASE_URL", "DATA_BASE", "MANIFEST_URL", "CATEGORIES",
     "cache_dir", "set_cache_dir", "catalog", "files",
-    "download", "read_parquet", "load",
+    "download", "read_parquet", "load", "DataHostUnavailable",
     "accept_agreement", "is_accepted", "agreement_status", "withdraw_agreement",
     "AgreementNotAccepted",
     # deprecated aliases

@@ -27,7 +27,7 @@ from .agreement import require_acceptance
 __all__ = [
     "BASE_URL", "DATA_BASE", "MANIFEST_URL", "CATEGORIES",
     "cache_dir", "set_cache_dir", "catalog", "files",
-    "download", "read_parquet", "load",
+    "download", "read_parquet", "load", "DataHostUnavailable",
 ]
 
 # BASE_URL is the website that serves the small JSON catalog (manifest.json).
@@ -176,12 +176,170 @@ def files(
 
 
 # --------------------------------------------------------------------------- #
+# HTTP robustness
+# --------------------------------------------------------------------------- #
+# The bulk files live on a Globus HTTPS collection that is load-balanced across
+# several GridFTP backends. A backend occasionally fails a request with
+#     GlobusError: v=1 c=INTERNAL_ERROR / GridFTP-Errno: 108
+#     "Cannot send after transport endpoint shutdown"
+# which the collection renders as HTTP 404 — indistinguishable from a missing
+# file by status code alone. Two properties drive the handling below:
+#   * The failure is decided at connect time and is sticky for the life of that
+#     connection, so retrying on the same pooled connection always re-fails.
+#     Retries must use a *fresh* connection (new fsspec filesystem instance).
+#   * fsspec turns the failed size probe into an unknown-length, non-seekable
+#     stream instead of raising; pyarrow then dies with the opaque
+#     "Cannot seek streaming HTTP file" when it reaches for the parquet footer.
+# A real 404 (GridFTP-Errno 2, PATH_NOT_FOUND) is permanent and must not be
+# retried, so the two are told apart by the error body, not the status code.
+_HTTP_ATTEMPTS = int(os.environ.get("ISAAC_HTTP_ATTEMPTS", "5"))
+_HTTP_BACKOFF = 0.3  # seconds, multiplied by the attempt number
+
+
+class DataHostUnavailable(RuntimeError):
+    """The ISAAC data host kept failing a request that should have succeeded.
+
+    Raised only after `ISAAC_HTTP_ATTEMPTS` fresh connections have all failed,
+    which points at the data host rather than at your query. Retrying later
+    normally succeeds.
+    """
+
+
+def _missing_message(url: str, detail: str = "") -> str:
+    return (
+        f"{url} is listed in the ISAAC manifest but the data host does not have it. "
+        "This is a server-side gap rather than a problem with your query — please "
+        "report it at https://isaac.psychology.illinois.edu/direct-download/."
+        + (f" Host said: {detail}" if detail else "")
+    )
+
+
+def _is_transient_body(body: str) -> bool:
+    """True if a 404 body is the Globus backend error rather than a real miss."""
+    return "INTERNAL_ERROR" in body
+
+
+def _check_response(r, url: str) -> None:
+    """Raise FileNotFoundError (permanent) or DataHostUnavailable (retryable)."""
+    if r.status_code < 400:
+        return
+    body = " ".join((r.text or "")[:300].split())
+    if r.status_code == 404 and not _is_transient_body(body):
+        raise FileNotFoundError(_missing_message(url, body))
+    raise DataHostUnavailable(f"{url}: HTTP {r.status_code}: {body}")
+
+
+def _probe_url(url: str) -> Tuple[bool, bool, str]:
+    """Ask the host about ``url`` on a fresh connection.
+
+    Returns ``(ok, permanently_missing, detail)``. Used to classify failures that
+    reach us without a usable status code (e.g. fsspec's silent size probe).
+    """
+    try:
+        r = requests.get(url, headers={"Range": "bytes=0-0"}, timeout=30, allow_redirects=True)
+    except requests.RequestException as e:  # connection reset, timeout, ...
+        return False, False, f"{type(e).__name__}: {e}"
+    if r.status_code < 400:
+        return True, False, ""
+    body = " ".join((r.text or "")[:300].split())
+    return False, r.status_code == 404 and not _is_transient_body(body), f"HTTP {r.status_code}: {body}"
+
+
+def _open_remote_parquet(url: str):
+    """Open an http(s) parquet URL as a **seekable** file object for pyarrow.
+
+    Retries on a new connection each time, because a flaky backend is pinned to
+    the connection it was chosen for. A handle whose size is unknown is treated
+    as a failed attempt: pyarrow cannot seek to the footer without it.
+
+    Raises:
+        FileNotFoundError: the file is genuinely absent on the host.
+        DataHostUnavailable: every attempt failed; the caller may fall back to a
+            whole-file download.
+    """
+    import fsspec
+
+    detail = "the host returned no content length"
+    for attempt in range(1, _HTTP_ATTEMPTS + 1):
+        # skip_instance_cache: fsspec caches filesystems (and their connection
+        # pools) globally, so without this every retry reuses the bad backend.
+        fs = fsspec.filesystem("http", skip_instance_cache=True)
+        try:
+            fh = fs.open(url, "rb")
+        except FileNotFoundError:
+            ok, missing, why = _probe_url(url)
+            if missing:
+                raise FileNotFoundError(_missing_message(url, why)) from None
+            detail = why or "the host reported the file as missing"
+        else:
+            if fh.size is not None:
+                return fh
+            fh.close()
+        if attempt < _HTTP_ATTEMPTS:
+            time.sleep(_HTTP_BACKOFF * attempt)
+    raise DataHostUnavailable(
+        f"{url}: {_HTTP_ATTEMPTS} attempts on new connections all failed ({detail}). "
+        "This is a transient failure of the ISAAC data host, not of your query; "
+        "retry shortly, or pass cache=True to download the file instead."
+    )
+
+
+def _cache_path_for_url(url: str) -> Path:
+    """Where a URL's whole-file download lands in the local cache."""
+    from urllib.parse import urlparse
+
+    rel = urlparse(url).path.lstrip("/") or "download"
+    return cache_dir() / "files" / rel
+
+
+def _fallback_to_download(url: str, rel_path: Optional[str] = None) -> Path:
+    """Last resort when streaming keeps failing: fetch the whole file, cached."""
+    import warnings
+
+    warnings.warn(
+        f"Streaming {url} failed repeatedly; falling back to a whole-file download "
+        "into the local cache. Pass cache=True to do this up front.",
+        RuntimeWarning,
+        stacklevel=3,
+    )
+    dest = (cache_dir() / "files" / rel_path) if rel_path else _cache_path_for_url(url)
+    return _download_one(url, dest)
+
+
+# --------------------------------------------------------------------------- #
 # Download (resumable, cached)
 # --------------------------------------------------------------------------- #
 def _download_one(url: str, dest: Path, chunk: int = 1 << 20) -> Path:
+    """Download ``url`` to ``dest``, resuming partial files and retrying the host.
+
+    Raises:
+        FileNotFoundError: the file is genuinely absent on the host.
+        DataHostUnavailable: the host failed every attempt.
+    """
     dest = Path(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
 
+    detail = ""
+    for attempt in range(1, _HTTP_ATTEMPTS + 1):
+        try:
+            return _download_attempt(url, dest, chunk)
+        except DataHostUnavailable as e:
+            detail = str(e)
+        except requests.RequestException as e:  # dropped connection mid-transfer
+            detail = f"{type(e).__name__}: {e}"
+        if attempt < _HTTP_ATTEMPTS:
+            time.sleep(_HTTP_BACKOFF * attempt)
+    raise DataHostUnavailable(
+        f"{url}: download failed on {_HTTP_ATTEMPTS} attempts ({detail}). "
+        "This is a transient failure of the ISAAC data host; retry shortly."
+    )
+
+
+def _download_attempt(url: str, dest: Path, chunk: int = 1 << 20) -> Path:
+    # The HEAD is only for sizing/resume, and is never used to classify a
+    # failure: a HEAD response carries no body, so the Globus error text that
+    # separates "missing" from "backend hiccup" is not there to read. A failed
+    # HEAD just means "size unknown"; the GET below is the authority.
     head = requests.head(url, allow_redirects=True, timeout=30)
     total = int(head.headers.get("Content-Length", 0)) if head.ok else 0
     if dest.exists() and total and dest.stat().st_size == total:
@@ -192,7 +350,8 @@ def _download_one(url: str, dest: Path, chunk: int = 1 << 20) -> Path:
     headers = {"Range": f"bytes={have}-"} if have and total else {}
 
     with requests.get(url, headers=headers, stream=True, timeout=120) as r:
-        r.raise_for_status()
+        _check_response(r, url)
+        expected = total or _expected_total(r, have)
         # If we asked to resume but the server ignored Range (200, not 206),
         # restart from the beginning to avoid corrupting the file.
         mode = "ab" if (have and r.status_code == 206) else "wb"
@@ -200,8 +359,33 @@ def _download_one(url: str, dest: Path, chunk: int = 1 << 20) -> Path:
             for block in r.iter_content(chunk):
                 if block:
                     fh.write(block)
+
+    # A failing backend can answer 200 with an empty or short body. Never
+    # promote such a file to ``dest``: pyarrow would report the useless
+    # "Parquet file size is 0 bytes" instead of the retryable host problem.
+    written = part.stat().st_size if part.exists() else 0
+    if written == 0 or (expected and written != expected):
+        if written == 0:
+            part.unlink(missing_ok=True)  # nothing to resume from
+        raise DataHostUnavailable(
+            f"{url}: the host sent {written} bytes of "
+            f"{expected if expected else 'an unstated number of'} bytes"
+        )
     part.replace(dest)
     return dest
+
+
+def _expected_total(r, have: int) -> int:
+    """Full file size implied by a response, or 0 if the host didn't say."""
+    content_range = r.headers.get("Content-Range", "")
+    if "/" in content_range:
+        tail = content_range.rsplit("/", 1)[-1].strip()
+        if tail.isdigit():
+            return int(tail)
+    length = r.headers.get("Content-Length")
+    if length and str(length).isdigit():
+        return int(length) + (have if r.status_code == 206 else 0)
+    return 0
 
 
 def download(
@@ -235,6 +419,8 @@ def download(
     Raises:
         ValueError: if no files match the selection.
         AgreementNotAccepted: if the Data Use Agreement has not been accepted.
+        FileNotFoundError: if a selected file is missing on the data host.
+        DataHostUnavailable: if the data host fails every attempt at a file.
     """
     require_acceptance()
     sel = files(category, start, end, fmt, refresh=refresh)
@@ -264,29 +450,51 @@ def read_parquet(url: str, columns: Optional[Sequence[str]] = None):
 
     Raises:
         AgreementNotAccepted: for http URLs, if the Data Use Agreement is not accepted.
+        FileNotFoundError: for http URLs, if the host does not have the file.
+        DataHostUnavailable: if the host fails every attempt, streamed and downloaded.
     """
     import pyarrow.parquet as pq
 
     if str(url).startswith(("http://", "https://")):
         require_acceptance()
-        import fsspec
-        with fsspec.open(url, "rb") as fh:
-            return pq.read_table(fh, columns=columns).to_pandas()
+        try:
+            with _open_remote_parquet(url) as fh:
+                return pq.read_table(fh, columns=columns).to_pandas()
+        except DataHostUnavailable:
+            local = _fallback_to_download(url)
+        return pq.read_table(str(local), columns=list(columns) if columns else None).to_pandas()
     return pq.read_table(url, columns=list(columns) if columns else None).to_pandas()
+
+
+def _read_csv_source(url, rel_path, columns, cache):
+    """Read a CSV, over HTTP or from the cache, retrying a flaky host."""
+    import pandas as pd
+
+    usecols = list(columns) if columns else None
+    if cache:
+        return pd.read_csv(str(_download_one(url, cache_dir() / "files" / rel_path)), usecols=usecols)
+    try:
+        return pd.read_csv(url, usecols=usecols)
+    except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+        # pandas streams CSV over urllib, so a backend hiccup surfaces either as
+        # an HTTPError/URLError or as an empty/garbled body. No ISAAC CSV is
+        # empty, so re-fetch through the retrying, size-checked download path;
+        # if the file really is malformed, reading the local copy raises the
+        # same error and the user still learns the truth.
+        _, missing, why = _probe_url(url)
+        if missing:
+            raise FileNotFoundError(_missing_message(url, why)) from None
+        return pd.read_csv(str(_fallback_to_download(url, rel_path)), usecols=usecols)
 
 
 def _read_one(row, columns, cache):
     """Read one whole file (column-projected) into a DataFrame. Used by load()."""
-    import pandas as pd
     if row.format == "parquet":
         if cache:
             p = _download_one(row.url, cache_dir() / "files" / row.rel_path)
             return read_parquet(str(p), columns=columns)
         return read_parquet(row.url, columns=columns)
-    src = row.url
-    if cache:
-        src = str(_download_one(row.url, cache_dir() / "files" / row.rel_path))
-    return pd.read_csv(src, usecols=list(columns) if columns else None)
+    return _read_csv_source(row.url, row.rel_path, columns, cache)
 
 
 def _sample_one(row, k, columns, seed_seq, cache):
@@ -304,15 +512,15 @@ def _sample_one(row, k, columns, seed_seq, cache):
         if cache:
             p = _download_one(row.url, cache_dir() / "files" / row.rel_path)
             return sample_parquet(str(p), num_rows, k, columns, rng)
-        import fsspec
-        with fsspec.open(row.url, "rb") as fh:
-            return sample_parquet(fh, num_rows, k, columns, rng)
+        try:
+            with _open_remote_parquet(row.url) as fh:
+                return sample_parquet(fh, num_rows, k, columns, rng)
+        except DataHostUnavailable:
+            local = _fallback_to_download(row.url, row.rel_path)
+        return sample_parquet(str(local), num_rows, k, columns, rng)
 
     # CSV fallback: no cheap random access over HTTP, so read then take positions.
-    src = row.url
-    if cache:
-        src = str(_download_one(row.url, cache_dir() / "files" / row.rel_path))
-    full = pd.read_csv(src, usecols=list(columns) if columns else None)
+    full = _read_csv_source(row.url, row.rel_path, columns, cache)
     if len(full) <= k:
         return full.reset_index(drop=True)
     pos = np.sort(rng.choice(len(full), size=k, replace=False))
@@ -372,6 +580,8 @@ def load(
         ValueError: if no files match, or the selection exceeds ``max_bytes``
             without ``columns`` or ``n``.
         AgreementNotAccepted: if the Data Use Agreement has not been accepted.
+        FileNotFoundError: if a selected file is missing on the data host.
+        DataHostUnavailable: if the data host fails every attempt at a file.
     """
     import pandas as pd
 

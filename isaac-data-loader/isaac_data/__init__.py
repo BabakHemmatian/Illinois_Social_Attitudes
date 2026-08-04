@@ -40,7 +40,7 @@ accept_terms = accept_agreement
 terms_status = agreement_status
 withdraw_terms = withdraw_agreement
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"
 
 __all__ = [
     "__version__",

@@ -54,6 +54,7 @@ def main(argv=None) -> int:
     ):
         p_acc = sub.add_parser(_name, **_kw)
         p_acc.add_argument("-y", "--yes", action="store_true", help="accept without the interactive prompt")
+        p_acc.add_argument("--email", help="contact address to record (else ISAAC_AGREEMENT_EMAIL, else prompted)")
         p_acc.add_argument("--status", action="store_true", help="show current acceptance record and exit")
         p_acc.add_argument("--withdraw", action="store_true", help="delete the local acceptance record")
 
@@ -69,7 +70,7 @@ def main(argv=None) -> int:
             print("Removed local acceptance record." if withdraw() else "No acceptance record to remove.")
             return 0
         try:
-            accept_agreement(assume_yes=args.yes)
+            accept_agreement(assume_yes=args.yes, email=args.email)
             return 0
         except AgreementNotAccepted as e:
             print(str(e), file=sys.stderr)

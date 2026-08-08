@@ -26,18 +26,38 @@ pip install git+https://github.com/BabakHemmatian/Illinois_Social_Attitudes.git#
 The first time you **access data** (`load`, `download`, or a remote `read_parquet`),
 the package shows the ISAAC
 [Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md)
-and asks you to accept. Acceptance is recorded **only on your machine** (in your
-OS config dir); nothing is sent anywhere. Browsing the catalog (`catalog`, `files`)
-needs no acceptance.
+and asks you to accept, then asks for your email address. Browsing the catalog
+(`catalog`, `files`) needs no acceptance.
+
+**What is recorded.** Acceptance is saved on your machine (in your OS config dir)
+and sent to the ISAAC server: your email, the timestamp, and the version
+identifiers of the agreement text you were shown. An email address is required
+to accept.
+
+> We ask for your email so we can notify you of changes to the Data Use
+> Agreement and of corrections or errata affecting the corpus, and to keep a
+> record of your acceptance. We do not share it, and we don't use it for
+> anything else.
+
+Sending the record is best-effort: if the server is unreachable, acceptance is
+still recorded locally and data access proceeds.
+
+**If the agreement changes.** The package identifies the agreement by a SHA-256
+of its exact text and re-checks at most once a day. If the text has changed since
+you accepted, you are shown the new version and asked to accept it again. If you
+are offline, your existing acceptance stands.
 
 For non-interactive use (CI, headless notebooks), accept ahead of time:
 
 ```bash
-isaac-data accept-agreement          # interactive review + accept
-isaac-data accept-agreement --yes    # accept non-interactively
-isaac-data accept-agreement --status # show / --withdraw to revoke
+isaac-data accept-agreement                        # interactive review + accept
+isaac-data accept-agreement --yes --email you@x.edu # accept non-interactively
+isaac-data accept-agreement --status               # show / --withdraw to revoke
 ```
-…or set `ISAAC_ACCEPT_AGREEMENT=1`. Otherwise data access raises `AgreementNotAccepted`.
+…or set `ISAAC_ACCEPT_AGREEMENT=1` **together with** `ISAAC_AGREEMENT_EMAIL` —
+there is no prompt to fall back on in a non-interactive session, so opting in
+without an address raises `AgreementNotAccepted` rather than recording an
+anonymous acceptance.
 
 > **Renamed in 0.1.2** — this document was previously the "Terms of Use". The old
 > names still work: `isaac-data accept-terms`, `ISAAC_ACCEPT_TERMS`,
@@ -91,7 +111,8 @@ The package is three layers — **discover → read/fetch → configure**:
      (DuckDB, Spark).
 3. **Configure.** Reads and downloads are cached under an OS-native directory
    (`cache_dir()` / `set_cache_dir()` / `$ISAAC_DATA_CACHE`), and the first data
-   access prompts for Data-Use-Agreement acceptance (recorded locally).
+   access prompts for Data-Use-Agreement acceptance (recorded locally, and on
+   the ISAAC server when you provide an email).
 
 In short: *catalog tells you what exists → files narrows it → load streams just
 the columns you need (or download grabs whole files) → the cache avoids repeat

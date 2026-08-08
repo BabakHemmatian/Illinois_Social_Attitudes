@@ -64,7 +64,7 @@ Install [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) on 
 
 Download [this folder](https://drive.google.com/drive/folders/1TqxjRRMZ3LTGWRCMkK6_tnIo_Zg1vms1?usp=sharing) into the newly created ```Illinois_Social_Attitudes``` folder.
 
-The raw Reddit data that the ```filter_keywords``` resource requires can be found and downloaded [here](https://academictorrents.com/details/ba051999301b109eab37d16f027b3f49ade2de13). The relevant .zst files for a given timeframe are to be placed in ```data/data_reddit_raw/comments/``` or ```data/data_reddit_raw/submissions/``` depending on the type of Reddit post you are targeting with your command. 
+The raw Reddit data that the ```filter_keywords``` resource requires can be found and downloaded [here](https://arctic-shift.photon-reddit.com/). The relevant .zst files for a given timeframe are to be placed in ```data/data_reddit_raw/comments/``` or ```data/data_reddit_raw/submissions/``` depending on the type of Reddit post you are targeting with your command. 
 
 ### Virtual Environment Setup
 Follow the steps [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html) to install the desired version of Anaconda. 

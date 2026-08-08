@@ -85,6 +85,34 @@ def main() -> int:
         assert os.path.isdir(os.path.join(shards_root, "merged", "100_1"))
         print("[ok] rows routed to per-year canonical DBs; drained run dirs archived")
 
+        # skip_job_ids: a live array's dirs survive untouched while everyone
+        # else folds. This is the property whose absence starved every merge in
+        # the project's history -- the old code skipped the WHOLE merge instead.
+        _shard(shards_root, "400_1", [("u3", "RC_2020-06", {"cf": 1}, 4)])   # live
+        _shard(shards_root, "400_2", [("u3", "RC_2020-07", {"cg": 1}, 4)])   # live, same array
+        _shard(shards_root, "500_1", [("u4", "RC_2020-08", {"ch": 1}, 6)])   # finished
+        stats4 = merge_author_file_counts_shards(
+            canonical, RTYPE, archive=True, skip_job_ids={"400"}
+        )
+        assert stats4["run_dirs"] == 1, stats4          # only 500_1 merged
+        assert stats4["skipped_active"] == 2, stats4    # both 400_* left alone
+        assert os.path.isdir(os.path.join(shards_root, "400_1")), "live dir was archived!"
+        assert os.path.isdir(os.path.join(shards_root, "400_2")), "live dir was archived!"
+        assert not os.path.exists(os.path.join(shards_root, "500_1"))
+        live_check = cache_get_author_file_counts_sharded(canonical, RTYPE, ["2020"], {"u3", "u4"})
+        assert "u3" not in live_check, "live array's rows leaked into canonical"
+        assert live_check["u4"][0] == {"RC_2020-08"}, live_check
+        print("[ok] live array's run dirs skipped intact; finished array's merged")
+
+        # Once the array leaves the queue, its dirs fold in on the next merge --
+        # nothing is lost by having been skipped.
+        stats5 = merge_author_file_counts_shards(canonical, RTYPE, archive=True, skip_job_ids=set())
+        assert stats5["run_dirs"] == 2, stats5
+        after = cache_get_author_file_counts_sharded(canonical, RTYPE, ["2020"], {"u3"})
+        assert after["u3"][0] == {"RC_2020-06", "RC_2020-07"}, after
+        assert after["u3"][2] == 8, after               # 4+4
+        print("[ok] formerly-live dirs fold in on the next merge")
+
     print("ALL MERGE TESTS PASSED")
     return 0
 

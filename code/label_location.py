@@ -14,7 +14,7 @@ import traceback
 from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 import numpy as np
 from scipy import sparse
@@ -1883,32 +1883,48 @@ def label_location_parallel() -> None:
     log_report(report_file_path, f"[summary] total rows written: {total_rows:,} total authors: {total_authors:,} raw-scanned authors: {total_raw:,}")
 
 
-def _label_location_array_running() -> bool:
-    """True if any of this user's SLURM jobs is a RUNNING label_location ARRAY
-    (any curated type or social group) that could still be writing scan-state
+def _live_label_location_array_ids() -> Optional[Set[str]]:
+    """Array job ids of this user's label_location ARRAYS that are still in the
+    queue (any state, not just RUNNING) and so could still write scan-state
     shards. NOT keyed on curated type: every label_location run defaults to
     RAW_TYPE=comments (a submissions run locates submitters from their comment
     history), so comments AND submissions arrays write into the SAME shared
-    author_file_counts_<RAW_TYPE>_*.sqlite shards. A merge therefore has to wait
-    out EVERY running array, or it could fold/archive another array's in-flight
-    shard dir. Merge jobs themselves (name '...__merge') are excluded so a merge
-    never blocks on itself. Best-effort: squeue absent -> False."""
+    author_file_counts_<RAW_TYPE>_*.sqlite shards. Merge jobs themselves (name
+    '...__merge') are excluded so a merge never blocks on itself.
+
+    PENDING counts as live on purpose: a queued task starts writing a fresh run
+    dir at any moment, and one that starts just after this snapshot must not
+    have its dir archived mid-write.
+
+    Returns a set of array job ids, empty if nothing is queued. Returns None if
+    the queue could not be READ (squeue present but failing) -- the caller must
+    then defer rather than merge blind. squeue absent entirely (local/dev, no
+    Slurm) -> empty set, since there are no array tasks to protect.
+
+    Uses '%i', not '%A': for a RUNNING array task %A yields that task's own job
+    id (e.g. 52057), which never matches a run dir name -- those are
+    "<SLURM_ARRAY_JOB_ID>_<TASK_ID>" (e.g. 51892_49). %i renders as "51892_64"
+    or "51892_[65-203%4]", so the leading field is the array id.
+    """
     user = os.environ.get("USER") or os.environ.get("LOGNAME") or ""
     try:
         out = subprocess.run(
-            ["squeue", "-h", "-u", user, "-o", "%j %t"],
+            ["squeue", "-h", "-u", user, "-o", "%i %j"],
             capture_output=True, text=True, timeout=30,
         )
-    except (FileNotFoundError, subprocess.SubprocessError):
-        return False
+    except FileNotFoundError:
+        return set()
+    except subprocess.SubprocessError:
+        return None
     if out.returncode != 0:
-        return False
+        return None
+    ids: Set[str] = set()
     for line in out.stdout.splitlines():
         parts = line.split()
-        if (len(parts) >= 2 and parts[0].startswith("label_location__")
-                and not parts[0].endswith("__merge") and parts[-1] == "R"):
-            return True
-    return False
+        if (len(parts) >= 2 and parts[1].startswith("label_location__")
+                and not parts[1].endswith("__merge")):
+            ids.add(re.split(r"[_.]", parts[0])[0])
+    return ids
 
 
 def run_shard_merge() -> None:
@@ -1918,30 +1934,55 @@ def run_shard_merge() -> None:
     (author, raw_file) rows, INSERT OR IGNORE), so re-running is harmless and
     orphaned shards from a wall-time-killed run still contribute.
 
-    Defers (exits 0 without merging) while ANY other label_location array is
-    still running -- those arrays share the same RAW_TYPE shards, so the
-    last-finishing array's merge folds everyone's accumulated shards (the
-    deferred shards stay on disk, nothing is lost). LABEL_LOCATION_MERGE_FORCE=1
-    overrides."""
+    Merges every run dir EXCEPT those belonging to a label_location array still
+    in the queue, which are left on disk for a later merge.
+
+    History: this used to defer wholesale -- skip the entire merge whenever any
+    other array was RUNNING -- on the assumption that the last-finishing array's
+    merge would fold everyone's shards. With tracks queued back-to-back there is
+    never a moment with zero live arrays, so that moment never came: all 9
+    merges up to 2026-08-08 deferred, `shards/merged/` was never created, and
+    102 GB of scan state sat unreadable for ~6 weeks while every run logged
+    `fully_cached_for_raw=0`. Worse, it did so invisibly -- COMPLETED, exit 0,
+    empty stderr. Skipping only the live arrays' dirs keeps the same safety
+    (never fold an in-flight dir) without the starvation.
+
+    LABEL_LOCATION_MERGE_FORCE=1 merges everything including live arrays' dirs.
+    That can archive a dir a running task is still writing -- only for use when
+    you know no array is writing."""
     shards_root = location_scan_state_shard_root(str(CACHE_DIR))
     if not os.path.isdir(shards_root):
         print(f"[merge] nothing to do: no shards dir at {shards_root}")
         return
     force = bool(os.environ.get("LABEL_LOCATION_MERGE_FORCE"))
-    if not force and _label_location_array_running():
-        print(
-            "[merge] DEFERRING: another label_location array is still RUNNING and writing "
-            "shards (all runs share the RAW_TYPE shards). Its own post-array merge will fold "
-            "everything once it is the last one finished; shards stay on disk meanwhile. "
-            "Set LABEL_LOCATION_MERGE_FORCE=1 to merge now anyway."
-        )
-        return
+    skip_ids: Set[str] = set()
+    if force:
+        print("[merge] LABEL_LOCATION_MERGE_FORCE=1: merging ALL run dirs, including live arrays'")
+    else:
+        live = _live_label_location_array_ids()
+        if live is None:
+            print(
+                "[merge] DEFERRING: could not read the Slurm queue, so live arrays cannot be "
+                "identified and merging might archive an in-flight shard dir. Shards stay on "
+                "disk; re-run this merge (it is idempotent) or set "
+                "LABEL_LOCATION_MERGE_FORCE=1 once no array is writing."
+            )
+            return
+        skip_ids = live
+        print(f"[merge] live label_location arrays, will skip their run dirs: {sorted(skip_ids) or 'none'}")
     print(f"[merge] folding shards under {shards_root} (type={RAW_TYPE}) into canonical {CACHE_DIR}")
-    stats = merge_author_file_counts_shards(str(CACHE_DIR), RAW_TYPE, archive=True)
+    stats = merge_author_file_counts_shards(
+        str(CACHE_DIR), RAW_TYPE, archive=True, skip_job_ids=skip_ids
+    )
     print(
         f"[merge] done: run_dirs={stats['run_dirs']} shard_dbs={stats['shard_dbs']} "
         f"rows={stats['rows_merged']:,} skipped_active={stats['skipped_active']}"
     )
+    if stats["skipped_active"]:
+        print(
+            f"[merge] NOTE: {stats['skipped_active']} run dir(s) left unmerged (live arrays). "
+            "They fold in on the next merge, once those arrays leave the queue."
+        )
 
 
 if __name__ == "__main__":

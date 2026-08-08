@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import List, Dict, Literal, NamedTuple, Tuple, Optional, Any
+from typing import List, Dict, Iterable, Literal, NamedTuple, Tuple, Optional, Any
 import zstandard
 import io
 import json
@@ -1623,6 +1623,7 @@ def merge_author_file_counts_shards(
     archive: bool = True,
     min_age_seconds: float = 0.0,
     now: Optional[float] = None,
+    skip_job_ids: Optional[Iterable[str]] = None,
 ) -> Dict[str, int]:
     """Fold per-task scan-state shards under <canonical_cache_dir>/shards/<run>/
     into the canonical year-sharded author_file_counts DBs.
@@ -1634,10 +1635,18 @@ def merge_author_file_counts_shards(
     mid-merge just re-drains the un-archived remainder harmlessly on the next
     call.
 
-    min_age_seconds: skip (do not merge/archive) run dirs whose newest shard was
-    modified within this window -- a coarse "looks still-active" guard. Default
-    0 (merge everything); the canonical contract is to run this while no
-    label_location array is writing.
+    skip_job_ids: array job ids whose run dirs must be left alone. Run dirs are
+    named "<SLURM_ARRAY_JOB_ID>_<TASK_ID>", so this excludes every task of a
+    still-live array while merging everyone else's. This is the precise guard
+    and the one callers should use: it is what lets a merge make progress while
+    another array runs, instead of deferring wholesale (see label_location's
+    run_shard_merge).
+
+    min_age_seconds: additionally skip run dirs whose newest shard was modified
+    within this window -- a coarse "looks still-active" fallback. Default 0
+    (off). NOT sufficient on its own: a live task can go 5+ hours between
+    flushes on the big months, so an mtime threshold alone will happily archive
+    a dir that is still being written. Prefer skip_job_ids.
     """
     import glob
     import shutil
@@ -1649,11 +1658,16 @@ def merge_author_file_counts_shards(
         return stats
 
     ref_now = now if now is not None else time.time()
+    skip_ids = {str(j) for j in (skip_job_ids or ())}
     for run_id in sorted(os.listdir(shards_root)):
         if run_id == "merged":
             continue
         run_dir = os.path.join(shards_root, run_id)
         if not os.path.isdir(run_dir):
+            continue
+        # "51892_49" / "51892_49.1" -> array job id "51892"
+        if skip_ids and re.split(r"[_.]", run_id)[0] in skip_ids:
+            stats["skipped_active"] += 1
             continue
         shard_dbs = sorted(glob.glob(os.path.join(run_dir, f"author_file_counts_{rtype}_*.sqlite")))
         if not shard_dbs:

@@ -146,7 +146,16 @@ CACHE_FLUSH_ROWS = max(100_000, batch_size * 100)
 # Parallel file scan: enabled only for SLURM array tasks (single-process); falls back to 1 locally
 # and in multi-process mode to avoid compounding memory with ProcessPoolExecutor workers.
 _slurm_cpus = int(os.environ.get("SLURM_CPUS_PER_TASK", 0))
-n_scan_workers = _slurm_cpus if (_slurm_cpus > 0 and getattr(args, "array", None) is not None) else 1
+# ISAAC_SCAN_WORKERS decouples the scan thread count from the CPU *reservation*.
+# The scan threads spend nearly all their time blocked on NFS reads, so the thread
+# count does not need a CPU each: measured over 358 tasks of job 53304 (4 CPUs
+# allocated each), realized CPU was p50 1.52 / p99 1.63 / max 1.71 cores -- the
+# 4 threads never came close to saturating even 2 cores. Setting this to 4 with
+# --cpus-per-task=2 therefore halves the CPU held per task at equal throughput.
+# Unset => falls back to SLURM_CPUS_PER_TASK, i.e. the previous behaviour exactly.
+_env_workers = int(os.environ.get("ISAAC_SCAN_WORKERS", 0))
+_workers = _env_workers or _slurm_cpus
+n_scan_workers = _workers if (_workers > 0 and getattr(args, "array", None) is not None) else 1
 
 
 ### Path Handling

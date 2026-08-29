@@ -6,6 +6,7 @@ import os
 import re
 import secrets
 import sqlite3
+import sys
 import time
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -375,7 +376,7 @@ def anonymize_one_file(
 
 ### Main execution
 
-def organize_anonymize() -> None:
+def organize_anonymize() -> int:
     start_time = time.time()
 
     files_per_job = getattr(args, "files_per_job", 1) or 1
@@ -438,11 +439,12 @@ def organize_anonymize() -> None:
         f"Finished anonymization. Successful: {processed}, Skipped: {skipped}, Failed: {failed}, "
         f"Rows written: {total_rows}, New IDs assigned: {total_new_ids}, Time: {elapsed_time:.2f} minutes"
     )
+    return failed
 
 if __name__ == "__main__":
     overall_start_time = time.time()
     try:
-        organize_anonymize()
+        n_failed = organize_anonymize()
     except Exception as e:
         reraise_fatal(report_file_path, "organize_anonymize", e)
 
@@ -461,3 +463,18 @@ if __name__ == "__main__":
         report_file_path,
         f"Anonymization for {group} / {type_} for {scope_msg} finished in {total_time:.2f} minutes"
     )
+
+    # Per-file failures are logged but were invisible to Slurm: the process fell
+    # off the end at exit 0, so a task that anonymized NOTHING still reported
+    # COMPLETED and would satisfy an afterok dependency. Observed 2026-08-29 --
+    # 8 weight months hit a transient "disk I/O error", wrote 0 rows, and every
+    # one of them still showed COMPLETED in sacct. The partial (truncated) outputs
+    # they leave behind are safe to retry: anonymize_one_file resumes via
+    # get_resume_position, which trims the torn trailing row and appends. That
+    # only helps if someone knows to retry, hence this exit code.
+    if n_failed:
+        log_report(
+            report_file_path,
+            f"Exiting non-zero: {n_failed} file(s) failed for {group} / {type_} ({scope_msg})."
+        )
+        sys.exit(1)

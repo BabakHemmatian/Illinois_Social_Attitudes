@@ -7,6 +7,7 @@
 *.csv
 *.jsonl
 *.sqlite
+*.sqlite3
 
 # Atomic-write temp files from the pipeline (e.g. .RC_2014-12.csv.b8cWe1).
 # These escape the *.csv / *.jsonl rules because the real extension is the
@@ -14,6 +15,18 @@
 .*.csv.*
 .*.jsonl.*
 .*.sqlite.*
+.*.sqlite3.*
+
+# The author map — NEVER commit. It holds the username -> anonymous ID
+# mapping that organize_anonymize and warm_author_map build, so it is the one
+# artifact that can re-identify every author in the corpus. SQLite's
+# write-ahead log and shared-memory sidecars hold the same content and do not
+# match the extension rules above, so they are listed explicitly.
+data/user_map.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
 
 # Whitelist the relevance training samples and the post-filter QA samples so
 # reviewers can audit the FPR / kappa / classifier-performance claims.

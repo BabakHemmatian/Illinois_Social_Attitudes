@@ -65,7 +65,7 @@ log_report(report_file_path, f"Using device: {device}")
 tokenizer = BertTokenizerFast.from_pretrained(model_path)
 model = BertForSequenceClassification.from_pretrained(
     model_path,
-    device_map=None,   # or "auto" if you want
+    device_map=None,   # explicit .to(device) below; "auto" would shard across GPUs
     use_safetensors=True
 ).to(device)
 if torch.cuda.device_count() > 1:  # if more than one GPU is available

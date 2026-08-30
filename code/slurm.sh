@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --mail-user=babak.hemmatian@stonybrook.edu
+#SBATCH --mail-user=[replace with your email address]
 #SBATCH --mail-type=END,FAIL
 #SBATCH --time=96:00:00
 #SBATCH --mem=48G

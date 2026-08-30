@@ -104,6 +104,12 @@ The scripts may be used without any changes to recreate the ISAAC corpus. To do 
 10. ```organize_types```: Combines one-to-one Reddit 'comment' and 'submissions' datasets into a unified timestamp-organized dataset.
 11. ```organize_anonymize```: Replaces author usernames with persistent random IDs to safeguard Reddit users' privacy. 
 
+**Prerequisite for batch runs.** With ```--slurm```, ```organize_anonymize``` runs as a job array and opens the author map read-only, so every author must already have an assigned ID before the array starts. Run the standalone warming pass once per social group first. It is not a ```cli.py``` resource, so call it directly:
+```
+python ./code/warm_author_map.py --group sexuality --years 2007-2023
+```
+Add ```--check``` to report how many authors would be warmed without writing anything. Local (non-```--slurm```) runs mint IDs on demand and do not need this step.
+
 ### Batch Processing Support
 
 All resources support batch processing on a supercomputing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Benefits will be particularly stark for ```label``` resources. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. Several command line arguments such as ```--num-jobs``` control the behavior of the slurm versions of resources. 
@@ -113,6 +119,18 @@ All resources support batch processing on a supercomputing cluster by adding the
 _filter_ resources use CPU-based parallelization for extremely fast processing. 
 
 _label_ resources, with the exception of the CPU-only ```label_location```, become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). These resources print out the "device" as well as GPU RAM usage as part of their logging, which can be used to confirm the appropriate use of "cuda".
+
+### Output Verification
+
+Recreating the corpus writes terabytes of CSVs across long-running jobs, and both ```organize``` resources resume in ways that can silently accept a truncated file: ```organize_types``` treats any existing ```ALL_YYYY-MM.csv``` as complete, and ```organize_anonymize``` appends past a torn trailing row. Storage faults and interrupted jobs can therefore leave damage that file sizes and timestamps do not reveal.
+
+The ```verify_integrity``` script checks the curated outputs by reading every byte rather than trusting filesystem metadata, and reconciles row counts between each stage's inputs and outputs. It is not a ```cli.py``` resource, so call it directly:
+```
+python ./code/verify_integrity.py --group sexuality --scope types --quick   # fast triage
+python ./code/verify_integrity.py --group sexuality --scope all             # full read
+python ./code/verify_integrity.py --group sexuality --scope anon           # + anon ID cross-reference
+```
+Pass ```--stage``` to check a stage other than the most advanced one found on disk, and ```--db``` if your author map is not at the default path. It is optional for producing the corpus but recommended after any interrupted or failed run.
 
 ## Adaptations
 

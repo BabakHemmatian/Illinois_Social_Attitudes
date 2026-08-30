@@ -173,8 +173,7 @@ def get_last_source_row(output_file_path: str | Path,
     # implementation swallowed that error and returned the max source_row seen
     # SO FAR (a truncated value). The caller then resumed in append mode from
     # that too-low point and RE-WROTE every well-formed row after it, producing
-    # large duplicate blocks in the output (observed: sexuality/comments
-    # RC_2023-10 re-appended ~136k rows). Raise the limit locally (restore on
+    # large duplicate blocks in the output. Raise the limit locally (restore on
     # exit) so the whole file is scanned.
     try:
         _prev_limit = csv.field_size_limit(2**31 - 1)

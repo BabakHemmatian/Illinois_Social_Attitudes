@@ -81,7 +81,7 @@ def label_sentiment_file(file):
 
     # sentiment tools
     try:
-        _ = nlp, analyzer  # type: ignore  # these are set later in your script
+        _ = nlp, analyzer  # type: ignore  # set at module scope on first call below
     except NameError:
         stanza.download('en', processors='tokenize,sentiment', verbose=False)
         globals()["nlp"] = stanza.Pipeline(lang='en', processors='tokenize,sentiment')
@@ -90,7 +90,7 @@ def label_sentiment_file(file):
 
     # batching
     try:
-        BATCH = int(batch_size)  # use your global if present
+        BATCH = int(batch_size)  # module-level batch_size if defined; falls back below
     except Exception:
         BATCH = 1200
 

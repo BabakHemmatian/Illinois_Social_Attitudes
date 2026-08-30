@@ -4,7 +4,7 @@
 
 <h1 align="center">Illinois Social Attitudes Aggregate Corpus</h1>
 
-This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, generalization, sentiment, emotions and state-level US location mapping. The resources are designed to be easily adapted for developing similar datasets targeting other distinctions (see [Adaptations](#adaptations)). 
+This repository contains tools for the development and evaluation of the publicly available [**Illinois Social Attitudes Aggregate Corpus (ISAAC)**](https://isaac.psychology.illinois.edu), a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, generalization, sentiment, emotions and US-state-level user location mapping. The resources are designed to be easily adapted for developing similar datasets targeting other distinctions (see [Adaptations](#adaptations)). 
 
 **ATTENTION:** By using this repository or the associated data and tools you agree to the [Data Use Agreement](./Data_Use_Agreement.md). 
 
@@ -15,15 +15,15 @@ This repository contains tools for the development and evaluation of the **Illin
 **Corpus size (combined): 527,060,919 posts**
 
 ![Number of documents (comments + submissions) per social distinction. Each bar stacks comments (bottom) and submissions (top); the combined total is annotated above each bar. sexuality (gay-straight; 67,552,683 comments + 12,014,516 submissions = 79,567,199); race (Black-White; 72,641,057 + 9,707,554 = 82,348,611); age (young-old; 250,791,532 + 29,411,923 = 280,203,455); ability (abled-disabled; 19,322,244 + 3,633,138 = 22,955,382); weight (fat-thin; 17,191,901 + 5,165,709 = 22,357,610); skin_tone (dark-light; 34,979,892 + 4,648,770 = 39,628,662)](./freq_aggregate.png)
-![Number of documents per month over time for all distinctions, pooling comments and submissions per distinction. Counts are exact monthly row counts (proper CSV parsing) from the final curated data for each set.](./line_overlay_distinctions.png)
+![Number of documents per month over time for all distinctions, pooling comments and submissions per distinction.](./line_overlay_distinctions.png)
 
-## Corpus Access
+## Access
 
-A coding-free website for convenient access to the full corpus or samples of it can be found [here](https://isaac.psychology.illinois.edu). Comments and submissions are served together, as one labeled file per social group per month, for all six distinctions.
+A variety of coding-free and script-based tools for convenient access to the full corpus or samples of it are found [here](https://isaac.psychology.illinois.edu). Scripts and frontend/backend development resources for the access website are [here](https://github.com/BabakHemmatian/ISAAC_Sampler) and [here](https://github.com/BabakHemmatian/ISAAC_Sampler_Backend). 
 
 ## Corpus Interpretation
 
-You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). The social-psychological and location labels are already present in the uploaded corpus; users targeting other data can find plug-and-play scripts in this repository for extracting them themselves. 
+You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). Users targeting other data with the same labeling tools can find plug-and-play scripts in this repository as discussed below. 
 
 ## The Current Repository
 
@@ -33,7 +33,7 @@ This repository contains the scripts that allow you to rebuild ISAAC from scratc
 - Generating generalized language (e.g., genericity), moralization, sentiment and emotion labels for the pruned corpus.
 - Estimate user location down to US state based on Reddit activity history.
 
-The scripts were designed to be easily adapted for developing other Reddit corpora. See the [Adaptations](#adaptations) section.
+The scripts were designed to be easily adapted for developing other corpora. See the [Adaptations](#adaptations) section.
 
 **Note:**
 - The scripts were developed on Windows 11, then tested on Ubuntu. However, cross-platform compatibility is not guaranteed.
@@ -60,7 +60,7 @@ Hemmatian, B., Kurdi, B. (2025). The Illinois Social Attitudes Aggregate Corpus 
 ## How To Use
 
 ### Repository Setup
-Install [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) on your computer. When finished, open a command line terminal, navigate to where you would like to place the repository, then enter ```git clone https://github.com/BabakHemmatian/Illinois_Social_Attitudes.git```. Note that the raw and processed data files for the full 2007-2023 take several terabytes of space. Choose the repository location according to your use case's storage needs.
+Install [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) on your computer. When finished, open a command line terminal, navigate to where you would like to place the repository, then enter ```git clone https://github.com/BabakHemmatian/Illinois_Social_Attitudes.git```. Note that raw and processed Reddit data files for the full 2007-2023 take several terabytes of space. Choose the repository location according to your use case's storage needs.
 
 Download [this folder](https://drive.google.com/drive/folders/1TqxjRRMZ3LTGWRCMkK6_tnIo_Zg1vms1?usp=sharing) into the newly created ```Illinois_Social_Attitudes``` folder.
 
@@ -90,7 +90,7 @@ This example command will use the appropriate keyword lists from this repository
 
 ### Default Resource Use Order
 
-The scripts may be used without any changes to recreate the ISAAC corpus. To do so, call the resources without custom ```--input``` and ```--output``` path arguments in the following order for the desired social group and year range:
+Given access to the raw Reddit data files, the scripts may be used without any changes to recreate the ISAAC corpus. To do so, call the resources without custom ```--input``` and ```--output``` path arguments in the following order for the desired social group and year range:
 
 1. ```filter_keywords```: Uses an extremely fast algorithm to parse trillions of Reddit posts for large sets of keywords that suggest potential relevance to ISAAC's key social distinctions. 
 2. ```filter_language```: Uses a pre-trained language detection model from FastText to filter out non-English posts. 
@@ -100,37 +100,31 @@ The scripts may be used without any changes to recreate the ISAAC corpus. To do 
 6. _```label_sentiment```_: Generates a range of sentiment labels for a post based on [Stanza](https://stanfordnlp.github.io/stanza/sentiment.html), [TextBlob](https://textblob.readthedocs.io/en/dev/quickstart.html) and [Vader](https://github.com/cjhutto/vaderSentiment) models. The combination of multiple models supports reliable inference.
 7. _```label_generalization```_: Generates clause-by-clause labels for the linguistic features that determine the degree of generalization in each statement within a post. See the [variables list](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md) for more details.
 8. _```label_emotion```_: Generates a range of emotion labels for a post based on the neural network models found [here](https://huggingface.co/j-hartmann/emotion-english-distilroberta-base), [here](https://huggingface.co/sickboi25/emotion-detector) and [here](https://huggingface.co/tae898/emoberta-base).
-9. _```label_location```_: Estimates a post author's home location down to the state-level for US users and to global region for non-US users based on Reddit posting history. This is the slowest resource with a unique set of command line arguments and environment variables. Defaults are stringent through 2019 and comparatively relaxed for 2020–2023 to support processing within a reasonable timeframe, but can be overriden. Peak RAM per task scales with the month's raw volume: during ISAAC development we observed a median of ~19 GB and a maximum of ~35 GB per task (high-volume months from 2018 onward are the heaviest; small early months use only a few GB). Size `--mem` accordingly (we used up to ~24 GB for ≥2018 months). Each task also keeps a 1-5 GB persistent scan-progress cache on disk. See [Label Location Internals](label_location_internals.md) for details.  
+9. ```label_location```: Estimates a post author's home location down to the state-level for US users and to global region for non-US users based on Reddit posting history. This is the slowest resource with a unique set of command line arguments and environment variables. Defaults are stringent through 2019 and comparatively relaxed for 2020–2023 to support processing within a reasonable timeframe, but can be overriden. Peak RAM per task scales with the month's raw volume: during ISAAC development we observed a median of ~19 GB and a maximum of ~35 GB per task (high-volume months from 2018 onward are the heaviest; small early months use only a few GB). Size `--mem` accordingly (we used up to ~24 GB for ≥2018 months). Each task also keeps a 1-5 GB persistent scan-progress cache on disk. See [Label Location Internals](label_location_internals.md) for details.  
 10. ```organize_types```: Combines one-to-one Reddit 'comment' and 'submissions' datasets into a unified timestamp-organized dataset.
-11. ```organize_anonymize```: Replaces author usernames with persistent random IDs to safeguard Reddit users' privacy. 
-
-**Prerequisite for batch runs.** With ```--slurm```, ```organize_anonymize``` runs as a job array and opens the author map read-only, so every author must already have an assigned ID before the array starts. Run the standalone warming pass once per social group first. It is not a ```cli.py``` resource, so call it directly:
-```
-python ./code/warm_author_map.py --group sexuality --years 2007-2023
-```
-Add ```--check``` to report how many authors would be warmed without writing anything. Local (non-```--slurm```) runs mint IDs on demand and do not need this step.
+11. ```organize_anonymize```: Replaces author usernames with persistent random IDs to safeguard Reddit users' privacy. The user-ID key is stored in a local SQL database. 
 
 ### Batch Processing Support
 
 All resources support batch processing on a supercomputing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Benefits will be particularly stark for ```label``` resources. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. Several command line arguments such as ```--num-jobs``` control the behavior of the slurm versions of resources. 
 
+For ```organize_anonymize```, running a batch job with the ```--slurm``` flag requires running the standalone warming pass first. This additional step is not a ```cli.py``` resource, so call it directly: ```python ./code/warm_author_map.py --group sexuality --years 2007-2023```. Add ```--check``` to report how many authors would be warmed without writing anything. Local (non-```--slurm```) runs mint IDs on demand and do not need this step.
+
 ### CPU and GPU Acceleration
 
 _filter_ resources use CPU-based parallelization for extremely fast processing. 
 
-_label_ resources, with the exception of the CPU-only ```label_location```, become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). These resources print out the "device" as well as GPU RAM usage as part of their logging, which can be used to confirm the appropriate use of "cuda".
+The italicized _label_ resources listed above (all labelers except the CPU-only ```label_location```), become much faster with Cuda-enabled GPU acceleration (available on Nvidia graphics cards, with a corresponding tool for Mac users). These resources print out the "device" as well as GPU RAM usage as part of their logging, which can be used to confirm the appropriate use of "cuda".
 
 ### Output Verification
 
-Recreating the corpus writes terabytes of CSVs across long-running jobs, and both ```organize``` resources resume in ways that can silently accept a truncated file: ```organize_types``` treats any existing ```ALL_YYYY-MM.csv``` as complete, and ```organize_anonymize``` appends past a torn trailing row. Storage faults and interrupted jobs can therefore leave damage that file sizes and timestamps do not reveal.
-
-The ```verify_integrity``` script checks the curated outputs by reading every byte rather than trusting filesystem metadata, and reconciles row counts between each stage's inputs and outputs. It is not a ```cli.py``` resource, so call it directly:
+Recreating the corpus writes terabytes of CSVs across long-running jobs. The ```verify_integrity``` script checks the curated outputs by reading every byte rather than trusting filesystem metadata, and reconciles row counts between each stage's inputs and outputs to ensure dataset integrity after long runs. It is not a ```cli.py``` resource, so call it directly:
 ```
 python ./code/verify_integrity.py --group sexuality --scope types --quick   # fast triage
 python ./code/verify_integrity.py --group sexuality --scope all             # full read
 python ./code/verify_integrity.py --group sexuality --scope anon           # + anon ID cross-reference
 ```
-Pass ```--stage``` to check a stage other than the most advanced one found on disk, and ```--db``` if your author map is not at the default path. It is optional for producing the corpus but recommended after any interrupted or failed run.
+Pass ```--stage``` to check a stage other than the most advanced one found on disk, and ```--db``` if the stage is past anonymization and the author map is not at the default path. It is optional for producing the corpus but recommended after any interrupted or failed run.
 
 ## Adaptations
 

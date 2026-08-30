@@ -4,7 +4,7 @@
 
 <h1 align="center">Illinois Social Attitudes Aggregate Corpus</h1>
 
-This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are being labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, generalization, sentiment, emotions and state-level US location mapping. The resources are designed to be easily adapted for developing similar datasets targeting other distinctions (see [Adaptations](#adaptations)). 
+This repository contains tools for the development and evaluation of the **Illinois Social Attitudes Aggregate Corpus (ISAAC)**, a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, generalization, sentiment, emotions and state-level US location mapping. The resources are designed to be easily adapted for developing similar datasets targeting other distinctions (see [Adaptations](#adaptations)). 
 
 **ATTENTION:** By using this repository or the associated data and tools you agree to the [Data Use Agreement](./Data_Use_Agreement.md). 
 
@@ -19,11 +19,11 @@ This repository contains tools for the development and evaluation of the **Illin
 
 ## Corpus Access
 
-A coding-free website for convenient access to the full comment corpus or samples of it can be found [here](https://isaac.psychology.illinois.edu). Submissions will be integrated into the same dataset soon.
+A coding-free website for convenient access to the full corpus or samples of it can be found [here](https://isaac.psychology.illinois.edu). Comments and submissions are served together, as one labeled file per social group per month, for all six distinctions.
 
 ## Corpus Interpretation
 
-You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). We are currently adding social-psychological and location labels to the uploaded version of the corpus, but users can find plug-and-play scripts in this repository for extracting them themselves. 
+You can read about the list of variables included in the corpus and their definitions [here](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/variable_list.md). The social-psychological and location labels are already present in the uploaded corpus; users targeting other data can find plug-and-play scripts in this repository for extracting them themselves. 
 
 ## The Current Repository
 
@@ -64,7 +64,7 @@ Install [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) on 
 
 Download [this folder](https://drive.google.com/drive/folders/1TqxjRRMZ3LTGWRCMkK6_tnIo_Zg1vms1?usp=sharing) into the newly created ```Illinois_Social_Attitudes``` folder.
 
-The raw Reddit data that the ```filter_keywords``` resource requires can be found and downloaded [here](https://arctic-shift.photon-reddit.com/). The relevant .zst files for a given timeframe are to be placed in ```data/data_reddit_raw/comments/``` or ```data/data_reddit_raw/submissions/``` depending on the type of Reddit post you are targeting with your command. 
+The ```filter_keywords``` resource expects raw monthly Reddit dumps in the Pushshift format: ```.zst```-compressed newline-delimited JSON, one object per post. Place the relevant files for a given timeframe in ```data/data_reddit_raw/comments/``` or ```data/data_reddit_raw/submissions/``` depending on the type of Reddit post you are targeting with your command. These dumps are no longer distributed through a stable public bulk endpoint, so this step assumes you already hold a copy. If your raw data is in a different shape, adapt the two resources that read it directly -- ```filter_keywords```, which selects posts, and ```label_location```, which scans authors' posting histories. The remaining resources consume curated CSVs and are unaffected by the raw format. 
 
 ### Virtual Environment Setup
 Follow the steps [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html) to install the desired version of Anaconda. 

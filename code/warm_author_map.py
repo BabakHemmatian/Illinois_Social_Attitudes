@@ -68,7 +68,7 @@ PRESERVED_AUTHORS = {"", "[deleted]", "[removed]"}
 # four orders of magnitude -- ALL_2007-01 is 2,121 rows while ALL_2023-08 is
 # 12 GB. A fixed month count that is safe for 2007 is ruinous for 2023.
 #
-# Sizing: measured 2026-07-27, a Python set costs ~95 bytes per author, and the
+# Sizing: a Python set costs ~95 bytes per author, and the
 # corpus runs ~433k rows/GB with roughly a third of rows carrying a distinct
 # author -- so about 12 MB of author set per GB of input. 24 GB per batch keeps
 # the parent near 300 MB, which fits comfortably even when free RAM is tight.
@@ -131,18 +131,17 @@ def open_cache(db_path: Path, synchronous: str = "FULL",
     cur = conn.cursor()
     cur.execute("PRAGMA journal_mode=WAL;")
     # FULL rather than organize_anonymize's NORMAL: this is the only phase that
-    # writes, and NORMAL does not fsync the WAL per commit -- which is how the
-    # 2026-07-26 disconnect lost WAL data. One bulk commit per batch makes the
+    # writes, and NORMAL does not fsync the WAL per commit, so WAL data can be
+    # lost if the node drops mid-run. One bulk commit per batch makes the
     # stricter setting essentially free.
     cur.execute(f"PRAGMA synchronous={synchronous};")
     cur.execute("PRAGMA busy_timeout=120000;")
     # SQLite defaults to a 2 MB page cache. Against a 1.3 GB author map that is
     # catastrophic here, because each batch streams 24 GB of CSVs which flushes
     # the OS file cache and evicts every database page before the insert phase
-    # begins. Measured degradation with the default: 216 -> 169 -> 60 inserts/s
-    # across batches 1-3 while the map grew only 14% (2026-07-27), heading for
-    # 70+ hours. A large cache is private heap memory, so unlike mmap the CSV
-    # streaming cannot evict it.
+    # begins. With the default cache, insert throughput degrades sharply batch
+    # over batch even as the map itself grows only slightly. A large cache is
+    # private heap memory, so unlike mmap the CSV streaming cannot evict it.
     cur.execute(f"PRAGMA cache_size=-{cache_mb * 1024};")
     cur.execute("PRAGMA temp_store=MEMORY;")
     cur.execute(
@@ -161,9 +160,8 @@ def open_cache(db_path: Path, synchronous: str = "FULL",
 
 # Probing in SORTED order is the whole trick here. Iterating a set yields hash
 # order, so consecutive probes land in unrelated parts of the author index and
-# every one costs a physical seek: measured 2026-07-27 at 519 reads/s of exactly
-# 4 KB, having pulled 8.56 GB off disk against a 1.23 GB database -- roughly
-# seven full re-reads -- without finishing one batch. Sorted probes walk the
+# every one costs a physical seek: the database gets re-read many times over
+# without finishing a single batch. Sorted probes walk the
 # index in ascending order instead, so each page read serves many consecutive
 # lookups and the traversal is effectively sequential.
 def filter_known(conn: sqlite3.Connection, authors: Set[str]) -> Set[str]:
@@ -180,21 +178,17 @@ def filter_known(conn: sqlite3.Connection, authors: Set[str]) -> Set[str]:
     return unknown
 
 
-# Preloading every existing key is the default because probing per author is
-# hopeless on this hardware. Measured 2026-07-27 against the live 11.1M-row map:
+# Preloading every existing key is the default because per-author probing is
+# orders of magnitude slower than one sequential scan of the key column: random
+# index probes cost a seek each and are repeated every batch, while the scan is
+# sequential and runs once. Sorting the probes first does not close the gap,
+# because a batch's keys spread over a multi-million-row index hit a distinct
+# page either way.
 #
-#   per-author index probe   ~460 keys/s   (random 4 KB reads, ~2 ms each)
-#   sequential column scan  80,650 keys/s   (11.1M keys in 138 s)
-#
-# a 175x gap. Probing would cost 65-87 min per batch, 34-45 hours over 31
-# batches; the scan costs 138 seconds once. Sorting the probes first does NOT
-# close the gap -- measured at 347/s sorted vs 458/s unsorted, because 11k keys
-# spread over an 11M-row index hit a distinct page either way.
-#
-# Keys are stored as 64-bit hashes in a sorted int64 array: 85 MB instead of the
-# ~1.0 GB a set of the strings would need, which matters on a box hovering
-# around 2.3 GB free. Python's per-process hash randomisation is fine here --
-# the array is rebuilt from the database on every run and never persisted.
+# Keys are stored as 64-bit hashes in a sorted int64 array, roughly an order of
+# magnitude smaller than the set of strings it replaces, which matters when free
+# RAM is tight. Python's per-process hash randomisation is fine here -- the
+# array is rebuilt from the database on every run and never persisted.
 #
 # Collision exposure is negligible: ~6e-13 per new author against 11.1M existing
 # hashes, so ~2e-6 expected across the whole run. Were one to occur, that author
@@ -249,13 +243,11 @@ def insert_new_authors(conn: sqlite3.Connection, authors: Set[str],
     collisions = 0
 
     # Sorted order was expected to give the primary-key index locality, but
-    # MEASURED NO BENEFIT: batch 1 unsorted ran 456,813 inserts at 216/s, batch 2
-    # sorted ran 517,231 at 169/s (2026-07-27; batch 2 also faced a 4% larger
-    # index and a cold cache, so treat it as "no gain" rather than a regression).
-    # Kept because sorting 500k strings is negligible and the order is at worst
-    # neutral -- but do not expect it to speed anything up. The binding cost is
-    # the anon_id unique index, which is random by construction because those IDs
-    # are deliberately unpredictable, and no insert ordering can fix that.
+    # shows no measurable benefit. Kept because sorting is negligible next to
+    # the inserts and the order is at worst neutral -- but do not expect it to
+    # speed anything up. The binding cost is the anon_id unique index, which is
+    # random by construction because those IDs are deliberately unpredictable,
+    # and no insert ordering can fix that.
     cur.execute("BEGIN IMMEDIATE;")
     try:
         for author in sorted(authors):
@@ -295,6 +287,20 @@ def insert_new_authors(conn: sqlite3.Connection, authors: Set[str],
 # the portion actually written ever reached the map. Skipping those would leave
 # ~97% of that month's authors unwarmed, putting the anonymizer straight back on
 # the per-author commit path this script exists to avoid.
+#
+# OFF BY DEFAULT -- this attribution is NOT reliable, and it is only reachable
+# via --trust-anonymize-log. The group/stage below is carried as PARSER STATE
+# from the last 'X identified as the most advanced curated dataset for <group>
+# entries' line, but every job appends to one shared
+# report_organize_anonymize.csv. Concurrent runs interleave, so an 'Anonymized
+# ALL_...' line can be attributed to whichever group last wrote a context header
+# rather than to the job that emitted it. Real months then get skipped as
+# "already anonymized" and are missing from the map, which under a read-only
+# (--array) run aborts each month mid-write while the task still exits 0.
+#
+# warmed_months_from_log() below is the safe skip source: its format is one flat
+# 'timestamp,group,stage,months...' record per line, with no cross-line state,
+# so interleaved writers cannot mix records up.
 def completed_months_from_log(report_path: Path, group: str, stage: str) -> Set[str]:
     if not report_path.exists():
         return set()
@@ -404,6 +410,12 @@ def main() -> int:
     ap.add_argument("--all-months", action="store_true",
                     help="include months already logged complete (safe but slower; "
                          "warming is idempotent)")
+    ap.add_argument("--trust-anonymize-log", action="store_true",
+                    help="also skip months that report_organize_anonymize.csv claims "
+                         "were already anonymized. OFF by default: concurrent jobs "
+                         "share that file and its group attribution is parser state, "
+                         "so months get skipped that were never warmed (see "
+                         "completed_months_from_log).")
     ap.add_argument("--cache-mb", type=int, default=512,
                     help="SQLite page cache in MB (default 512). The 2 MB default "
                          "collapses on a 1.3 GB map once CSV streaming evicts the "
@@ -425,19 +437,27 @@ def main() -> int:
 
     completed = set()
     if not args.all_months:
-        completed = completed_months_from_log(
-            PROJECT_ROOT / "report_organize_anonymize.csv", args.group, args.stage)
+        # The warm log is the only trustworthy skip source: flat, one record per
+        # line, no cross-line state for interleaved writers to corrupt.
         already_warm = warmed_months_from_log(
             PROJECT_ROOT / WARM_LOG, args.group, args.stage)
         if already_warm:
             print(f"skipping {len(already_warm)} months already warmed in a prior run.")
-        if completed:
-            print(f"skipping {len(completed)} months already anonymized.")
         completed |= already_warm
+
+        # Opt-in only -- see the warning on completed_months_from_log. Re-warming
+        # an already-anonymized month is idempotent and costs one extra scan, so
+        # the default trades that scan for not silently leaving months unwarmed.
+        if args.trust_anonymize_log:
+            anon_done = completed_months_from_log(
+                PROJECT_ROOT / "report_organize_anonymize.csv", args.group, args.stage)
+            if anon_done:
+                print(f"skipping {len(anon_done)} months already anonymized "
+                      f"(--trust-anonymize-log; attribution may be wrong).")
+            completed |= anon_done
     months = resolve_months(merged, years, completed)
     if completed:
-        print(f"{len(completed)} months skipped in total "
-              f"(already anonymized or already warmed).")
+        print(f"{len(completed)} months skipped in total.")
     if not months:
         print("No months to warm.")
         return 0

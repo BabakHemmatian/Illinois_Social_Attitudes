@@ -466,12 +466,12 @@ if __name__ == "__main__":
 
     # Per-file failures are logged but were invisible to Slurm: the process fell
     # off the end at exit 0, so a task that anonymized NOTHING still reported
-    # COMPLETED and would satisfy an afterok dependency. Observed 2026-08-29 --
-    # 8 weight months hit a transient "disk I/O error", wrote 0 rows, and every
-    # one of them still showed COMPLETED in sacct. The partial (truncated) outputs
-    # they leave behind are safe to retry: anonymize_one_file resumes via
-    # get_resume_position, which trims the torn trailing row and appends. That
-    # only helps if someone knows to retry, hence this exit code.
+    # COMPLETED and would satisfy an afterok dependency. A transient "disk I/O
+    # error" can leave a task that wrote 0 rows still reporting COMPLETED. The
+    # partial (truncated) outputs they leave behind are safe to retry:
+    # anonymize_one_file resumes via get_resume_position, which trims the torn
+    # trailing row and appends. That only helps if someone knows to retry, hence
+    # this exit code.
     if n_failed:
         log_report(
             report_file_path,

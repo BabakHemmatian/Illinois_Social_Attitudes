@@ -1,10 +1,9 @@
 """
 Post-crash integrity verification for the curated Reddit CSVs.
 
-Written after the 2026-07-26 external-drive disconnect, which produced exFAT
-"delayed write failed" errors against the age/all/labeled_location directory.
-Directory metadata (including file sizes and mtimes) is unreliable after such an
-event, so nothing here trusts stat() -- every verdict comes from reading bytes.
+Directory metadata (including file sizes and mtimes) is unreliable after a
+storage fault, so nothing here trusts stat() -- every verdict comes from
+reading bytes.
 
 Two failure modes this is built to catch:
 
@@ -244,8 +243,8 @@ def full_check(path: Path, kind: str = "types", db_path: Optional[Path] = None) 
 
     # Out-of-order timestamps are baseline noise: the raw dumps are not perfectly
     # sorted and organize_types only preserves whatever order its inputs had.
-    # Verified 2026-07-26 -- source and anon files for the same month carry
-    # identical counts. Reported, but not treated as damage on its own. A count
+    # Source and anon files for the same month carry identical counts.
+    # Reported, but not treated as damage on its own. A count
     # that DROPS relative to the source file does indicate truncation, which the
     # row-count reconciliation catches directly.
     if kind == "anon" and db_path and anon_ids:
@@ -275,11 +274,11 @@ def count_rows(path: Path) -> int:
     return total
 
 
-# Returns (total rows, distinct id count). Both matter: the anonymized outputs
-# for `sexuality` were deduplicated on 2026-07-12/19 (commit 07fdd4c, "removing
-# re-append duplicate rows") while their sources still carry the duplicates, so
-# a deduplicated output legitimately holds `distinct` rows rather than `total`.
-# Comparing against `total` alone reports every deduplicated month as damaged.
+# Returns (total rows, distinct id count). Both matter: some anonymized outputs
+# were deduplicated after release while their source files still carry the
+# duplicates, so a deduplicated output legitimately holds `distinct` rows rather
+# than `total`. Comparing against `total` alone reports every deduplicated month
+# as damaged.
 def count_rows_and_distinct(path: Path) -> Tuple[int, int]:
     state = {"nul_lines": 0, "replacement_chars": 0, "ends_with_newline": None,
              "max_line_bytes": 0}
@@ -346,9 +345,9 @@ def reconcile_types(result: Dict, comments_dir: Path, submissions_dir: Path,
 
 # organize_anonymize logs the row count it wrote for each month. When a month
 # was written exactly once, that count IS the source row count, so it can stand
-# in for re-reading the source -- halving a full sweep's I/O (176 GB instead of
-# 350 GB for sexuality). Months written more than once are omitted: their
-# figures are per-invocation appends, not totals.
+# in for re-reading the source -- roughly halving a full sweep's I/O. Months
+# written more than once are omitted: their figures are per-invocation appends,
+# not totals.
 def expected_rows_from_log(report_path: Path, group: str, stage: str) -> Dict[str, int]:
     if not report_path.exists():
         return {}
@@ -492,9 +491,9 @@ class Layout:
         self.submissions = CURATED / group / "submissions" / stage
 
 
-# 'age' and 'sexuality' are the merged groups; both currently sit at
-# labeled_location, but older runs left a labeled_emotion_anon behind, so the
-# stage is resolved rather than assumed.
+# Groups may sit at different pipeline stages, and older runs can leave an
+# earlier *_anon directory behind, so the stage is resolved from disk rather
+# than assumed.
 def resolve_stage(group: str, stage: Optional[str]) -> str:
     if stage:
         return stage

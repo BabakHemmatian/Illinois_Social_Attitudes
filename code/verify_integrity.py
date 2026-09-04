@@ -1,30 +1,7 @@
-"""
-Post-crash integrity verification for the curated Reddit CSVs.
-
-Directory metadata (including file sizes and mtimes) is unreliable after a
-storage fault, so nothing here trusts stat() -- every verdict comes from
-reading bytes.
-
-Two failure modes this is built to catch:
-
-  1. organize_types resumes by checking only that ALL_YYYY-MM.csv *exists*
-     (organize_types.py, build_merge_jobs). A file whose rename committed but
-     whose tail was lost is treated as complete forever.
-
-  2. organize_anonymize resumes via get_last_source_row (utils.py), which
-     deliberately tolerates unparseable rows. A torn row stays embedded in the
-     file and the next run appends past it.
-
-Usage:
-    python code/verify_integrity.py --scope types --quick     # fast triage
-    python code/verify_integrity.py --scope all               # full read
-    python code/verify_integrity.py --scope anon --db <path>  # + user_map xref
-"""
-
 ### Imports
 
-import argparse
 import csv
+csv.field_size_limit(2**31 - 1)  # match the pipeline's limit; some text fields are huge
 import json
 import os
 import re
@@ -37,22 +14,151 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-csv.field_size_limit(2**31 - 1)  # match the pipeline's limit; some text fields are huge
+# import functions and objects
+from cli import get_args, PROJECT_ROOT, DATA_DIR
+from utils import (
+    MONTH_RE,
+    default_resource,
+    headers,
+    log_report,
+    month_of_file,
+    parse_range,
+    reraise_fatal,
+)
 
-### Configuration
+### Argument Handling
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-CURATED = PROJECT_ROOT / "data" / "data_reddit_curated"
+# Extract and transform CLI arguments
+args = get_args()
+group = args.group
+type_ = args.type
+quick = bool(getattr(args, "quick", False))
+
+if type_ not in {"comments", "submissions", "all"}:
+    raise ValueError(f"Unsupported 'type' argument: {type_}")
+
+# --years is optional here: with no years every monthly file present in the
+# target directory is verified. Under Slurm, --years is what turns the run into
+# a month-keyed array (one task per month, as for the organize_ resources).
+years: Optional[List[int]] = None
+if args.years:
+    years = parse_range(args.years)
+    if isinstance(years, int):
+        years = [years]
+
+FILE_PREFIX = {"comments": "RC", "submissions": "RS", "all": "ALL"}[type_]
+
+### Path Handling
+
+# prepare the report file. The human-readable report follows the shared
+# report_*.csv convention; a JSON-lines sidecar keeps the full per-file
+# measurements (row counts, timestamps, anon-ID tallies) for later inspection.
+report_file_path = PROJECT_ROOT / "report_verify_integrity.csv"
+details_file_path = PROJECT_ROOT / "report_verify_integrity.jsonl"
+
+# Set/survey the input folder: the directory whose monthly CSVs are verified.
+# Stage directories may be plain resource outputs or their organize_anonymize
+# '_anon' siblings; the checks applied depend on which one this is (see below).
+verifiable_dirs = [f"{r}_anon" for r in default_resource] + list(default_resource)
+
+data_base = DATA_DIR / "data_reddit_curated" / group / type_  # default
+
+def find_latest_verifiable_dir(base_dir: Path) -> Path:
+    # Most advanced stage first, preferring its anonymized sibling: once a
+    # stage has been anonymized its pre-anonymization inputs are often deleted
+    # to reclaim storage, so the '_anon' directory is the one that still exists.
+    if not base_dir.is_dir():
+        raise FileNotFoundError(f"Base curated directory does not exist: {base_dir}")
+    present = {p.name for p in base_dir.iterdir() if p.is_dir()}
+    for resource in reversed(default_resource):
+        for candidate in (f"{resource}_anon", resource):
+            if candidate in present:
+                return base_dir / candidate
+    raise ValueError(
+        f"No verifiable curated dataset found in {base_dir}. "
+        f"Expected one of: {', '.join(verifiable_dirs)}"
+    )
+
+if not args.input:
+    log_report(
+        report_file_path,
+        f"No custom input path provided. Finding the most advanced curated dataset of type '{type_}' for {group} based on default pathing and resource order..."
+    )
+    input_path = find_latest_verifiable_dir(data_base)
+    log_report(
+        report_file_path,
+        f"{input_path.name} identified as the most advanced curated dataset for {group} entries of type '{type_}'."
+    )
+else:
+    input_path = Path(args.input)
+    if not input_path.is_dir():
+        raise ValueError(f"Input path is not a directory: {input_path}")
+    if input_path.name not in verifiable_dirs:
+        raise ValueError(
+            f"{input_path.name} does not correspond to a curated dataset. "
+            f"Choose from: {', '.join(verifiable_dirs)}"
+        )
+
+# Which checks apply follows from the directory being verified:
+#   anon  -- an organize_anonymize output: row counts must equal the source
+#            stage's, and every anonymized author ID must exist in the map.
+#   types -- an organize_types output ('all'): row and per-type counts must
+#            equal the comments plus submissions inputs of the same stage.
+#   plain -- a filter_/label_ output: structural checks only.
+if input_path.name.endswith("_anon"):
+    check_kind = "anon"
+    stage = input_path.name[: -len("_anon")]
+elif type_ == "all":
+    check_kind = "types"
+    stage = input_path.name
+else:
+    check_kind = "plain"
+    stage = input_path.name
+
+# Reconciliation counterparts are located by the canonical curated layout
+# relative to the verified directory, data_reddit_curated/<group>/<type>/<stage>:
+# the pre-anonymization source is the sibling <stage> directory, and a merged
+# 'all' directory's inputs are ../../comments/<stage> and
+# ../../submissions/<stage>. A custom --input therefore works as long as its
+# surroundings mirror that layout. A counterpart that is missing (e.g. deleted
+# after being consumed) only skips that reconciliation, and the report says so.
+anon_source_dir = input_path.parent / stage
+types_comments_dir = input_path.parent.parent / "comments" / stage
+types_submissions_dir = input_path.parent.parent / "submissions" / stage
+# NOTE: opened read-only; the map is never modified by verification.
+USER_CACHE = DATA_DIR / "user_map.sqlite3"
+
+# Every monthly file of the requested type present in the directory. Months are
+# matched by the YYYY-MM in their names, never by position, so gaps (months
+# already consumed and deleted downstream) cannot shift an array task's month.
+file_list = sorted(
+    (p for p in input_path.iterdir()
+     if p.is_file() and p.suffix == ".csv" and p.name.startswith(FILE_PREFIX) and MONTH_RE.search(p.name)),
+    key=lambda p: p.name,
+)
+if years is not None:
+    year_set = {str(y) for y in years}
+    file_list = [p for p in file_list if month_of_file(p)[:4] in year_set]
+
+### File Checks
+
+# Directory metadata (sizes, mtimes) is unreliable after a storage fault, so no
+# verdict here trusts stat() -- every verdict comes from reading bytes. Two
+# failure modes this is built to catch: organize_types resumes by checking only
+# that ALL_YYYY-MM.csv exists, so a file whose rename committed but whose tail
+# was lost is treated as complete forever; and organize_anonymize resumes past a
+# torn trailing row, so the damage stays embedded in the file.
 
 # Mirrors organize_types.TIME_FORMATS
 TIME_FORMATS = ("%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M")
 
-# Placeholders organize_anonymize leaves untouched
+# Placeholders organize_anonymize leaves untouched (organize_anonymize.should_preserve_author)
 PRESERVED_AUTHORS = {"", "[deleted]", "[removed]"}
 
-TAIL_BYTES = 8 << 20  # how much of the tail --quick inspects
-MONTH_RE = re.compile(r"(\d{4})-(\d{2})")
+EXPECTED_HEADER_PREFIX = ",".join(headers[:5]).encode()  # id,parent id,text,author,time
 
+TAIL_BYTES = 8 << 20  # how much of the tail --quick inspects
+VERIFY_WORKERS = 2    # parallel readers within one process; keep low, parallel reads thrash a spinning disk
 
 def parse_time(value: str) -> Optional[datetime]:
     value = (value or "").strip()
@@ -63,22 +169,12 @@ def parse_time(value: str) -> Optional[datetime]:
             continue
     return None
 
-
-def month_of(path: Path) -> Tuple[int, int]:
-    m = MONTH_RE.search(path.name)
-    if not m:
-        raise ValueError(f"Could not parse YYYY-MM from {path.name}")
-    return int(m.group(1)), int(m.group(2))
-
-
-### Quick mode: head + tail only
-
-# Truncation is the dominant failure mode from a lost delayed write, and it is
-# visible without reading the whole file: a time-ordered month file that stops
-# early simply never reaches the end of its month.
+# Quick mode: head + tail only. Truncation is the dominant failure mode from a
+# lost delayed write, and it is visible without reading the whole file: a
+# time-ordered month file that stops early never reaches the end of its month.
 def quick_check(path: Path) -> Dict:
     out: Dict = {"file": path.name, "mode": "quick", "size": path.stat().st_size}
-    year, month = month_of(path)
+    year, month = (int(x) for x in month_of_file(path).split("-"))
     month_end = datetime(year, month, monthrange(year, month)[1], 23, 59, 59)
     month_start = datetime(year, month, 1)
 
@@ -91,7 +187,7 @@ def quick_check(path: Path) -> Dict:
     out["nul_in_head"] = b"\x00" in head
     out["nul_in_tail"] = b"\x00" in tail
     out["ends_with_newline"] = tail.endswith(b"\n") if tail else False
-    out["header_ok"] = head.startswith(b"id,parent id,text,author,time")
+    out["header_ok"] = head.startswith(EXPECTED_HEADER_PREFIX)
 
     # The file is time-ordered, so the newest timestamp anywhere in the tail is
     # effectively the file's last record time.
@@ -128,11 +224,7 @@ def quick_check(path: Path) -> Dict:
     out["reason"] = "; ".join(problems)
     return out
 
-
-### Full mode: complete parse
-
 # Feeds csv.reader while recording corruption signals the parser would hide.
-#
 # Reads in binary and decodes per line rather than using text mode: on Windows,
 # TextIOWrapper.readline() has to grow an internal buffer until it finds a
 # newline, and on multi-GB files that can fail outright with OSError EINVAL.
@@ -153,10 +245,12 @@ def _lines(path: Path, state: Dict):
             yield text
     state["ends_with_newline"] = last.endswith((b"\n", b"\r")) if last else False
 
+def _new_state() -> Dict:
+    return {"nul_lines": 0, "replacement_chars": 0, "ends_with_newline": None, "max_line_bytes": 0}
 
-def full_check(path: Path, kind: str = "types", db_path: Optional[Path] = None) -> Dict:
-    state = {"nul_lines": 0, "replacement_chars": 0, "ends_with_newline": None,
-             "max_line_bytes": 0}
+# Full mode: complete parse of every row.
+def full_check(path: Path, kind: str, db_path: Optional[Path] = None) -> Dict:
+    state = _new_state()
     out: Dict = {"file": path.name, "mode": "full", "size": path.stat().st_size}
 
     rows = 0
@@ -240,13 +334,16 @@ def full_check(path: Path, kind: str = "types", db_path: Optional[Path] = None) 
         problems.append(f"{unparseable_time} unparseable timestamps")
     if authors_bad:
         problems.append(f"{authors_bad} malformed author values")
-
     # Out-of-order timestamps are baseline noise: the raw dumps are not perfectly
     # sorted and organize_types only preserves whatever order its inputs had.
-    # Source and anon files for the same month carry identical counts.
-    # Reported, but not treated as damage on its own. A count
-    # that DROPS relative to the source file does indicate truncation, which the
-    # row-count reconciliation catches directly.
+    # Reported in the details, but not treated as damage on its own.
+
+    # The outputs store anon_id only, never the original author, so a mapping
+    # that vanished from the map cannot be reconstructed from the CSVs. Any ID
+    # present in a file but absent from author_map marks an orphaned author
+    # whose months must be re-anonymized from the pre-anonymization inputs.
+    # Checked here, per file inside the worker: hoisting every ID of a
+    # 176 GB corpus into the parent process exhausts memory.
     if kind == "anon" and db_path and anon_ids:
         try:
             orphans = orphan_anon_ids(Path(db_path), anon_ids)
@@ -262,26 +359,34 @@ def full_check(path: Path, kind: str = "types", db_path: Optional[Path] = None) 
     out["reason"] = "; ".join(problems)
     return out
 
+### Author-Map Cross-Reference
 
-### Row-count reconciliation
+def orphan_anon_ids(db_path: Path, anon_ids: set) -> List[int]:
+    """anon IDs present in a file but missing from author_map."""
+    con = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro", uri=True)
+    cur = con.cursor()
+    missing: List[int] = []
+    ids = sorted(anon_ids)
+    for i in range(0, len(ids), 900):  # SQLite host-parameter limit
+        chunk = ids[i:i + 900]
+        q = ",".join("?" * len(chunk))
+        cur.execute(f"SELECT anon_id FROM author_map WHERE anon_id IN ({q})",
+                    [str(c) for c in chunk])
+        found = {int(r[0]) for r in cur.fetchall()}
+        missing.extend(c for c in chunk if c not in found)
+    con.close()
+    return missing
 
-# organize_types is a pure interleave, so the output must contain exactly the
-# comment rows plus the submission rows, and its per-type tallies must match the
-# two inputs individually.
-def count_rows(path: Path) -> int:
-    """Row count for an input file, or -1 if it could not be read through."""
-    total, _ = count_rows_and_distinct(path)
-    return total
+### Row-Count Reconciliation
 
-
-# Returns (total rows, distinct id count). Both matter: some anonymized outputs
-# were deduplicated after release while their source files still carry the
-# duplicates, so a deduplicated output legitimately holds `distinct` rows rather
-# than `total`. Comparing against `total` alone reports every deduplicated month
-# as damaged.
+# Returns (total rows, distinct id count) of a CSV, or (-1, -1) if it could not
+# be read through. Both matter: some anonymized outputs were deduplicated after
+# release while their source files still carry the duplicates, so a
+# deduplicated output legitimately holds `distinct` rows rather than `total`.
+# NOTE: this, not `wc -l`, is the only correct way to count rows in these
+# files -- text fields contain embedded newlines.
 def count_rows_and_distinct(path: Path) -> Tuple[int, int]:
-    state = {"nul_lines": 0, "replacement_chars": 0, "ends_with_newline": None,
-             "max_line_bytes": 0}
+    state = _new_state()
     try:
         reader = csv.reader(_lines(path, state))
         header = next(reader, None)
@@ -299,12 +404,13 @@ def count_rows_and_distinct(path: Path) -> Tuple[int, int]:
                 seen.add(row[i_id])
         return total, len(seen)
     except (csv.Error, OSError, UnicodeError) as e:
-        print(f"    ! could not count {path.name}: {type(e).__name__}: {e}")
+        log_report(report_file_path, f"Could not count rows of {path.name}: {type(e).__name__}: {e}")
         return -1, -1
 
-
-def reconcile_types(result: Dict, comments_dir: Path, submissions_dir: Path,
-                    cache: Dict[str, int]) -> Dict:
+# organize_types is a pure interleave, so the output must contain exactly the
+# comment rows plus the submission rows, and its per-type tallies must match the
+# two inputs individually.
+def reconcile_types(result: Dict, comments_dir: Path, submissions_dir: Path) -> Dict:
     name = result["file"]
     rc = comments_dir / name.replace("ALL", "RC", 1)
     rs = submissions_dir / name.replace("ALL", "RS", 1)
@@ -313,12 +419,8 @@ def reconcile_types(result: Dict, comments_dir: Path, submissions_dir: Path,
         result["reconcile"] = "skipped: input file missing"
         return result
 
-    for p in (rc, rs):
-        if p.name not in cache:
-            cache[p.name] = count_rows_and_distinct(p)
-
-    n_rc = cache[rc.name][0] if isinstance(cache[rc.name], tuple) else cache[rc.name]
-    n_rs = cache[rs.name][0] if isinstance(cache[rs.name], tuple) else cache[rs.name]
+    n_rc, _ = count_rows_and_distinct(rc)
+    n_rs, _ = count_rows_and_distinct(rs)
     if n_rc < 0 or n_rs < 0:
         result["reconcile"] = "skipped: input unreadable"
         return result
@@ -342,58 +444,16 @@ def reconcile_types(result: Dict, comments_dir: Path, submissions_dir: Path,
     result["reconcile"] = "ok" if not problems else "mismatch"
     return result
 
-
-# organize_anonymize logs the row count it wrote for each month. When a month
-# was written exactly once, that count IS the source row count, so it can stand
-# in for re-reading the source -- roughly halving a full sweep's I/O. Months
-# written more than once are omitted: their figures are per-invocation appends,
-# not totals.
-def expected_rows_from_log(report_path: Path, group: str, stage: str) -> Dict[str, int]:
-    if not report_path.exists():
-        return {}
-
-    counts: Dict[str, List[int]] = {}
-    ctx_group = ctx_stage = None
-    # Lines are timestamp-prefixed ("...00:23:20,labeled_location identified..."),
-    # so this cannot be anchored to the start of the line.
-    stage_re = re.compile(r"([A-Za-z]\w*) identified as the most advanced curated "
-                          r"dataset for (\w+) entries of type")
-
-    with open(report_path, encoding="utf-8", errors="ignore") as f:
-        for line in f:
-            m = stage_re.search(line)
-            if m:
-                ctx_stage, ctx_group = m.group(1), m.group(2)
-                continue
-            m = re.search(r"Anonymized ALL_(\d{4}-\d{2})\.csv .*?rows=(\d+)", line)
-            if m and ctx_group == group and ctx_stage == stage:
-                counts.setdefault(m.group(1), []).append(int(m.group(2)))
-
-    return {mo: v[0] for mo, v in counts.items() if len(v) == 1}
-
-
 # Anonymization is row-preserving: the output must have exactly as many rows as
-# the labeled_location file it was built from. This is the check that catches a
-# run killed mid-file, since get_last_source_row will happily resume past a torn
-# row rather than reporting it.
-def reconcile_anon(result: Dict, source_dir: Path, cache: Dict[str, int],
-                   log_counts: Optional[Dict[str, int]] = None) -> Dict:
+# the file it was built from (or as many distinct ids, if it was deduplicated).
+# This is the check that catches a run killed mid-file, since the resume logic
+# happily continues past a torn row rather than reporting it.
+def reconcile_anon(result: Dict, source_dir: Path) -> Dict:
     src = source_dir / result["file"]
-    month = MONTH_RE.search(result["file"]).group(0)
-
-    # log counts predate the dedup pass, so they can only ever be a fast
-    # pre-filter -- a shortfall against them is not evidence of damage.
-    if log_counts and month in log_counts:
-        expected, distinct = log_counts[month], -1
-        result["expected_source"] = "log (pre-dedup)"
-    else:
-        if not src.exists():
-            result["reconcile"] = "skipped: source file missing"
-            return result
-        if src.name not in cache:
-            cache[src.name] = count_rows_and_distinct(src)
-        expected, distinct = cache[src.name]
-        result["expected_source"] = "source file"
+    if not src.exists():
+        result["reconcile"] = "skipped: source file missing"
+        return result
+    expected, distinct = count_rows_and_distinct(src)
     if expected < 0:
         result["reconcile"] = "skipped: source unreadable"
         return result
@@ -405,16 +465,8 @@ def reconcile_anon(result: Dict, source_dir: Path, cache: Dict[str, int],
     if got == expected:
         result["reconcile"] = "ok"
     elif distinct >= 0 and got == distinct:
-        # Matches the source's distinct-id count: this month was deduplicated.
         result["reconcile"] = "ok (deduplicated)"
         result["duplicates_in_source"] = expected - distinct
-    elif distinct < 0:
-        # Only a pre-dedup log count was available; cannot rule out dedup.
-        result["reconcile"] = "unconfirmed: log count is pre-dedup"
-        result["reason"] = "; ".join(filter(None, [
-            result.get("reason", ""),
-            f"row count {got:,} != logged {expected:,}; re-run without "
-            f"--use-log-counts to distinguish dedup from data loss"]))
     else:
         msg = (f"row count {got:,} != source total {expected:,} "
                f"and != distinct ids {distinct:,}")
@@ -423,219 +475,134 @@ def reconcile_anon(result: Dict, source_dir: Path, cache: Dict[str, int],
         result["reconcile"] = "mismatch"
     return result
 
+### Slurm/array helpers
 
-### user_map cross-reference
+def build_requested_months(years_list: List[int]) -> List[str]:
+    return [f"{y}-{m:02d}" for y in years_list for m in range(1, 13)]
 
-# The outputs store anon_id only, never the original author, so a mapping that
-# vanished with the lost WAL cannot be reconstructed from the CSVs. Any anon_id
-# present in a file but absent from author_map marks an orphaned author whose
-# months must be re-anonymized from the pre-anon inputs.
-def orphan_anon_ids(db_path: Path, anon_ids: set) -> List[int]:
-    """anon IDs present in a file but missing from author_map.
+# Months are selected by the YYYY-MM parsed from each filename, so a Slurm
+# array slot maps to a fixed month regardless of gaps in the directory.
+def select_target_files(all_files: List[Path], array_idx: Optional[int], files_per_job: int) -> List[Path]:
+    if array_idx is None or years is None:
+        return list(all_files)
+    requested = build_requested_months(years)
+    target = set(requested[array_idx * files_per_job: (array_idx + 1) * files_per_job])
+    return [p for p in all_files if month_of_file(p) in target]
 
-    Run per file inside the worker: the sexuality corpus is 176 GB across 204
-    months, and hoisting every ID into the parent process exhausts memory long
-    before the scan finishes.
-    """
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    cur = con.cursor()
-    missing: List[int] = []
-    ids = sorted(anon_ids)
-    for i in range(0, len(ids), 900):
-        chunk = ids[i:i + 900]
-        q = ",".join("?" * len(chunk))
-        cur.execute(f"SELECT anon_id FROM author_map WHERE anon_id IN ({q})",
-                    [str(c) for c in chunk])
-        found = {int(r[0]) for r in cur.fetchall()}
-        missing.extend(c for c in chunk if c not in found)
-    con.close()
-    return missing
-
-
-def crossref_user_map(db_path: Path, anon_ids: set) -> Dict:
-    if not anon_ids:
-        return {"checked": 0, "orphans": 0, "note": "no anon ids collected"}
-
-    con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
-    cur = con.cursor()
-    known = set()
-    ids = sorted(anon_ids)
-    for i in range(0, len(ids), 900):
-        chunk = ids[i:i + 900]
-        q = ",".join("?" * len(chunk))
-        cur.execute(f"SELECT anon_id FROM author_map WHERE anon_id IN ({q})", chunk)
-        known.update(r[0] for r in cur.fetchall())
-    total = cur.execute("SELECT COUNT(*) FROM author_map").fetchone()[0]
-    con.close()
-
-    orphans = sorted(anon_ids - known)
-    return {
-        "checked": len(anon_ids),
-        "in_db": len(known),
-        "orphans": len(orphans),
-        "db_total_rows": total,
-        "orphan_sample": orphans[:20],
-    }
-
-
-### Driver
-
-class Layout:
-    """Resolves the four directories a group/stage pair spans."""
-
-    def __init__(self, group: str, stage: str):
-        self.group, self.stage = group, stage
-        self.merged = CURATED / group / "all" / stage
-        self.anon = CURATED / group / "all" / f"{stage}_anon"
-        self.comments = CURATED / group / "comments" / stage
-        self.submissions = CURATED / group / "submissions" / stage
-
-
-# Groups may sit at different pipeline stages, and older runs can leave an
-# earlier *_anon directory behind, so the stage is resolved from disk rather
-# than assumed.
-def resolve_stage(group: str, stage: Optional[str]) -> str:
-    if stage:
-        return stage
-    base = CURATED / group / "all"
-    candidates = [d for d in base.iterdir()
-                  if d.is_dir() and not d.name.endswith("_anon")] if base.is_dir() else []
-    if not candidates:
-        raise SystemExit(f"No stage directories found under {base}")
-    # Most-advanced stage == the one with the most month files.
-    best = max(candidates, key=lambda d: len(list(d.glob("ALL_*.csv"))))
-    return best.name
-
-
-def gather(scope: str, layout: Layout) -> List[Tuple[str, Path]]:
-    jobs: List[Tuple[str, Path]] = []
-    if scope in ("types", "all"):
-        jobs += [("types", p) for p in sorted(layout.merged.glob("ALL_*.csv"))]
-    if scope in ("anon", "all"):
-        jobs += [("anon", p) for p in sorted(layout.anon.glob("ALL_*.csv"))]
-    return jobs
-
-
-def run_one(kind: str, path: str, quick: bool, db_path: Optional[str] = None) -> Dict:
+def run_one(path: str, kind: str, quick_mode: bool, db_path: Optional[str]) -> Dict:
     p = Path(path)
     try:
-        r = quick_check(p) if quick else full_check(p, kind, db_path)
+        r = quick_check(p) if quick_mode else full_check(p, kind, Path(db_path) if db_path else None)
     except Exception as e:
         r = {"file": p.name, "verdict": "ERROR", "reason": f"{type(e).__name__}: {e}"}
     r["kind"] = kind
     r["path"] = str(p)
     return r
 
+### Main execution
 
-def main() -> int:
-    ap = argparse.ArgumentParser(description=__doc__,
-                                 formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--scope", choices=["types", "anon", "all"], default="all")
-    ap.add_argument("--group", default="age",
-                    help="curated group to verify (age, sexuality, ...)")
-    ap.add_argument("--stage", default=None,
-                    help="stage directory; defaults to the most advanced one present")
-    ap.add_argument("--quick", action="store_true",
-                    help="head/tail only; catches truncation without reading everything")
-    ap.add_argument("--workers", type=int, default=2,
-                    help="keep low: parallel reads thrash a spinning disk (default 2)")
-    ap.add_argument("--use-log-counts", action="store_true",
-                    help="take expected row counts from report_organize_anonymize.csv "
-                         "instead of re-reading source files (much less I/O)")
-    ap.add_argument("--no-reconcile", action="store_true",
-                    help="skip row-count reconciliation against the RC/RS inputs")
-    ap.add_argument("--db", type=Path, default=CURATED.parent / "user_map.sqlite3",
-                    help="user_map.sqlite3 to cross-reference (use a copy, not the original)")
-    ap.add_argument("--out", type=Path,
-                    default=PROJECT_ROOT / "verify_integrity_results.jsonl")
-    ap.add_argument("--months", nargs="*", help="limit to specific YYYY-MM values")
-    args = ap.parse_args()
+def verify_integrity() -> int:
+    start_time = time.time()
 
-    layout = Layout(args.group, resolve_stage(args.group, args.stage))
-    print(f"group={layout.group}  stage={layout.stage}")
+    files_per_job = getattr(args, "files_per_job", 1) or 1
+    target_files = select_target_files(file_list, args.array, files_per_job)
 
-    jobs = gather(args.scope, layout)
-    if args.months:
-        want = set(args.months)
-        jobs = [(k, p) for k, p in jobs if MONTH_RE.search(p.name).group(0) in want]
+    if not target_files:
+        log_report(report_file_path, "No target files assigned to this run.")
+        return 0
 
-    if not jobs:
-        print("No files matched.", file=sys.stderr)
-        return 1
+    mode = "quick (head/tail)" if quick else "full (every byte)"
+    total_gb = sum(p.stat().st_size for p in target_files) / 2**30
+    log_report(
+        report_file_path,
+        f"Verifying {len(target_files)} file(s) ({total_gb:.1f} GB) in {input_path} for group={group}, "
+        f"type={type_} in {mode} mode; checks: {check_kind}."
+    )
 
-    total_bytes = sum(p.stat().st_size for _, p in jobs)
-    print(f"Verifying {len(jobs)} files ({total_bytes / 2**30:.1f} GB) "
-          f"in {'quick' if args.quick else 'full'} mode with {args.workers} workers.\n")
+    db_path = str(USER_CACHE) if (check_kind == "anon" and not quick and USER_CACHE.exists()) else None
+    if check_kind == "anon" and not quick and db_path is None:
+        log_report(report_file_path, f"Author map not found at {USER_CACHE}; skipping the anon-ID cross-reference.")
 
-    started = time.time()
     results: List[Dict] = []
-    with ProcessPoolExecutor(max_workers=args.workers) as ex:
-        futs = {ex.submit(run_one, k, str(p), args.quick, str(args.db) if args.db.exists() else None): p for k, p in jobs}
-        for i, fut in enumerate(as_completed(futs), 1):
+    with ProcessPoolExecutor(max_workers=min(VERIFY_WORKERS, len(target_files))) as ex:
+        futs = {ex.submit(run_one, str(p), check_kind, quick, db_path): p for p in target_files}
+        for fut in as_completed(futs):
             r = fut.result()
             results.append(r)
-            flag = {"OK": "  ok  ", "SUSPECT": "SUSPECT", "ERROR": " ERROR"}[r["verdict"]]
-            print(f"[{i:>3}/{len(jobs)}] {flag}  {r['file']:<20} {r.get('reason', '')}")
+            log_report(report_file_path, f"{r['verdict']:<7} {r['file']}" + (f": {r['reason']}" if r.get("reason") else ""))
+    results.sort(key=lambda r: r["file"])
 
-    # Reconciliation reads the RC/RS inputs, so it runs single-threaded afterwards
-    # rather than competing with the output reads for disk head time.
-    if not args.quick and not args.no_reconcile:
-        cache: Dict[str, int] = {}
-        merged_dir = layout.merged
+    # Reconciliation reads the counterpart files, so it runs single-threaded
+    # afterwards rather than competing with the output reads for disk head time.
+    if not quick:
+        if check_kind == "types":
+            if types_comments_dir.is_dir() and types_submissions_dir.is_dir():
+                log_report(report_file_path, f"Reconciling row counts against {types_comments_dir} and {types_submissions_dir}...")
+                for r in results:
+                    if r["verdict"] != "ERROR":
+                        reconcile_types(r, types_comments_dir, types_submissions_dir)
+                        if r.get("reconcile") == "mismatch":
+                            log_report(report_file_path, f"MISMATCH {r['file']}: {r['reason']}")
+            else:
+                log_report(report_file_path, "Comments/submissions inputs of this stage not found; skipping row-count reconciliation.")
+        elif check_kind == "anon":
+            if anon_source_dir.is_dir():
+                log_report(report_file_path, f"Reconciling row counts against {anon_source_dir}...")
+                for r in results:
+                    if r["verdict"] != "ERROR":
+                        reconcile_anon(r, anon_source_dir)
+                        if r.get("reconcile") == "mismatch":
+                            log_report(report_file_path, f"MISMATCH {r['file']}: {r['reason']}")
+            else:
+                log_report(report_file_path, f"Pre-anonymization source {anon_source_dir} not found; skipping row-count reconciliation.")
 
-        if args.scope in ("types", "all"):
-            print("\nReconciling merged files against comment/submission inputs...")
-            for r in results:
-                if r["kind"] == "types" and r["verdict"] != "ERROR":
-                    reconcile_types(r, layout.comments, layout.submissions, cache)
-                    if r.get("reconcile") == "mismatch":
-                        print(f"  MISMATCH  {r['file']}  {r['reason']}")
+        if check_kind == "anon" and db_path:
+            total_orphans = sum(r.get("orphan_count") or 0 for r in results)
+            with_orphans = [r["file"] for r in results if r.get("orphan_count")]
+            failed = [r["file"] for r in results if r.get("xref_error")]
+            checked = sum(r.get("distinct_anon_ids") or 0 for r in results)
+            log_report(
+                report_file_path,
+                f"Author-map cross-reference: {total_orphans:,} orphaned anon IDs across {len(with_orphans)} of "
+                f"{len(results)} file(s) ({checked:,} distinct IDs checked)"
+                + (f"; cross-reference failed for: {', '.join(failed)}" if failed else "") + "."
+            )
 
-        if args.scope in ("anon", "all"):
-            print("\nReconciling anonymized files against their sources...")
-            for r in results:
-                if r["kind"] == "anon" and r["verdict"] != "ERROR":
-                    reconcile_anon(r, merged_dir, cache)
-                    if r.get("reconcile") == "mismatch":
-                        print(f"  MISMATCH  {r['file']}  {r['reason']}")
-
-    # Each worker already checked its own file's IDs against author_map, so this
-    # only aggregates -- no corpus-wide ID set is ever built in this process.
-    xref = None
-    anon_results = [r for r in results if r["kind"] == "anon"]
-    if not args.quick and anon_results and args.db.exists():
-        total_orphans = sum(r.get("orphan_count") or 0 for r in anon_results)
-        files_with = [r for r in anon_results if r.get("orphan_count")]
-        failed = [r for r in anon_results if r.get("xref_error")]
-        checked = sum(r.get("distinct_anon_ids") or 0 for r in anon_results)
-        xref = {"files_checked": len(anon_results), "orphans": total_orphans,
-                "files_with_orphans": [r["file"] for r in files_with],
-                "xref_failures": [r["file"] for r in failed]}
-        print(f"\nuser_map cross-reference: {total_orphans:,} orphaned anon IDs "
-              f"across {len(files_with)} of {len(anon_results)} files "
-              f"({checked:,} ID occurrences checked)")
-        for r in files_with:
-            print(f"  {r['file']}  {r['orphan_count']:,} orphans  {r.get('orphan_sample')}")
-        for r in failed:
-            print(f"  {r['file']}  xref failed: {r['xref_error']}")
-
-    with open(args.out, "w", encoding="utf-8") as f:
+    with open(details_file_path, "a", encoding="utf-8") as f:
         for r in results:
-            f.write(json.dumps(r) + "\n")
-        if xref:
-            f.write(json.dumps({"kind": "user_map_xref", **xref}) + "\n")
+            f.write(json.dumps({"group": group, "type": type_, "directory": str(input_path), **r}) + "\n")
 
     bad = [r for r in results if r["verdict"] != "OK"]
-    print(f"\n{'=' * 62}")
-    print(f"{len(results) - len(bad)} OK / {len(bad)} needing attention "
-          f"in {(time.time() - started) / 60:.1f} min")
-    if bad:
-        print("\nRebuild these:")
-        for r in sorted(bad, key=lambda r: r["file"]):
-            print(f"  {r['file']:<20} {r['reason']}")
-    print(f"\nDetails: {args.out}")
-    return 1 if bad else 0
-
+    elapsed = (time.time() - start_time) / 60
+    log_report(
+        report_file_path,
+        f"Finished verification. OK: {len(results) - len(bad)}, Needing attention: {len(bad)}, "
+        f"Time: {elapsed:.2f} minutes. Details appended to {details_file_path.name}."
+    )
+    for r in bad:
+        log_report(report_file_path, f"Rebuild {r['file']}: {r['reason']}")
+    return len(bad)
 
 if __name__ == "__main__":
-    sys.exit(main())
+    overall_start_time = time.time()
+    try:
+        n_bad = verify_integrity()
+    except Exception as e:
+        reraise_fatal(report_file_path, "verify_integrity", e)
+
+    total_time = (time.time() - overall_start_time) / 60
+    scope_msg = args.years or "all months present"
+    if args.array is not None and years is not None:
+        files_per_job = getattr(args, "files_per_job", 1) or 1
+        assigned = build_requested_months(years)[args.array * files_per_job: (args.array + 1) * files_per_job]
+        scope_msg = f"{args.years} (task scope: {', '.join(assigned) or f'array task {args.array}'})"
+
+    log_report(
+        report_file_path,
+        f"Integrity verification for {group} / {type_} for {scope_msg} finished in {total_time:.2f} minutes"
+    )
+
+    # A file needing attention is the whole point of running this; surface it to
+    # Slurm (and any afterok dependent) rather than exiting 0.
+    if n_bad:
+        sys.exit(1)

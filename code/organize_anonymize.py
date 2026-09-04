@@ -8,12 +8,16 @@ import secrets
 import sqlite3
 import sys
 import time
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
+
+import numpy as np
 
 # import functions and objects
 from cli import get_args, PROJECT_ROOT, DATA_DIR
 from utils import (
+    AUTHOR_MAP_WARM_LOG,
     parse_range,
     check_reqd_files,
     default_resource,
@@ -21,7 +25,11 @@ from utils import (
     find_latest_resource_dir,
     validate_resource_dir,
     get_resume_position,
+    month_of_file,
+    record_warmed_months,
     reraise_fatal,
+    unwarmed_files,
+    warmed_months_from_log,
 )
 
 ### Argument Handling
@@ -38,6 +46,13 @@ type_ = args.type
 if type_ not in {"comments", "submissions", "all"}:
     raise ValueError(f"Unsupported 'type' argument: {type_}")
 
+# Batch (--slurm) runs need every author pre-assigned an ID before the array
+# starts (see "Author-Map Warming" below). cli.py queues that warm-up as a
+# single-task job with ORGANIZE_ANONYMIZE_WARM=1 in its environment, and this
+# script then warms instead of anonymizing -- the same mechanism label_location
+# uses for its post-array merge (LABEL_LOCATION_MERGE=1).
+WARM_MODE = os.environ.get("ORGANIZE_ANONYMIZE_WARM", "") == "1"
+
 ### Path Handling
 
 # SQLite file storing author -> anonymized numeric ID mapping
@@ -48,6 +63,8 @@ USER_CACHE = DATA_DIR / "user_map.sqlite3"
 # prepare the report file
 # NOTE: Since the dataset should be complete after this integration, the report gets saved to the project root for easier review.
 report_file_path = PROJECT_ROOT / "report_organize_anonymize.csv"
+# Machine-readable record of which months have been warmed (see utils).
+warm_log_path = PROJECT_ROOT / AUTHOR_MAP_WARM_LOG
 
 # Set/survey the input folders
 data_base = DATA_DIR / "data_reddit_curated" / group / type_  # default
@@ -129,20 +146,29 @@ def select_target_files(
 ### SQLite cache helpers
 
 # read_only=True opens the map with SQLite's ro URI mode, so the connection is
-# physically incapable of writing. Used by parallel shards after
-# warm_author_map.py has pre-assigned every author: with no writer there is no
-# write lock to contend for, which is the whole point of warming. It is a
-# stronger guarantee than trusting BEGIN IMMEDIATE to serialize correctly, and
-# it turns "an author was missed during warming" into an immediate, named error
-# instead of silent lock thrash.
-def open_cache(db_path: str | Path, read_only: bool = False) -> sqlite3.Connection:
+# physically incapable of writing. Used by parallel shards after the warm-up
+# pass has pre-assigned every author: with no writer there is no write lock to
+# contend for, which is the whole point of warming. It is a stronger guarantee
+# than trusting BEGIN IMMEDIATE to serialize correctly, and it turns "an author
+# was missed during warming" into an immediate, named error instead of silent
+# lock thrash.
+#
+# synchronous/cache_mb are tuned per caller: the anonymizer keeps SQLite's
+# NORMAL (one tiny commit per new author, and a crash only loses IDs that are
+# re-minted on resume), while the warm-up uses FULL because it is the one phase
+# that bulk-writes and its single commit per batch makes the fsync free. A
+# large private page cache matters for both: streaming multi-GB CSVs evicts the
+# OS file cache, so without it every author lookup is a physical read.
+def open_cache(db_path: str | Path, read_only: bool = False,
+               synchronous: str = "NORMAL", cache_mb: int = 512) -> sqlite3.Connection:
     db_path = str(db_path)
 
     if read_only:
         if not os.path.exists(db_path):
             raise FileNotFoundError(
-                f"Author map not found at {db_path}. Run warm_author_map.py before "
-                f"anonymizing in read-only (sharded) mode."
+                f"Author map not found at {db_path}. The warm-up pass "
+                f"(ORGANIZE_ANONYMIZE_WARM=1) must run before anonymizing in "
+                f"read-only (sharded) mode; cli.py --slurm queues it automatically."
             )
         conn = sqlite3.connect(
             f"file:{Path(db_path).as_posix()}?mode=ro",
@@ -152,10 +178,7 @@ def open_cache(db_path: str | Path, read_only: bool = False) -> sqlite3.Connecti
         )
         cur = conn.cursor()
         cur.execute("PRAGMA busy_timeout=120000;")
-        # Same reasoning as the read-write path below: the anonymizer streams
-        # multi-GB CSVs alongside its lookups, so the OS file cache cannot be
-        # relied on to keep author-map pages resident.
-        cur.execute("PRAGMA cache_size=-524288;")   # 512 MB
+        cur.execute(f"PRAGMA cache_size=-{cache_mb * 1024};")
         return conn
 
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -167,12 +190,9 @@ def open_cache(db_path: str | Path, read_only: bool = False) -> sqlite3.Connecti
     )
     cur = conn.cursor()
     cur.execute("PRAGMA journal_mode=WAL;")
-    cur.execute("PRAGMA synchronous=NORMAL;")
+    cur.execute(f"PRAGMA synchronous={synchronous};")
     cur.execute("PRAGMA busy_timeout=120000;")
-    # 512 MB rather than SQLite's 2 MB default. Streaming a month's CSV evicts
-    # the OS file cache, so without a large private cache every author lookup
-    # falls through to a physical read on a spinning USB disk.
-    cur.execute("PRAGMA cache_size=-524288;")
+    cur.execute(f"PRAGMA cache_size=-{cache_mb * 1024};")
     cur.execute("PRAGMA temp_store=MEMORY;")
     cur.execute(
         """
@@ -196,7 +216,7 @@ def generate_candidate_id(num_digits: int = 12) -> str:
     return str(secrets.randbelow(upper - lower + 1) + lower)
 
 # Read-only single-author lookup. Used by sharded runs, where the map is opened
-# with mode=ro and warm_author_map.py has already assigned every author, so a
+# with mode=ro and the warm-up pass has already assigned every author, so a
 # miss is a warming gap to report rather than an ID to mint.
 def lookup_author_id(conn: sqlite3.Connection, author: str) -> str | None:
     if not author:
@@ -275,6 +295,270 @@ def should_preserve_author(author_value: str) -> bool:
     author_clean = str(author_value).strip()
     return author_clean in {"", "[deleted]", "[removed]"}
 
+# The map key for an author cell, or None for a preserved placeholder. Warming
+# and anonymizing MUST agree on this key byte-for-byte: a warmed ID stored under
+# a different key would never be looked up, and the read-only shards would then
+# fail on the real key.
+def author_map_key(author_value: Optional[str]) -> Optional[str]:
+    if should_preserve_author(author_value):
+        return None
+    return str(author_value).strip()
+
+### Author-Map Warming
+
+# Why warming exists: anonymize_one_file assigns IDs lazily, one BEGIN
+# IMMEDIATE / INSERT / COMMIT per previously unseen author. That is ~30k commits
+# per month against a multi-GB database, and every WAL checkpoint becomes random
+# I/O across it; per-month cost climbed from 12 min (2012-06) to 38 min
+# (2013-05) while row counts rose only 34%. Running array tasks in parallel
+# makes it WORSE: they all serialize on SQLite's single WAL writer (measured
+# 0.1 MB/s across 8 shards vs 2.4 MB/s single-process). Warming collapses the
+# per-author commits into one transaction per batch of months, after which
+# every author is a read hit and the array tasks can open the map read-only and
+# never contend for a write lock.
+#
+# Warming changes only WHEN IDs are created, never which IDs exist: key cleaning
+# (author_map_key) and ID generation (generate_candidate_id) are shared with the
+# anonymizer above.
+
+# Batching bounds peak memory and banks progress: each batch's authors are
+# committed before the next batch is read, so an interrupted run only loses the
+# batch in flight. Batches are sized by input BYTES, not month count, because
+# months differ by four orders of magnitude (ALL_2007-01 is 2,121 rows;
+# ALL_2023-08 is 12 GB). A Python set costs ~95 bytes per author and the corpus
+# runs ~433k rows/GB with roughly a third of rows carrying a distinct author, so
+# about 12 MB of author set per GB of input: 24 GB per batch keeps the parent
+# near 300 MB.
+WARM_BATCH_GB = 24.0
+WARM_BATCH_MONTHS = 12   # hard cap, mainly to bound tiny early-year months
+WARM_WORKERS = 4         # parallel CSV readers; they do no database work
+
+# Runs in a worker process: pure read, no database handle. Returns the distinct
+# author keys in one month file.
+def scan_month_authors(path: str) -> Tuple[str, Set[str], int]:
+    authors: Set[str] = set()
+    rows = 0
+    with open(path, "rb") as f:
+        reader = csv.reader(line.decode("utf-8", "replace") for line in f)
+        header = next(reader, None)
+        if not header:
+            return path, authors, 0
+        try:
+            a_i = header.index("author")
+        except ValueError:
+            raise ValueError(f"No 'author' column in {Path(path).name}")
+        width = len(header)
+        for row in reader:
+            rows += 1
+            if len(row) != width:
+                continue
+            key = author_map_key(row[a_i])
+            if key is not None:
+                authors.add(key)
+    return path, authors, rows
+
+# Preloading every existing key is far cheaper than probing per author: random
+# index probes cost a seek each and are repeated every batch, while one
+# sequential scan of the key column runs once. Keys are held as 64-bit hashes in
+# a sorted int64 array, about an order of magnitude smaller than the strings it
+# replaces. Python's per-process hash randomisation is fine here -- the array is
+# rebuilt from the database on every run and never persisted. Collision
+# exposure is negligible (~2e-6 across the whole corpus); a collided author
+# would simply never be assigned an ID, and the read-only array task then fails
+# loudly naming them rather than corrupting anything.
+def load_known_author_hashes(conn: sqlite3.Connection) -> np.ndarray:
+    cur = conn.cursor()
+    cur.execute("SELECT author FROM author_map")
+    parts: List[np.ndarray] = []
+    while True:
+        chunk = cur.fetchmany(200_000)
+        if not chunk:
+            break
+        parts.append(np.fromiter((hash(r[0]) for r in chunk),
+                                 dtype=np.int64, count=len(chunk)))
+    if not parts:
+        return np.empty(0, dtype=np.int64)
+    return np.sort(np.concatenate(parts))
+
+def split_new_authors(known: np.ndarray, authors: Set[str]) -> Tuple[List[str], np.ndarray]:
+    """Return (authors absent from `known`, their hashes)."""
+    ordered = list(authors)
+    if not ordered:
+        return [], np.empty(0, dtype=np.int64)
+    h = np.fromiter((hash(a) for a in ordered), dtype=np.int64, count=len(ordered))
+    if known.size == 0:
+        return ordered, h
+    idx = np.minimum(np.searchsorted(known, h), known.size - 1)
+    seen = known[idx] == h
+    new = [a for a, s in zip(ordered, seen) if not s]
+    return new, h[~seen]
+
+# One transaction for the whole batch instead of one per author. A UNIQUE
+# violation on anon_id rolls back only the offending statement (SQLite's default
+# ON CONFLICT ABORT), so the transaction survives and the row is retried with a
+# fresh random ID. At 12 digits against ~10M existing IDs a collision runs about
+# 1 in 86,000, so retries are rare but not negligible in bulk.
+def insert_new_authors(conn: sqlite3.Connection, authors: Set[str],
+                       max_retries: int = 8) -> Tuple[int, int]:
+    if not authors:
+        return 0, 0
+
+    cur = conn.cursor()
+    now = int(time.time())
+    inserted = 0
+    collisions = 0
+
+    cur.execute("BEGIN IMMEDIATE;")
+    try:
+        for author in sorted(authors):
+            for attempt in range(max_retries):
+                try:
+                    cur.execute(
+                        "INSERT INTO author_map(author, anon_id, created_at) VALUES (?, ?, ?)",
+                        (author, generate_candidate_id(), now),
+                    )
+                    inserted += 1
+                    break
+                except sqlite3.IntegrityError:
+                    # Could be an anon_id collision (retry) or a concurrent
+                    # writer having just inserted this author (stop).
+                    cur.execute("SELECT 1 FROM author_map WHERE author = ?", (author,))
+                    if cur.fetchone() is not None:
+                        break
+                    collisions += 1
+                    if attempt == max_retries - 1:
+                        raise RuntimeError(
+                            f"Could not find a free anon_id for {author!r} "
+                            f"after {max_retries} attempts"
+                        )
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+
+    return inserted, collisions
+
+# Greedily fill batches up to max_gb of input, never exceeding max_months. A
+# single month larger than max_gb still forms its own batch rather than being
+# skipped -- 2023 months run ~12 GB each.
+def build_warm_batches(months: List[Path], max_gb: float, max_months: int) -> List[List[Path]]:
+    batches: List[List[Path]] = []
+    current: List[Path] = []
+    current_bytes = 0
+    limit = max_gb * 2**30
+
+    for p in months:
+        size = p.stat().st_size
+        if current and (current_bytes + size > limit or len(current) >= max_months):
+            batches.append(current)
+            current, current_bytes = [], 0
+        current.append(p)
+        current_bytes += size
+
+    if current:
+        batches.append(current)
+    return batches
+
+# Assign an ID to every author in the requested months that does not have one
+# yet. Idempotent, but not cheap to repeat (a full re-run re-reads hundreds of
+# GB), so months already recorded in the warm log are skipped. Returns the
+# number of new mappings inserted.
+def warm_author_map() -> int:
+    start_time = time.time()
+    stage = Path(input_path).name
+
+    already_warm = warmed_months_from_log(warm_log_path, group, type_, stage)
+    months = unwarmed_files(file_list, already_warm)
+    skipped = len(file_list) - len(months)
+
+    log_report(
+        report_file_path,
+        f"Author-map warm-up for {group} / {type_} ({stage}), {args.years}: {len(months)} month(s) to scan, "
+        f"{skipped} already warmed in a prior run. The batch anonymization array opens the author map "
+        f"read-only, so every author must hold an ID before it starts."
+    )
+    if not months:
+        return 0
+
+    total_bytes = sum(p.stat().st_size for p in months)
+    batches = build_warm_batches(months, WARM_BATCH_GB, WARM_BATCH_MONTHS)
+    peak_gb = max(sum(p.stat().st_size for p in b) for b in batches) / 2**30
+    log_report(
+        report_file_path,
+        f"Scanning {total_bytes / 2**30:.1f} GB with {WARM_WORKERS} readers in {len(batches)} batch(es) of "
+        f"<= {WARM_BATCH_GB:g} GB (heaviest batch {peak_gb:.1f} GB)."
+    )
+
+    conn = open_cache(USER_CACHE, synchronous="FULL")
+    try:
+        before = conn.execute("SELECT COUNT(*) FROM author_map").fetchone()[0]
+        t = time.time()
+        known = load_known_author_hashes(conn)
+        log_report(
+            report_file_path,
+            f"Author map holds {before:,} mappings; preloaded their keys in {time.time() - t:.0f}s "
+            f"({known.nbytes / 2**20:.0f} MB resident)."
+        )
+
+        grand_new = grand_collisions = grand_rows = 0
+        for batch in batches:
+            label = f"{month_of_file(batch[0])}..{month_of_file(batch[-1])}"
+            batch_gb = sum(p.stat().st_size for p in batch) / 2**30
+
+            authors: Set[str] = set()
+            rows = 0
+            t0 = time.time()
+            done = 0
+            with ProcessPoolExecutor(max_workers=WARM_WORKERS) as ex:
+                futs = {ex.submit(scan_month_authors, str(p)): p for p in batch}
+                for fut in as_completed(futs):
+                    path, found, n = fut.result()
+                    authors |= found
+                    rows += n
+                    done += 1
+                    # Per-file progress to stdout only; the report keeps per-batch lines.
+                    print(f"    scan {done}/{len(batch)}  {Path(path).name}  {n:,} rows  "
+                          f"{len(found):,} authors  [{time.time() - t0:.0f}s]", flush=True)
+
+            new_list, new_hashes = split_new_authors(known, authors)
+            inserted, collisions = insert_new_authors(conn, set(new_list))
+            if new_hashes.size:
+                known = np.sort(np.concatenate([known, new_hashes]))
+            # Fold the WAL back into the main DB so it cannot grow unbounded
+            # across batches and so a later reader never replays a huge log.
+            conn.execute("PRAGMA wal_checkpoint(TRUNCATE);")
+            # Record only after the commit and checkpoint have both landed, so a
+            # crash can never mark a batch warm that is not durably in the map.
+            record_warmed_months(warm_log_path, group, type_, stage, batch)
+
+            grand_rows += rows
+            grand_new += inserted
+            grand_collisions += collisions
+            log_report(
+                report_file_path,
+                f"Warmed {label} ({len(batch)} month(s), {batch_gb:.1f} GB): rows={rows:,}, "
+                f"distinct authors={len(authors):,}, new IDs assigned={inserted:,}"
+                + (f", id-collisions retried={collisions}" if collisions else "")
+                + f", time={(time.time() - t0) / 60:.2f} minutes"
+            )
+
+        after = conn.execute("SELECT COUNT(*) FROM author_map").fetchone()[0]
+        dupes = conn.execute(
+            "SELECT COUNT(*) - COUNT(DISTINCT anon_id) FROM author_map").fetchone()[0]
+        log_report(
+            report_file_path,
+            f"Finished author-map warm-up. Scanned {grand_rows:,} rows across {len(months)} month(s); "
+            f"author map {before:,} -> {after:,} mappings ({grand_new:,} new"
+            + (f", {grand_collisions} id-collisions retried" if grand_collisions else "")
+            + f"), duplicate anon_id check: {dupes} (must be 0), Time: {(time.time() - start_time) / 60:.2f} minutes"
+        )
+        if dupes:
+            raise RuntimeError(f"author_map holds {dupes} duplicate anon_id value(s)")
+    finally:
+        conn.close()
+
+    return grand_new
+
 ### Main Anonymization Functions
 
 # Stream one CSV to another while anonymizing the 'author' column. Returns (rows_written, new_ids_created_in_this_file).
@@ -330,15 +614,13 @@ def anonymize_one_file(
                 if row_index < last_processed:
                     continue
 
-                author = row.get("author", "")
+                author = author_map_key(row.get("author", ""))
 
-                if not should_preserve_author(author):
-                    author = str(author).strip()
-
+                if author is not None:
                     anon_id = local_cache.get(author)
                     if anon_id is None:
                         if read_only_cache:
-                            # Sharded run: warm_author_map.py has pre-assigned every
+                            # Sharded run: the warm-up pass has pre-assigned every
                             # author and this connection physically cannot write, so a
                             # miss is an error rather than a cue to create. Checked
                             # before get_or_create_author_id so the failure names its
@@ -348,8 +630,8 @@ def anonymize_one_file(
                             if anon_id is None:
                                 raise RuntimeError(
                                     f"Author {author!r} in {input_file.name} has no ID and the "
-                                    f"author map is open read-only. Re-run warm_author_map.py "
-                                    f"for this month, then retry this shard."
+                                    f"author map is open read-only. Re-run the warm-up "
+                                    f"(ORGANIZE_ANONYMIZE_WARM=1) for this month, then retry this shard."
                                 )
                         else:
                             # One lookup, not three: get_or_create_author_id already
@@ -389,7 +671,7 @@ def organize_anonymize() -> int:
 
     if not target_files:
         log_report(report_file_path, "No target files assigned to this run.")
-        return
+        return 0
 
     # A shard run (--array) means sibling processes are active, so the map must
     # already be warmed and is opened read-only. A plain single-process run keeps
@@ -398,7 +680,7 @@ def organize_anonymize() -> int:
     log_report(
         report_file_path,
         f"Preparing to anonymize {len(target_files)} file(s) for group={group}, type={type_}"
-        + (" [author map read-only: sharded run]" if read_only_cache else "") + "."
+        + (" [author map read-only: sharded run, IDs pre-assigned by the warm-up pass]" if read_only_cache else "") + "."
     )
 
     processed = 0
@@ -443,6 +725,18 @@ def organize_anonymize() -> int:
 
 if __name__ == "__main__":
     overall_start_time = time.time()
+
+    # Warm-up mode: assign IDs, write no anonymized output, and exit. Under
+    # --slurm this runs as the single job the anonymization array is chained
+    # to with afterok, so a failure here (non-zero exit) holds the array back
+    # instead of letting every task fail on the read-only map.
+    if WARM_MODE:
+        try:
+            warm_author_map()
+        except Exception as e:
+            reraise_fatal(report_file_path, "organize_anonymize warm-up", e)
+        sys.exit(0)
+
     try:
         n_failed = organize_anonymize()
     except Exception as e:

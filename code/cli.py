@@ -10,7 +10,11 @@ import subprocess
 import sys
 
 from utils import (
+    AUTHOR_MAP_WARM_LOG,
     array_span_from_years,
+    check_reqd_files,
+    default_resource,
+    find_latest_resource_dir,
     groups,
     init_author_file_counts_cache,
     init_author_file_counts_caches,
@@ -18,7 +22,10 @@ from utils import (
     init_location_detail_cache,
     location_label_db_path,
     parse_range,
+    unwarmed_files,
+    validate_resource_dir,
     validate_years,
+    warmed_months_from_log,
 )
 
 ### Run Knobs
@@ -37,7 +44,18 @@ gpu_resources = {
 # GPU resources inherit --mem=50G from slurm.sh; CPU-only resources that need less are listed here.
 RESOURCE_SLURM_RESOURCES = {
     "label_location": {"mem": "16G", "cpus-per-task": 4},
+    # Streams one CSV at a time against a read-only author map; 8G/2 CPUs
+    # matched the observed footprint of the full 2007-2023 runs.
+    "organize_anonymize": {"mem": "8G", "cpus-per-task": 2},
+    # Streams CSVs and holds one month's distinct-id set at a time.
+    "verify_integrity": {"mem": "8G", "cpus-per-task": 2},
 }
+
+# The single-task author-map warm-up that cli.py chains in front of a batch
+# organize_anonymize array (see _organize_anonymize_unwarmed). It holds one
+# batch of months' authors in memory and runs WARM_WORKERS parallel readers
+# (organize_anonymize.py); peak RSS observed at ~7 GB.
+ORGANIZE_ANONYMIZE_WARM_RESOURCES = {"mem": "12G", "cpus-per-task": 4}
 
 ### Global Path Handling
 
@@ -80,6 +98,28 @@ def _build_job_tag(args) -> str:
 
 def _shell_join(parts) -> str:
     return " ".join(shlex.quote(str(part)) for part in parts if str(part) != "")
+
+
+# For a batch organize_anonymize run, resolve the input stage the same way the
+# resource script will and return (unwarmed monthly input files, number of
+# input files, stage name). Array tasks open the author map read-only, so a
+# month whose authors have not all been assigned an ID yet must be warmed by a
+# single-writer pass first; the warm log (utils.AUTHOR_MAP_WARM_LOG) records
+# which months already were.
+def _organize_anonymize_unwarmed(args):
+    if args.input:
+        input_path = validate_resource_dir(args.input, default_resource)
+    else:
+        input_path = find_latest_resource_dir(
+            DATA_DIR / "data_reddit_curated" / args.group / args.type, default_resource
+        )
+    files = check_reqd_files(
+        years=parse_range(args.years), type_=args.type, check_path=input_path, strict=False
+    )
+    warmed = warmed_months_from_log(
+        PROJECT_ROOT / AUTHOR_MAP_WARM_LOG, args.group, args.type, input_path.name
+    )
+    return unwarmed_files(files, warmed), len(files), input_path.name
 
 
 # Gets the command line arguments and returns errors if a needed argument is missing or ill-formatted
@@ -127,7 +167,14 @@ def get_args(argv=None):
         'label_generalization',
         'label_emotion',
         'label_location',
-        'train_relevance'
+        'train_relevance',
+        # Both organize_* stages resolve their input/output directories under
+        # data_reddit_curated/<group>/, so a missing group fails on a path
+        # rather than with a clear argparse error without this.
+        'organize_types',
+        'organize_anonymize',
+        # Verifies whatever curated directory the group/type resolve to.
+        'verify_integrity'
     ]
     argparser.add_argument(
         '-t', '--type',
@@ -199,10 +246,11 @@ def get_args(argv=None):
             'filter_keywords', 'filter_language', 'filter_sample',
             'filter_relevance', 'filter_keywords_adv', 'metrics_interrater', 'label_moralization',
             'label_generalization', 'label_sentiment', 'label_emotion', 'label_location','organize_types','organize_anonymize',
-            'train_relevance', 'train_location_preprocess', 'train_location_training','train_location_weighting'
+            'train_relevance', 'train_location_preprocess', 'train_location_training','train_location_weighting',
+            'verify_integrity'
         ],
         required=True,
-        help="Indicate the type of processing needed (see repository). 'filter_keywords' should be run first. 'organize' resources depend on 'filter'/'label' processed data files."
+        help="Indicate the type of processing needed (see repository). 'filter_keywords' should be run first. 'organize' resources depend on 'filter'/'label' processed data files. 'verify_integrity' can be run after any stage: it reads every byte of the most advanced curated directory for the group/type (or of --input) and, for organize_ outputs, reconciles row counts against their inputs and anonymized author IDs against the author map. Counterparts are located by the canonical data_reddit_curated/<group>/<type>/<stage> layout relative to the verified directory (an _anon directory's source is its sibling <stage>; an 'all' directory's inputs are ../../comments/<stage> and ../../submissions/<stage>); a missing counterpart skips only that reconciliation and is noted in the report. Any file needing attention is listed as 'Rebuild <file>' and the run exits non-zero."
     )
     argparser.add_argument(
         '-g', '--group',
@@ -224,7 +272,7 @@ def get_args(argv=None):
     argparser.add_argument(
         '-s', '--slurm',
         action="store_true",
-        help="Submit a Slurm job. Best used for NN resources (filter_relevance, label_moralization, label_generalization). Should only be used on a Slurm computing cluster."
+        help="Submit a Slurm job. Best used for NN resources (filter_relevance, label_moralization, label_generalization). Should only be used on a Slurm computing cluster. Resources that need a preparatory or follow-up single-task step queue it automatically as a dependency chain: organize_anonymize warms the author map before its array (skipped when the requested months are already warmed) and label_location merges scan-state shards after its array."
     )
     argparser.add_argument(
         '-j', "--num-jobs",
@@ -250,6 +298,12 @@ def get_args(argv=None):
         type=int,
         default=1,
         help="Number of monthly files each Slurm array task should process."
+    )
+    argparser.add_argument(
+        "--quick",
+        dest="quick",
+        action="store_true",
+        help="verify_integrity only: inspect each file's head and tail instead of reading every byte. Catches truncation and header damage quickly; skips row-count reconciliation and the author-map cross-reference."
     )
     argparser.add_argument(
         "--array",
@@ -314,8 +368,8 @@ def get_args(argv=None):
         argparser.error("--type is required for this resource")
 
     # Restrict -t all to the location training resources only.
-    if args.type == "all" and "train" not in args.resource and "organize" not in args.resource and "sample" not in args.resource:
-        argparser.error("--type all is only valid for filter_sample as well as train/organize resources")
+    if args.type == "all" and not any(k in args.resource for k in ("train", "organize", "sample", "verify")):
+        argparser.error("--type all is only valid for filter_sample as well as train/organize/verify resources")
 
     # Validate group if required
     if args.resource in needs_group and not args.group:
@@ -388,6 +442,9 @@ if __name__ == "__main__":
             # Slurm array slot maps to a fixed month regardless of gaps.
             "organize_types",
             "organize_anonymize",
+            # verify_integrity also selects by YYYY-MM; without --years it runs
+            # as one job over every month present (no array_spec is built).
+            "verify_integrity",
         }
 
         if args.group:
@@ -426,6 +483,8 @@ if __name__ == "__main__":
             slurm_vars.append(f"perc_overlap={args.perc_overlap}")
         if args.resource == "filter_sample" and getattr(args, "stratify", "auto") != "auto":
             slurm_vars.append(f"stratify={args.stratify}")
+        if args.resource == "verify_integrity" and getattr(args, "quick", False):
+            slurm_vars.append("quick=1")
 
         # Location-labeling sampling controls (forwarded to label_location)
         if getattr(args, "maxitems", None) is not None:
@@ -455,6 +514,55 @@ if __name__ == "__main__":
         stdout_path = log_dir / f"{job_tag}__{log_token}.out"
         stderr_path = log_dir / f"{job_tag}__{log_token}.err"
 
+        # Optional Slurm dependency so a new chain waits for a running job to
+        # finish instead of adding concurrent load (e.g. afterany:<jobid> to
+        # start only once a prior array reaches a terminal state). A resource
+        # with an automatic preparatory step (below) hands this to that step and
+        # chains its own array to the step instead.
+        dependency = getattr(args, "dependency", None)
+
+        # organize_anonymize: array tasks open the author map read-only, so
+        # every author in the requested months must already hold an ID. If the
+        # warm log shows unwarmed months, queue a SINGLE warm-up job first --
+        # ORGANIZE_ANONYMIZE_WARM=1 puts organize_anonymize.py into warm mode,
+        # which assigns the missing IDs in bulk and writes no anonymized output
+        # -- and chain the array to it with afterok, so a failed warm-up holds
+        # the array back instead of letting every task fail on the read-only
+        # map. Local (non-Slurm) runs mint IDs on demand and never need this.
+        if args.resource == "organize_anonymize" and array_flag:
+            pending, n_inputs, stage = _organize_anonymize_unwarmed(args)
+            if pending:
+                print(f"[cli] author map: {len(pending)} of {n_inputs} requested {args.type} month(s) "
+                      f"for {args.group}/{stage} not yet warmed; queuing a single-task warm-up job "
+                      f"and chaining the anonymization array to it (afterok)")
+                warm_keys = ("resource", "type", "group", "years", "input", "output")
+                warm_vars = [v for v in slurm_vars if v.split("=", 1)[0] in warm_keys]
+                warm_vars.append("ORGANIZE_ANONYMIZE_WARM=1")
+                warm_tag = f"{job_tag}__warm"
+                warm_parts = [
+                    "sbatch", "--parsable",
+                    "--job-name", warm_tag,
+                    "--output", str(log_dir / f"{warm_tag}__%j.out"),
+                    "--error", str(log_dir / f"{warm_tag}__%j.err"),
+                    "--export", f"ALL,{','.join(warm_vars)}",
+                    "--mem", ORGANIZE_ANONYMIZE_WARM_RESOURCES["mem"],
+                    "--cpus-per-task", str(ORGANIZE_ANONYMIZE_WARM_RESOURCES["cpus-per-task"]),
+                ]
+                if dependency:
+                    warm_parts.extend(["--dependency", str(dependency)])
+                warm_parts.append(str(slurm_script))
+                print(f"[cli] submitting: {_shell_join(warm_parts)}")
+                wres = subprocess.run(warm_parts, capture_output=True, text=True)
+                sys.stdout.write(wres.stdout)
+                if wres.returncode != 0:
+                    sys.stderr.write(wres.stderr)
+                    raise SystemExit(wres.returncode)
+                warm_job_id = wres.stdout.strip().splitlines()[-1].split(";")[0]
+                dependency = f"afterok:{warm_job_id}"
+            else:
+                print(f"[cli] author map already warmed for all {n_inputs} requested {args.type} month(s) "
+                      f"for {args.group}/{stage}; submitting the anonymization array directly")
+
         cmd_parts = [
             "sbatch",
             "--job-name", job_tag,
@@ -463,11 +571,8 @@ if __name__ == "__main__":
             "--export", f"ALL,{','.join(slurm_vars)}",
         ]
 
-        # Optional Slurm dependency so a new chain waits for a running job to
-        # finish instead of adding concurrent load (e.g. afterany:<jobid> to
-        # start only once a prior array reaches a terminal state).
-        if getattr(args, "dependency", None):
-            cmd_parts.extend(["--dependency", str(args.dependency)])
+        if dependency:
+            cmd_parts.extend(["--dependency", str(dependency)])
 
         if args.resource in gpu_resources and use_gpu:
             cmd_parts.extend(["--gres", "gpu:1"])
@@ -560,6 +665,8 @@ if __name__ == "__main__":
             cmd_parts.extend(["-p", str(args.perc_overlap)])
         if args.resource == "filter_sample" and getattr(args, "stratify", "auto") != "auto":
             cmd_parts.extend(["--stratify", args.stratify])
+        if args.resource == "verify_integrity" and getattr(args, "quick", False):
+            cmd_parts.append("--quick")
         if getattr(args, "maxitems", None) is not None:
             cmd_parts.extend(["--maxitems", str(args.maxitems)])
         if getattr(args, "maxfiles", None) is not None:

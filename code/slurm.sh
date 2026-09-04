@@ -162,6 +162,11 @@ if [[ -n "${stratify:-}" ]]; then
   ARGS+=( "--stratify" "${stratify}" )
 fi
 
+# verify_integrity: head/tail-only mode
+if [[ -n "${quick:-}" ]]; then
+  ARGS+=( "--quick" )
+fi
+
 # Forward optional input/output overrides
 if [[ -n "${input:-}" ]]; then
   ARGS+=( "-i" "${input}" )
@@ -224,8 +229,10 @@ fi
 # NOTE: label_location's writer-sharded scan-state turns on automatically for
 # SLURM array tasks (it reads SLURM_ARRAY_TASK_ID), and its post-array merge runs
 # via the LABEL_LOCATION_MERGE env var that cli.py sets on the auto-submitted
-# dependency job -- both are read directly by label_location.py, so no ARGS
-# forwarding is needed here.
+# dependency job. Likewise, organize_anonymize's pre-array author-map warm-up
+# runs via ORGANIZE_ANONYMIZE_WARM, set by cli.py on the single-task job it
+# chains in front of the array. Both env vars are read directly by the resource
+# scripts, so no ARGS forwarding is needed here.
 
 # Update the visible Slurm job name for array tasks so squeue reflects the concrete month span.
 if [[ -n "${SLURM_JOB_ID:-}" ]]; then

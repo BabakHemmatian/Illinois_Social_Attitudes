@@ -627,6 +627,63 @@ def validate_resource_dir(path: str | Path, default_resource: List[str]) -> Path
 
     return path
 
+## Author-map warming record (organize_anonymize)
+
+# Batch (--slurm) organize_anonymize runs open the author map read-only, so
+# every author must already hold an ID before the array starts. The warm-up
+# pass that assigns them records each completed batch of months here, and
+# cli.py reads the same file at submission time to decide whether a warm-up
+# job still needs to precede the array. One flat record per line --
+# "timestamp,group,<type>/<stage>,YYYY-MM,YYYY-MM,..." -- with no cross-line
+# state, so concurrent writers cannot mix records up (unlike the shared
+# report_*.csv files, whose group attribution is parser state).
+AUTHOR_MAP_WARM_LOG = "report_warm_author_map.csv"
+
+MONTH_RE = re.compile(r"(\d{4})-(\d{2})")
+
+
+def month_of_file(file_path: str | Path) -> str:
+    """Return the YYYY-MM embedded in a monthly file name."""
+    m = MONTH_RE.search(Path(file_path).name)
+    if not m:
+        raise ValueError(f"Could not parse YYYY-MM from filename: {Path(file_path).name}")
+    return m.group(0)
+
+
+def author_map_warm_key(type_: str, stage: str) -> str:
+    # Records written before --type was tracked carry the bare stage name and
+    # all belong to type 'all'; keep writing that form for 'all' so the two
+    # generations of the log stay interchangeable.
+    return stage if type_ == "all" else f"{type_}/{stage}"
+
+
+def warmed_months_from_log(report_path: str | Path, group: str, type_: str, stage: str) -> set:
+    report_path = Path(report_path)
+    if not report_path.exists():
+        return set()
+    key = author_map_warm_key(type_, stage)
+    done = set()
+    with open(report_path, encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            parts = [x.strip() for x in line.split(",")]
+            if len(parts) >= 4 and parts[1] == group and parts[2] == key:
+                done.update(m for m in parts[3:] if MONTH_RE.fullmatch(m))
+    return done
+
+
+def record_warmed_months(report_path: str | Path, group: str, type_: str, stage: str,
+                         files: Iterable[str | Path]) -> None:
+    stamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    months = [month_of_file(p) for p in files]
+    with open(report_path, "a", encoding="utf-8", newline="") as f:
+        f.write(",".join([stamp, group, author_map_warm_key(type_, stage), *months]) + "\n")
+
+
+def unwarmed_files(files: Iterable[str | Path], warmed: set) -> List[Path]:
+    """The monthly input files whose authors are not yet recorded as warmed."""
+    return [Path(p) for p in files if month_of_file(p) not in warmed]
+
+
 # for location model word features
 def resolve_word_feature_src(type_arg: str) -> str:
     src = (type_arg or WORD_FEATURE_SRC).strip().lower()

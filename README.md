@@ -104,11 +104,11 @@ Given access to the raw Reddit data files, the scripts may be used without any c
 10. ```organize_types```: Combines one-to-one Reddit 'comment' and 'submissions' datasets into a unified timestamp-organized dataset.
 11. ```organize_anonymize```: Replaces author usernames with persistent random IDs to safeguard Reddit users' privacy. The user-ID key is stored in a local SQL database. 
 
+**Batch runs and the author map.** With ```--slurm```, ```organize_anonymize``` runs as a job array whose tasks open the author map read-only, so every author in the requested months must already hold an ID before the array starts. ```cli.py``` handles this automatically: it checks which requested months have already been warmed (recorded in ```report_warm_author_map.csv```) and, if any remain, first submits a single-task warm-up job that assigns the missing IDs in bulk, then submits the array with an ```afterok``` dependency on it. If every month is already warmed, the array is submitted directly. Both the submission printout and ```report_organize_anonymize.csv``` note which path was taken. Local (non-```--slurm```) runs mint IDs on demand and need no warm-up.
+
 ### Batch Processing Support
 
 All resources support batch processing on a supercomputing cluster by adding the ```--slurm``` or ```-s``` flag to your command. Benefits will be particularly stark for ```label``` resources. Note that the specific sbatch arguments in ```slurm.sh``` need to be adjusted based on the particular cluster you are using. Several command line arguments such as ```--num-jobs``` control the behavior of the slurm versions of resources. 
-
-For ```organize_anonymize```, running a batch job with the ```--slurm``` flag requires running the standalone warming pass first. This additional step is not a ```cli.py``` resource, so call it directly: ```python ./code/warm_author_map.py --group sexuality --years 2007-2023```. Add ```--check``` to report how many authors would be warmed without writing anything. Local (non-```--slurm```) runs mint IDs on demand and do not need this step.
 
 ### CPU and GPU Acceleration
 
@@ -118,13 +118,15 @@ The italicized _label_ resources listed above (all labelers except the CPU-only 
 
 ### Output Verification
 
-Recreating the corpus writes terabytes of CSVs across long-running jobs. The ```verify_integrity``` script checks the curated outputs by reading every byte rather than trusting filesystem metadata, and reconciles row counts between each stage's inputs and outputs to ensure dataset integrity after long runs. It is not a ```cli.py``` resource, so call it directly:
+Recreating the corpus writes terabytes of CSVs across long-running jobs, and both ```organize``` resources resume in ways that can silently accept a truncated file: ```organize_types``` treats any existing ```ALL_YYYY-MM.csv``` as complete, and ```organize_anonymize``` appends past a torn trailing row. Storage faults and interrupted jobs can therefore leave damage that file sizes and timestamps do not reveal.
+
+The ```verify_integrity``` resource checks curated outputs by reading every byte rather than trusting filesystem metadata. It has no fixed place in the resource order: it verifies the most advanced curated directory for the given ```--group``` and ```--type``` (preferring an anonymized ```_anon``` directory when one exists), or the directory passed with ```--input```. The checks follow from the directory: ```organize_anonymize``` outputs are reconciled row-for-row against their pre-anonymization source and every anonymized author ID is cross-referenced against the author map; ```organize_types``` outputs are reconciled against the comments and submissions they were merged from; ```filter``` and ```label``` outputs receive the structural checks (header, NUL bytes, torn rows, column counts, timestamps).
 ```
-python ./code/verify_integrity.py --group sexuality --scope types --quick   # fast triage
-python ./code/verify_integrity.py --group sexuality --scope all             # full read
-python ./code/verify_integrity.py --group sexuality --scope anon           # + anon ID cross-reference
+python ./code/cli.py --resource verify_integrity --type all --group sexuality --quick     # fast triage: head/tail of every month
+python ./code/cli.py --resource verify_integrity --type all --group sexuality             # full read with reconciliation
+python ./code/cli.py --resource verify_integrity --type all --group sexuality --years 2019-2023 --slurm   # one array task per month
 ```
-Pass ```--stage``` to check a stage other than the most advanced one found on disk, and ```--db``` if the stage is past anonymization and the author map is not at the default path. It is optional for producing the corpus but recommended after any interrupted or failed run.
+```--years``` is optional and restricts the months checked; with ```--slurm``` it is also what turns the run into a month-keyed job array. The counterparts used for reconciliation are located by the canonical ```data_reddit_curated/<group>/<type>/<stage>``` layout relative to the verified directory: an ```_anon``` directory's source is its sibling ```<stage>``` directory, and an ```all``` directory's inputs are ```../../comments/<stage>``` and ```../../submissions/<stage>```. A custom ```--input``` therefore works as long as its surroundings mirror that layout. If a counterpart is missing (for example, deleted after being consumed by the next stage), only that reconciliation is skipped and the report says so. Results are logged to ```report_verify_integrity.csv``` with a per-file JSON-lines sidecar; every file needing attention is listed as ```Rebuild <file>: <reason>``` and the run exits non-zero. Verification is optional for producing the corpus but recommended after any interrupted or failed run.
 
 ## Adaptations
 

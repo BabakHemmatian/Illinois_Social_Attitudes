@@ -48,13 +48,15 @@ FINAL_SUBMISSIONS = {
     "skin_tone": "qa_d_finalregex_skin_tone_subm_n100_rated_r2.csv",
 }
 # --- Table C3: development stages, single-rated ------------------------------
+# Stage C uses annotator 1's ratings of the same 150-document sample that
+# Table 3 double-rates, so its column is the single-rater view of that file.
 STAGES = [
-    ("A: post-classifier (k = 200)", {g: f"qa_a_postinit_{g}_n200_rated.csv" for g in GROUPS}),
+    ("A: post-classifier (k = 200)", {g: f"qa_a_postinit_{g}_n200_rated_r0.csv" for g in GROUPS}),
     ("B1: patterns v1 (k = 100)",    {g: f"qa_b1_postregex_{g}_n100_rated_r0.csv" for g in GROUPS}),
-    ("B2: patterns v2 (k = 100)",    {"race": "qa_b2_postregex_race_n100_rated.csv",
-                                      "skin_tone": "qa_b2_postregex_skin_tone_n100_rated.csv"}),
-    ("C: post-retraining (k = 153)", {"race": "qa_c_postretrain_race_n153_rated_r1.csv",
-                                      "skin_tone": "qa_c_postretrain_skin_tone_n153_rated_r1.csv"}),
+    ("B2: patterns v2 (k = 100)",    {"race": "qa_b2_postregex_race_n100_rated_r0.csv",
+                                      "skin_tone": "qa_b2_postregex_skin_tone_n100_rated_r0.csv"}),
+    ("C: post-retraining (k = 150)", {"race": FINAL_COMMENTS["race"][0],        # annotator 1's file
+                                      "skin_tone": FINAL_COMMENTS["skin_tone"][0]}),
     ("D: submissions patterns (k = 100)", {"ability": FINAL_SUBMISSIONS["ability"],
                                            "race": FINAL_SUBMISSIONS["race"],
                                            "skin_tone": FINAL_SUBMISSIONS["skin_tone"]}),
@@ -79,7 +81,7 @@ PUBLISHED_C3 = {
     "A: post-classifier (k = 200)":       {"ability": 20.5, "age": 5.5, "weight": 16.5, "race": 51.0, "sexuality": 14.5, "skin_tone": 44.0},
     "B1: patterns v1 (k = 100)":          {"ability": 7.0, "age": 0.0, "weight": 3.0, "race": 31.0, "sexuality": 3.0, "skin_tone": 34.0},
     "B2: patterns v2 (k = 100)":          {"race": 41.0, "skin_tone": 29.0},
-    "C: post-retraining (k = 153)":       {"race": 6.5, "skin_tone": 5.2},
+    "C: post-retraining (k = 150)":       {"race": 6.7, "skin_tone": 5.3},
     "D: submissions patterns (k = 100)":  {"ability": 4.0, "race": 4.0, "skin_tone": 9.0},
 }
 

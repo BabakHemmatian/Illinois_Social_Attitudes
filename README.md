@@ -78,7 +78,7 @@ You can now use command line arguments to make use of the resources. Use ```pyth
 ```
 python ./code/cli.py --type comments --resource filter_keywords --group sexuality --years 2007-2009,2010
 ```
-This example command will use the appropriate keyword lists from this repository to identify comments in the complete Pushshift-format dataset that are potentially related to sexuality, and which come from 2007-2009 and 2010. Every per-month CSV produced by a resource propagates or generates a `source_row` column. If a run fails, _any future runs will skip the already written rows and resume the work of the previous invocation_.
+This example command will use the appropriate keyword lists from this repository to identify comments in the complete Pushshift-format dataset that are potentially related to sexuality, and which come from 2007-2009 and 2010. Every per-month CSV produced by a resource propagates or generates a `source_row` column. If a run fails, _any future runs will skip the already written rows and resume the work of the previous invocation_. (`source_row` is a development aid only; the published corpus files do not include it.)
 
 **NOTE:** ```filter_keywords``` should always be the first resource called as the only resource interfacing with raw reddit data. If you would like to apply the remaining resources to a dataset from sources other than the Reddit data dump indicated above, simply edit this resource as needed to properly read in the month-by-month input rows. The resulting ISAAC-compatible outputs can then be directly fed to the later resources.
 

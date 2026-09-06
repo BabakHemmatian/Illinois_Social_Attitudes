@@ -43,7 +43,7 @@ If you use this repository in your work, please cite us as follows:
 
 ### APA Format
 ```
-Hemmatian, B., Kurdi, B. (2025). The Illinois Social Attitudes Aggregate Corpus [Computer software]. GitHub. [https://github.com/BabakHemmatian/Illinois_Social_Attitudes](https://github.com/BabakHemmatian/Illinois_Social_Attitudes)
+Hemmatian, B., Kurdi, B. (2026). The Illinois Social Attitudes Aggregate Corpus [Computer software]. GitHub. [https://github.com/BabakHemmatian/Illinois_Social_Attitudes](https://github.com/BabakHemmatian/Illinois_Social_Attitudes)
 ```
 ### BibTex Format
 ```

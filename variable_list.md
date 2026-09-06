@@ -39,7 +39,9 @@ Each row in ISAAC represents a Reddit submission or comment associated with its 
     - *Non-US world region*: `AFRICA`, `AMERICAS`, `ASIA_OCEANIA`, `EUROPE`.
     - *US state*: two-letter codes for the 51 jurisdictions, i.e., the 50 states plus `DC` (e.g., `AK` for Alaska).
 
-56. **location_prob**: The model's probability for the label in column 55, between 0 and 1. Empty when the assigned location is `UNK`. Because the decision thresholds are level-specific, these values are comparable within a level of the hierarchy but not across levels. 
+    `US` and `NON_US` are labels in their own right, not merely parent categories: a row labeled `US` is a user placed in the United States whose state could not be resolved, and a row labeled `NON_US` is a user placed outside the United States whose world region could not be resolved.
+
+56. **location_prob**: The model's probability for the label in column 55, between 0 and 1. Empty when the assigned location is `UNK`. Because the decision thresholds are level-specific, these values are comparable within a level of the hierarchy but not across levels. See Appendix D of the corpus paper for the calibration analyses and the released recalibration maps.
 
 57. **contender_location**: The runner-up label for the user's home location per the model, drawn from the same value set as column 55 and never identical to it. When the assigned location is `UNK`, this is the top non-`UNK` label the model preferred before thresholding. Empty when the model produced no runner-up.
 

@@ -39,30 +39,72 @@ The scripts were designed to be easily adapted for developing other corpora. See
 - The scripts were developed on Windows 11, then tested on Ubuntu. However, cross-platform compatibility is not guaranteed.
 
 ## Citation
-If you use this repository in your work, please cite us as follows:
 
-### APA Format
+Please cite the ISAAC paper. **One citation covers the whole project** — the
+corpus, the pipeline, the models, the website, and every access route. Please do
+not cite this repository separately; keeping references in one place is what
+allows the project's citations to be found together.
+
+### APA
+
 ```
-Hemmatian, B., Kurdi, B. (2026). The Illinois Social Attitudes Aggregate Corpus [Computer software]. GitHub. [https://github.com/BabakHemmatian/Illinois_Social_Attitudes](https://github.com/BabakHemmatian/Illinois_Social_Attitudes)
+Hemmatian, B., Hadjarab, S., Chen, J., & Kurdi, B. (2026). The Illinois Social Attitudes
+Aggregate Corpus (ISAAC): An Open Tool and Reproducible Pipeline for Analyzing Social
+Group Discourse at Scale [Manuscript submitted for publication].
 ```
-### BibTex Format
-```
-**BibTex: **
-@misc{Hemmatian2026,
-  author       = {Hemmatian, Babak and Kurdi, Benedek},
-  title        = {Illinois_Social_Attitudes},
-  year         = {2026},
-  publisher    = {GitHub},
-  journal      = {GitHub repository},
-  howpublished = {\url{[https://github.com/yourusername/your-repository](https://github.com/BabakHemmatian/Illinois_Social_Attitudes)}},
+
+### BibTeX
+
+```bibtex
+@article{hemmatian2026isaac,
+  author = {Hemmatian, Babak and Hadjarab, Sarah and Chen, Jessica and Kurdi, Benedek},
+  title  = {The {Illinois} Social Attitudes Aggregate Corpus ({ISAAC}): An Open Tool and Reproducible Pipeline for Analyzing Social Group Discourse at Scale},
+  year   = {2026},
+  note   = {Manuscript submitted for publication}
 }
 ```
+
+> This reference is updated when the preprint is announced. GitHub's
+> **Cite this repository** button reads [`CITATION.cff`](./CITATION.cff) and shows
+> the same reference.
+
+### Software authorship
+
+Who wrote the code in this repository is recorded in
+[`CITATION.cff`](./CITATION.cff) — a separate question from what to cite.
+People who contributed in other ways are listed under
+[Acknowledgments](#acknowledgments).
+
+## License
+
+The **code** in this repository — the pipeline scripts, keyword lists, regular
+expression pattern sets, and default configurations — is released under the
+[MIT License](./LICENSE).
+
+The MIT License does **not** cover the corpus or the Reddit-derived data files
+distributed here. The following are governed by the
+[Data Use Agreement](./Data_Use_Agreement.md) instead:
+
+| Path | Contents |
+| --- | --- |
+| `data/data_relevance_ratings/**` | Human relevance ratings of sampled Reddit posts |
+| `data/data_relevance_QAratings/**` | Post-filter QA ratings of sampled Reddit posts |
+| the released corpus | Distributed via the routes in [Access](#access), not from this repository |
+
+Trained model weights are not stored in this repository; they are distributed
+through HuggingFace:
+
+| Models | License | Access |
+| --- | --- | --- |
+| 6 relevance classifiers, moralization, generalization suite | CC-BY-4.0 | Open |
+| Location model | ISAAC Model Use Agreement | Gated — prohibits re-identification and surveillance uses |
+
+Third-party models used by the pipeline keep their own upstream licenses.
+
 ## How To Use
 
 ### Repository Setup
 Install [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) on your computer. When finished, open a command line terminal, navigate to where you would like to place the repository, then enter ```git clone https://github.com/BabakHemmatian/Illinois_Social_Attitudes.git```. Note that raw and processed Reddit data files for the full 2007-2023 take several terabytes of space. Choose the repository location according to your use case's storage needs.
-
-Download [this folder](https://drive.google.com/drive/folders/1TqxjRRMZ3LTGWRCMkK6_tnIo_Zg1vms1?usp=sharing) into the newly created ```Illinois_Social_Attitudes``` folder.
 
 The ```filter_keywords``` resource expects raw monthly Reddit dumps in the Pushshift format: ```.zst```-compressed newline-delimited JSON, one object per post. Place the relevant files for a given timeframe in ```data/data_reddit_raw/comments/``` or ```data/data_reddit_raw/submissions/``` depending on the type of Reddit post you are targeting with your command. These dumps are no longer distributed through a stable public bulk endpoint, so this step assumes you already hold a copy. If your raw data is in a different shape, adapt the two resources that read it directly -- ```filter_keywords```, which selects posts, and ```label_location```, which scans authors' posting histories. The remaining resources consume curated CSVs and are unaffected by the raw format. 
 
@@ -70,6 +112,38 @@ The ```filter_keywords``` resource expects raw monthly Reddit dumps in the Pushs
 Follow the steps [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html) to install the desired version of Anaconda. 
 
 Once finished, navigate to the ```Illinois_Social_attitudes``` folder in the command line and enter ```conda create --name ISAAC python=3.11 pip```. Answer 'y' to the question. When finished, run ```conda activate ISAAC```. Once the environment is activated, run the following command to install the necessary packages: ```pip install -r requirements.txt```. 
+
+### Model Setup
+
+The pipeline reads model weights from ```models/```. They are too large to keep
+in this repository and are distributed through HuggingFace, so fetch them once
+after setting up the environment:
+
+```
+python get_models.py
+```
+
+This downloads roughly 9 GB: ISAAC's six relevance classifiers, the moralization
+classifier, the generalization suite, and the location model, plus the
+off-the-shelf emotion models and fastText's language identifier from their own
+sources. Each is placed in the directory the resources expect. Downloads resume,
+so it is safe to re-run after an interruption -- files already present are
+skipped.
+
+The location model is released under the ISAAC Model Use Agreement rather than
+openly, because it can estimate where a user posts from. The agreement is
+presented for acceptance on its
+[model page](https://huggingface.co/ISAAC-corpus/isaac-location); once accepted,
+authenticate with a token from
+[your HuggingFace settings](https://huggingface.co/settings/tokens):
+
+```
+huggingface-cli login
+```
+
+Use ```python get_models.py --skip-location``` to fetch everything else without
+it. Set ```ISAAC_MODELS_DIR``` to read the weights from somewhere other than
+```models/``` -- useful if you keep them on a shared or larger volume.
 
 ### Commands
 You can now use command line arguments to make use of the resources. Use ```python ./code/cli.py --help``` to receive more information about the available options. 
@@ -149,4 +223,15 @@ The ```train_location``` resources can be used to train a weighted mixture of lo
 3. Run ```train_location_weighting``` to find the best mixture model for generalizable classification. This script reports performance on both regular and masked dataset variants to help researchers ensure model generalizability.
 
 ## Acknowledgments
-We thank Sarah Hadjarab, Jessica Chen and Rui Yu for their help with script and data development. Claude Code was used in final stages of development to stress-test the repository.
+
+| | |
+| --- | --- |
+| Benedek Kurdi | Supervision, funding |
+| Sarah Hadjarab, Jessica Chen, Rui Yu | Script and data development |
+| Eleanor Ruby Klein, Siyu He, Lauren Casey | Human validation ratings |
+| Ty Villaneuva | Logo and visual design |
+
+We additionally thank the Office of Legal Counsel at the University of Illinois
+Urbana-Champaign for consultations on the Data Use Agreement. Claude Code was
+used in the final stages of development to stress-test the repository.
+

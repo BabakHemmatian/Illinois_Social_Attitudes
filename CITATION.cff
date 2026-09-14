@@ -1,0 +1,44 @@
+cff-version: 1.2.0
+message: >-
+  If you use ISAAC in your work — the corpus, the pipeline, the models, or any
+  of the access tools — please cite the paper listed under `preferred-citation`
+  below. A single citation covers every surface of the project; please do not
+  cite this repository separately. The `authors` field records who built this
+  particular piece of software, which is a different question from what to cite.
+title: "Illinois Social Attitudes Aggregate Corpus (ISAAC)"
+abstract: >-
+  Corpus construction, filtering, and labeling pipeline for ISAAC: a corpus of
+  527 million English-language Reddit posts about six social group distinctions,
+  annotated for moralization, sentiment, emotion, linguistic generalization, and
+  estimated user location.
+type: software
+authors:
+  - family-names: Hemmatian
+    given-names: Babak
+    orcid: "https://orcid.org/0000-0001-6138-5782"
+repository-code: "https://github.com/BabakHemmatian/Illinois_Social_Attitudes"
+url: "https://isaac.psychology.illinois.edu/"
+license: MIT
+preferred-citation:
+  # TODO(release): on arXiv announcement, change `type` to `article`, add
+  #   journal: arXiv
+  #   url: "https://arxiv.org/abs/XXXX.XXXXX"
+  #   doi: "10.48550/arXiv.XXXX.XXXXX"
+  # and drop the `notes` line. See RELEASE_TODO.md.
+  type: unpublished
+  title: "The Illinois Social Attitudes Aggregate Corpus (ISAAC): An Open Tool and Reproducible Pipeline for Analyzing Social Group Discourse at Scale"
+  year: 2026
+  notes: "Manuscript submitted for publication."
+  authors:
+    - family-names: Hemmatian
+      given-names: Babak
+      orcid: "https://orcid.org/0000-0001-6138-5782"
+    - family-names: Hadjarab
+      given-names: Sarah
+      orcid: "https://orcid.org/0009-0003-7382-5433"
+    - family-names: Chen
+      given-names: Jessica
+      orcid: "https://orcid.org/0009-0000-3578-195X"
+    - family-names: Kurdi
+      given-names: Benedek
+      orcid: "https://orcid.org/0000-0001-5000-0584"

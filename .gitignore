@@ -47,3 +47,13 @@ code/__pycache__
 
 # Slurm job stdout/stderr per-task logs #
 slurm_logs/
+
+# HF publishing tooling: ship the sources, not the generated artifacts.
+# The zip is a duplicate snapshot of isaac_hf/ and will drift from it; the
+# preview HTML is regenerated from performance.py.
+isaac-hf-publish/isaac_hf_deliverable.zip
+isaac-hf-publish/isaac_hf/performance_tab_preview.html
+
+# Byte-compiled files anywhere (the code/ rule above predates other packages).
+__pycache__/
+*.pyc

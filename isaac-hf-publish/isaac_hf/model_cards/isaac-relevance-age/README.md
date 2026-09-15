@@ -1,7 +1,5 @@
 ---
-license: other
-license_name: isaac-data-use-agreement
-license_link: https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md
+license: cc-by-4.0
 language:
 - en
 base_model:
@@ -16,17 +14,6 @@ tags:
 - content-filtering
 - relevance-classification
 - isaac
-extra_gated_heading: "Request access to the ISAAC relevance classifier (age)"
-extra_gated_prompt: >-
-  These weights are released under the ISAAC Data Use Agreement:
-  https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md
-  By requesting access you agree to those terms and to cite the ISAAC corpus
-  paper in any resulting work.
-extra_gated_fields:
-  Name: text
-  Institution or affiliation: text
-  Intended use: text
-  I agree to the ISAAC Data Use Agreement: checkbox
 model-index:
 - name: isaac-relevance-age
   results:
@@ -193,7 +180,9 @@ citations to be found together.
 
 ## License
 
-Released under the project
-[Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md). Using these weights, or any data derived from
-them, constitutes acceptance.
+Released under a [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/).
+You may use, share, and adapt these weights, including commercially, provided
+you give appropriate credit — see Citation above.
 
+The ISAAC corpus itself is governed separately by the project
+[Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md).

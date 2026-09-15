@@ -169,6 +169,28 @@ pdoc -d google isaac_data                # or a live preview server
   (macOS), `%LOCALAPPDATA%\isaac-data\Cache` (Windows), `~/.cache/isaac-data`
   (Linux). Override with `isaac.set_cache_dir(...)` or `$ISAAC_DATA_CACHE`.
 
+## Citation
+
+Please cite the ISAAC paper. **One citation covers the whole project** — the
+corpus, the pipeline, the models, and this package. Please do not cite the
+package separately.
+
+```bibtex
+@article{hemmatian2026isaac,
+  author = {Hemmatian, Babak and Hadjarab, Sarah and Chen, Jessica and Kurdi, Benedek},
+  title  = {The {Illinois} Social Attitudes Aggregate Corpus ({ISAAC}): An Open Tool and Reproducible Pipeline for Analyzing Social Group Discourse at Scale},
+  year   = {2026},
+  note   = {Manuscript submitted for publication}
+}
+```
+
+## License
+
+This package is released under the [MIT License](./LICENSE). The ISAAC corpus it
+downloads is governed separately by the
+[Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md),
+which the package presents for acceptance before any data access.
+
 ## Notes
 
 - **Parquet is recommended** for scripting (column projection, smaller transfers).

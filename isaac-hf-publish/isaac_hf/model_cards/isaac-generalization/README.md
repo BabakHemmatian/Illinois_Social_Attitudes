@@ -235,7 +235,9 @@ citations to be found together.
 
 ## License
 
-Released under the project
-[Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md). Using these weights, or any data derived from
-them, constitutes acceptance.
+Released under a [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/).
+You may use, share, and adapt these weights, including commercially, provided
+you give appropriate credit — see Citation above.
 
+The ISAAC corpus itself is governed separately by the project
+[Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md).

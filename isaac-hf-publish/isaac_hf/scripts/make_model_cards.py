@@ -31,24 +31,23 @@ for candidate in (
 
 import performance as P  # noqa: E402
 
-OWNER = "BabakScrapes"
+# Namespace for ISAAC's own model repositories. The Space stays on the personal
+# account (ZeroGPU is not available to non-Enterprise orgs) and the DiSCo
+# mirrors are third-party, so SPACE_URL and DISCO_*_URL in performance.py keep
+# their own namespace and must not be changed to match this.
+OWNER = "ISAAC-corpus"
+# The DiSCo mirrors are third-party and stayed on the personal account.
+DISCO_OWNER = "BabakScrapes"
 
 # ---------------------------------------------------------------------------
 # Shared card fragments
 # ---------------------------------------------------------------------------
 
-GATED_BLOCK = """extra_gated_heading: "Request access to {heading}"
-extra_gated_prompt: >-
-  These weights are released under the ISAAC Data Use Agreement:
-  {dua}
-  By requesting access you agree to those terms and to cite the ISAAC corpus
-  paper in any resulting work.
-extra_gated_fields:
-  Name: text
-  Institution or affiliation: text
-  Intended use: text
-  I agree to the ISAAC Data Use Agreement: checkbox
-"""
+# No ISAAC model card is gated any more: the relevance, moralization and
+# generalization models are released under CC-BY-4.0 without access
+# restrictions. The location model is gated, but under its own Model Use
+# Agreement rather than the Data Use Agreement, and is not generated here.
+GATED_BLOCK = ""
 
 LINKS = f"""## Links
 
@@ -78,9 +77,12 @@ citations to be found together.
 
 ## License
 
-Released under the project
-[Data Use Agreement]({P.DUA_URL}). Using these weights, or any data derived from
-them, constitutes acceptance.
+Released under a [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/).
+You may use, share, and adapt these weights, including commercially, provided
+you give appropriate credit — see Citation above.
+
+The ISAAC corpus itself is governed separately by the project
+[Data Use Agreement]({P.DUA_URL}).
 """
 
 
@@ -97,9 +99,7 @@ def yaml_metrics(entries) -> str:
 # ---------------------------------------------------------------------------
 
 RELEVANCE_TEMPLATE = """---
-license: other
-license_name: isaac-data-use-agreement
-license_link: {dua}
+license: cc-by-4.0
 language:
 - en
 base_model:
@@ -339,9 +339,7 @@ def build_relevance_card(group: str) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 MORALIZATION_CARD = """---
-license: other
-license_name: isaac-data-use-agreement
-license_link: {dua}
+license: cc-by-4.0
 language:
 - en
 base_model:
@@ -492,9 +490,7 @@ def build_moralization_card() -> tuple[str, str]:
     card = MORALIZATION_CARD.format(
         dua=P.DUA_URL,
         base_model=d["base_model"],
-        gated=GATED_BLOCK.format(
-            heading="the ISAAC moralization classifier", dua=P.DUA_URL
-        ),
+        gated=GATED_BLOCK,
         metrics=metrics,
         repo_url=P.REPO_URL,
         owner=OWNER,
@@ -855,7 +851,7 @@ def build_generalization_cards() -> list[tuple[str, str]]:
         metrics_se=metrics_se,
         metrics_features=metrics_features,
         mirror_note=MIRROR_NOTE.format(
-            owner=OWNER, disco="disco-se-classifier", disco_url=P.DISCO_CLF_URL
+            owner=DISCO_OWNER, disco="disco-se-classifier", disco_url=P.DISCO_CLF_URL
         ),
         repo_url=P.REPO_URL,
         seg_url=f"https://huggingface.co/{OWNER}/isaac-generalization-segmentation",
@@ -874,7 +870,7 @@ def build_generalization_cards() -> list[tuple[str, str]]:
         base_model=P.SEGMENTATION["base_model"],
         coverage=f"{P.SEGMENTATION['coverage']:.3f}",
         mirror_note=MIRROR_NOTE.format(
-            owner=OWNER, disco="disco-clause-segmenter", disco_url=P.DISCO_SEG_URL
+            owner=DISCO_OWNER, disco="disco-clause-segmenter", disco_url=P.DISCO_SEG_URL
         ),
         clf_url=f"https://huggingface.co/{OWNER}/isaac-generalization",
         repo_url=P.REPO_URL,

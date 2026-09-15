@@ -15,7 +15,7 @@ The location model is gated. Before running, accept the ISAAC Model Use
 Agreement at https://huggingface.co/ISAAC-corpus/isaac-location, then
 authenticate once with a token from https://huggingface.co/settings/tokens:
 
-    huggingface-cli login
+    hf auth login
 
 Pass --skip-location to fetch everything else if you do not need it.
 """
@@ -114,7 +114,7 @@ def main() -> int:
         if any("gated" in str(e).lower() or "401" in str(e) or "403" in str(e)
                for _, e in failed):
             print("\nGated repositories need the Model Use Agreement accepted on "
-                  "the model page, then `huggingface-cli login`.", file=sys.stderr)
+                  "the model page, then `hf auth login`.", file=sys.stderr)
         return 1
 
     print(f"\nDone. Models are in {MODELS_DIR}")

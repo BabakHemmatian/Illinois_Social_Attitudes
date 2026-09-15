@@ -134,11 +134,11 @@ The location model is released under the ISAAC Model Use Agreement rather than
 openly, because it can estimate where a user posts from. The agreement is
 presented for acceptance on its
 [model page](https://huggingface.co/ISAAC-corpus/isaac-location); once accepted,
-authenticate with a token from
-[your HuggingFace settings](https://huggingface.co/settings/tokens):
+authenticate with the HuggingFace CLI (installed with
+`huggingface_hub`, which `requirements.txt` already pulls in):
 
 ```
-huggingface-cli login
+hf auth login
 ```
 
 Use ```python get_models.py --skip-location``` to fetch everything else without

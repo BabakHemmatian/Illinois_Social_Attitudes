@@ -41,6 +41,9 @@ PAPER_CITE = (
 REPO_URL = "https://github.com/BabakHemmatian/Illinois_Social_Attitudes"
 DUA_URL = f"{REPO_URL}/blob/main/Data_Use_Agreement.md"
 SITE_URL = "https://isaac.psychology.illinois.edu/"
+# Project inbox rather than a personal address, so the contact on every
+# published surface outlives any one account or institution.
+CONTACT_EMAIL = "isaac.corpus.support@gmail.com"
 SPACE_URL = "https://huggingface.co/spaces/BabakScrapes/isaac-classifiers"
 
 GROUP_LABELS = {

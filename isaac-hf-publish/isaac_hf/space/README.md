@@ -148,9 +148,9 @@ Each model resolves local-first with a Hugging Face Hub fallback
 The same code therefore runs locally against the project's `models/` directory
 and on Hugging Face against the published model repos.
 
-The nine model repos are gated behind the project Data Use Agreement. Add a read
-token as a Space secret named `HF_TOKEN` (Settings → Variables and secrets) so
-the Space can load them.
+The nine model repos are public and ungated, under a Creative Commons Attribution
+4.0 International License, so the Space loads them without credentials. Only the
+corpus itself sits behind the Data Use Agreement.
 
 ## Local testing
 
@@ -165,3 +165,7 @@ python app.py
 
 See the **Performance & citation** tab, or the
 [project repository](https://github.com/BabakHemmatian/Illinois_Social_Attitudes).
+
+## Questions
+
+[isaac.corpus.support@gmail.com](mailto:isaac.corpus.support@gmail.com)

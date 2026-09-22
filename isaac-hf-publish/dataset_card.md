@@ -188,6 +188,7 @@ not distributed here; see the paper's Code Availability section.
 - Web app + direct download: <https://isaac.psychology.illinois.edu/>
 - Direct-download docs & manifest: <https://isaac.psychology.illinois.edu/direct-download/>
 - Python loader (`isaac-data`) and source: <https://github.com/BabakHemmatian/Illinois_Social_Attitudes>
+- Questions, access problems, or corpus errata: <isaac.corpus.support@gmail.com>
 
 ## Citation
 

@@ -216,6 +216,7 @@ ISAAC, where it labels clauses across 527M posts.
 | Pipeline source, keyword lists, pattern sets | [GitHub](https://github.com/BabakHemmatian/Illinois_Social_Attitudes) |
 | Corpus download, samples, SQL playground | [https://isaac.psychology.illinois.edu/](https://isaac.psychology.illinois.edu/) |
 | Data Use Agreement | [Data_Use_Agreement.md](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md) |
+| Questions about the models or the corpus | [isaac.corpus.support@gmail.com](mailto:isaac.corpus.support@gmail.com) |
 
 ## Citation
 

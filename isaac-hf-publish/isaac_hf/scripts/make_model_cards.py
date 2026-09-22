@@ -57,6 +57,7 @@ LINKS = f"""## Links
 | Pipeline source, keyword lists, pattern sets | [GitHub]({P.REPO_URL}) |
 | Corpus download, samples, SQL playground | [{P.SITE_URL}]({P.SITE_URL}) |
 | Data Use Agreement | [Data_Use_Agreement.md]({P.DUA_URL}) |
+| Questions about the models or the corpus | [{P.CONTACT_EMAIL}](mailto:{P.CONTACT_EMAIL}) |
 """
 
 CITATION = f"""## Citation

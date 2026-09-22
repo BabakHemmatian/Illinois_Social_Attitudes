@@ -9,7 +9,7 @@ description = "Python loader for the ISAAC Reddit corpus (Illinois Social Attitu
 readme = "README.md"
 requires-python = ">=3.9"
 authors = [
-    { name = "Babak Hemmatian", email = "babak.hemmatian@gmail.com" },
+    { name = "ISAAC project", email = "isaac.corpus.support@gmail.com" },
 ]
 maintainers = [
     { name = "ISAAC / Social Cognition Lab, University of Illinois Urbana-Champaign" },

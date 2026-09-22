@@ -16,6 +16,9 @@ authors:
   - family-names: Hemmatian
     given-names: Babak
     orcid: "https://orcid.org/0000-0001-6138-5782"
+contact:
+  - name: ISAAC project support
+    email: "isaac.corpus.support@gmail.com"
 repository-code: "https://github.com/BabakHemmatian/Illinois_Social_Attitudes"
 url: "https://isaac.psychology.illinois.edu/"
 license: MIT

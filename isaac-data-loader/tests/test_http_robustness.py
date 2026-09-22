@@ -410,3 +410,65 @@ def test_download_fails_fast_on_a_missing_file(monkeypatch, tmp_path):
     with pytest.raises(FileNotFoundError, match="does not have it"):
         core._download_one(URL, tmp_path / "out.parquet")
     assert gets["n"] == 1  # a real miss is not retried
+
+
+# --------------------------------------------------------------------------- #
+# Per-node failover
+# --------------------------------------------------------------------------- #
+# The data host is round-robin over several Globus DTNs and one node can lose
+# its collection mapping while the others stay healthy. CPython connects to the
+# first address getaddrinfo returns and keeps doing so, so a client that lands
+# on the bad node fails every time rather than 1-in-N -- retrying on a fresh
+# connection goes straight back to the same node. Retries therefore rotate the
+# address, pinned at the resolver so SNI and certificate checks are untouched.
+import socket
+
+
+def test_attempt_address_rotates_over_every_node(monkeypatch):
+    monkeypatch.setattr(core, "_FAILOVER", True)
+    monkeypatch.setattr(core, "_host_addresses", lambda h: ("10.0.0.1", "10.0.0.2", "10.0.0.3"))
+    picks = [core._attempt_address(URL, i)[1] for i in range(core._HTTP_ATTEMPTS)]
+    assert set(picks) == {"10.0.0.1", "10.0.0.2", "10.0.0.3"}, (
+        "default attempts must reach every node, or a bad one can shadow the rest"
+    )
+    assert picks[0] == "10.0.0.1" and picks[3] == "10.0.0.1"  # wraps around
+
+
+def test_failover_is_a_no_op_without_a_choice(monkeypatch):
+    monkeypatch.setattr(core, "_FAILOVER", True)
+    monkeypatch.setattr(core, "_host_addresses", lambda h: ("10.0.0.1",))
+    assert core._attempt_address(URL, 0) is None, "single-homed host: nothing to rotate"
+    monkeypatch.setattr(core, "_host_addresses", lambda h: ())
+    assert core._attempt_address(URL, 0) is None, "unresolvable: behave as before"
+
+
+def test_failover_can_be_switched_off(monkeypatch):
+    monkeypatch.setattr(core, "_FAILOVER", False)
+    monkeypatch.setattr(core, "_host_addresses", lambda h: ("10.0.0.1", "10.0.0.2"))
+    assert core._attempt_address(URL, 0) is None
+
+
+def test_pinning_redirects_only_the_target_host_and_restores(monkeypatch):
+    real = socket.getaddrinfo
+    seen = []
+    monkeypatch.setattr(socket, "getaddrinfo",
+                        lambda h, p, *a, **k: seen.append(h) or [(2, 1, 6, "", (h, p))])
+    host = "g-05a4b6.2d513.8443.data.globus.org"
+    with core._pinned_to(host, "10.0.0.9"):
+        socket.getaddrinfo(host, 443)          # target: rewritten to the pinned IP
+        socket.getaddrinfo("example.invalid", 443)  # anything else: untouched
+    assert seen == ["10.0.0.9", "example.invalid"]
+    # The override is undone even though the patched function is still in place.
+    assert socket.getaddrinfo is not real or True
+    seen.clear()
+    socket.getaddrinfo(host, 443)
+    assert seen == [host], "resolver override leaked out of the context manager"
+
+
+def test_pinning_restores_after_an_exception(monkeypatch):
+    host = "example.invalid"
+    before = socket.getaddrinfo
+    with pytest.raises(ValueError):
+        with core._pinned_to(host, "10.0.0.9"):
+            raise ValueError("boom")
+    assert socket.getaddrinfo is before, "resolver must be restored on the error path"

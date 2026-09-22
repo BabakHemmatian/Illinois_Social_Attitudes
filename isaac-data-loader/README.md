@@ -168,6 +168,13 @@ pdoc -d google isaac_data                # or a live preview server
 - **Cache location** is OS-native (via `platformdirs`): `~/Library/Caches/isaac-data`
   (macOS), `%LOCALAPPDATA%\isaac-data\Cache` (Windows), `~/.cache/isaac-data`
   (Linux). Override with `isaac.set_cache_dir(...)` or `$ISAAC_DATA_CACHE`.
+- **Transient host errors are retried, across nodes.** The corpus is served
+  by several Globus data-transfer nodes behind one hostname, and a single
+  node can fail while its siblings stay healthy. Because Python connects to
+  the first address a hostname resolves to and keeps doing so, retries
+  rotate through the other nodes rather than returning to the same one.
+  Set `ISAAC_HOST_FAILOVER=0` to disable this, or `$ISAAC_HTTP_ATTEMPTS` to
+  change how many tries each request gets (default 5).
 
 ## Citation
 

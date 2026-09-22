@@ -14,8 +14,11 @@ Heavy imports (pandas / pyarrow / fsspec) are deferred to call time so that
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import os
+import socket
+import threading
 import time
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
@@ -387,20 +390,23 @@ def _open_remote_parquet(url: str):
 
     detail = "the host returned no content length"
     for attempt in range(1, _HTTP_ATTEMPTS + 1):
-        # skip_instance_cache: fsspec caches filesystems (and their connection
-        # pools) globally, so without this every retry reuses the bad backend.
-        fs = fsspec.filesystem("http", skip_instance_cache=True)
-        try:
-            fh = fs.open(url, "rb")
-        except FileNotFoundError:
-            ok, missing, why = _probe_url(url)
-            if missing:
-                raise FileNotFoundError(_missing_message(url, why)) from None
-            detail = why or "the host reported the file as missing"
-        else:
-            if fh.size is not None:
-                return fh
-            fh.close()
+        # Each attempt targets a different node where the host has several; see
+        # the failover note above. skip_instance_cache matters too: fsspec
+        # caches filesystems (and their connection pools) globally, so without
+        # it a retry would reuse the connection that just failed.
+        with _try_address(url, attempt - 1):
+            fs = fsspec.filesystem("http", skip_instance_cache=True)
+            try:
+                fh = fs.open(url, "rb")
+            except FileNotFoundError:
+                ok, missing, why = _probe_url(url)
+                if missing:
+                    raise FileNotFoundError(_missing_message(url, why)) from None
+                detail = why or "the host reported the file as missing"
+            else:
+                if fh.size is not None:
+                    return fh
+                fh.close()
         if attempt < _HTTP_ATTEMPTS:
             time.sleep(_HTTP_BACKOFF * attempt)
     raise DataHostUnavailable(
@@ -411,6 +417,96 @@ def _open_remote_parquet(url: str):
         "download uses the same host -- but it does help when only the "
         "streaming/range path is misbehaving."
     )
+
+
+# --------------------------------------------------------------------------- #
+# Per-node failover
+# --------------------------------------------------------------------------- #
+# The data host is DNS round-robin over several Globus DTNs, and a single node
+# can lose its collection mapping while its siblings stay healthy. Measured on
+# the live collection: one of three nodes answered 404
+# "Mapping collection to specified ID failed" for every path including the
+# collection root, while the other two served normally.
+#
+# Retrying alone does not help, because CPython connects to the FIRST address
+# getaddrinfo returns and that order is stable for the life of the process: a
+# client that lands on the bad node fails 100% of the time, not 1-in-N. That is
+# why the fresh-connection retries above were not enough.
+#
+# So retries rotate the address instead. Pinning is done at the resolver, not by
+# putting the IP in the URL, which matters: the request still carries the real
+# hostname, so SNI and certificate verification are completely unaffected.
+_ADDR_TTL_SECONDS = 300
+_addr_cache: Dict[str, Tuple[float, Tuple[str, ...]]] = {}
+_resolve_lock = threading.Lock()
+_FAILOVER = os.environ.get("ISAAC_HOST_FAILOVER", "1") not in ("0", "false", "False")
+
+
+def _host_addresses(host: str) -> Tuple[str, ...]:
+    """Every address ``host`` resolves to, briefly cached. Never raises."""
+    now = time.time()
+    hit = _addr_cache.get(host)
+    if hit and now - hit[0] < _ADDR_TTL_SECONDS:
+        return hit[1]
+    try:
+        infos = socket.getaddrinfo(host, 443, proto=socket.IPPROTO_TCP)
+        addrs = tuple(dict.fromkeys(i[4][0] for i in infos))  # ordered, deduped
+    except OSError:
+        addrs = ()
+    _addr_cache[host] = (now, addrs)
+    return addrs
+
+
+@contextlib.contextmanager
+def _pinned_to(host: str, ip: str):
+    """Resolve ``host`` to ``ip`` for the duration of the block.
+
+    Every other host delegates to the real resolver, and the original is always
+    restored. The lock keeps concurrent callers from observing a half-applied
+    override; the package itself is sequential, but users may not be.
+    """
+    with _resolve_lock:
+        real = socket.getaddrinfo
+
+        def pinned(h, port, *args, **kwargs):
+            return real(ip if h == host else h, port, *args, **kwargs)
+
+        socket.getaddrinfo = pinned
+        try:
+            yield
+        finally:
+            socket.getaddrinfo = real
+
+
+def _attempt_address(url: str, attempt: int):
+    """Address to pin for a zero-based attempt, or None to resolve normally.
+
+    Returns None when failover is off, the host resolves to one address, or it
+    cannot be resolved -- in each case the caller behaves exactly as before.
+    """
+    if not _FAILOVER:
+        return None
+    from urllib.parse import urlparse
+
+    host = urlparse(url).hostname
+    if not host:
+        return None
+    addrs = _host_addresses(host)
+    if len(addrs) < 2:
+        return None
+    return host, addrs[attempt % len(addrs)]
+
+
+@contextlib.contextmanager
+def _try_address(url: str, attempt: int):
+    """Context manager wrapping one attempt, pinned to a rotating address."""
+    target = _attempt_address(url, attempt)
+    if target is None:
+        yield None
+    else:
+        host, ip = target
+        with _pinned_to(host, ip):
+            yield ip
 
 
 def _cache_path_for_url(url: str) -> Path:
@@ -451,7 +547,8 @@ def _download_one(url: str, dest: Path, chunk: int = 1 << 20) -> Path:
     detail = ""
     for attempt in range(1, _HTTP_ATTEMPTS + 1):
         try:
-            return _download_attempt(url, dest, chunk)
+            with _try_address(url, attempt - 1):
+                return _download_attempt(url, dest, chunk)
         except DataHostUnavailable as e:
             detail = getattr(e, "detail", "") or str(e)
         except requests.RequestException as e:  # dropped connection mid-transfer

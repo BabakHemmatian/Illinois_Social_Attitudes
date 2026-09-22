@@ -28,7 +28,8 @@ cd hf_spaces/isaac && python performance.py --readme
 ## 2. The nine model repos
 
 Each `model_cards/<repo>/README.md` goes to the root of
-`BabakScrapes/<repo>` on the Hub. Either drag it into the web UI, or:
+`ISAAC-corpus/<repo>` on the Hub — the models moved to the org; only the Space
+stayed personal, for ZeroGPU. Either drag it into the web UI, or:
 
 ```bash
 python - <<'PY'
@@ -43,19 +44,22 @@ for repo in [
     api.upload_file(
         path_or_fileobj=f"model_cards/{repo}/README.md",
         path_in_repo="README.md",
-        repo_id=f"BabakScrapes/{repo}",
+        repo_id=f"ISAAC-corpus/{repo}",
         repo_type="model",
         commit_message="Add model card",
     )
 PY
 ```
 
-Then, per repo, **Settings → Gated → automatic (or manual)**. The
-`extra_gated_*` frontmatter defines what requesters see; the toggle is what
-actually turns gating on.
+**Do not gate these repos.** All nine are `cc-by-4.0` and ungated, and the
+`extra_gated_*` frontmatter was removed from every card. Only two things in the
+project sit behind an agreement: the corpus, under the Data Use Agreement, and
+the location model, under the Model Use Agreement still with Legal Counsel.
 
-The two generalization cards are `cc-by-4.0` and ungated, matching the public
-DiSCo repos they mirror — see the note in the summary.
+To take them public once the cards are up, use `go_public.py` at the root of
+`isaac-hf-publish/`. It re-checks each repo for Reddit text and stray training
+artifacts before flipping it and skips any repo that fails, and it refuses
+outright to publish anything whose id mentions `location`.
 
 To regenerate the cards:
 

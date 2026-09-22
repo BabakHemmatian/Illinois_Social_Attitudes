@@ -23,15 +23,16 @@ CATEGORIES = ["ability", "age", "race", "sexuality", "skin_tone", "weight"]
 def enumerate_files(data_dir: str, sample: int = 0):
     out = []
     for c in CATEGORIES:
-        pq = sorted(glob.glob(str(Path(data_dir) / c / "RC_*.parquet")))
+        pq = sorted(glob.glob(str(Path(data_dir) / c / "ALL_*.parquet")))
         out.append((c, pq[:sample] if sample else pq))
     return out
 
 
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--repo", required=True, help="HF dataset repo id, e.g. ISAAC-corpus/ISAAC")
-    ap.add_argument("--data-dir", default="/home/ubuntu/bulk/data", help="local dir with <category>/RC_*.parquet")
+    ap.add_argument("--repo", required=True, help="HF dataset repo id, e.g. BabakScrapes/isaac-reddit")
+    ap.add_argument("--data-dir", default="parquet",
+                    help="local dir with <category>/ALL_*.parquet")
     ap.add_argument("--card", default=str(Path(__file__).parent / "dataset_card.md"),
                     help="dataset card uploaded as README.md")
     ap.add_argument("--token", default=os.environ.get("HF_TOKEN"), help="HF write token (or $HF_TOKEN)")
@@ -44,7 +45,7 @@ def main() -> int:
     groups = enumerate_files(args.data_dir, args.sample)
     files = [f for _, fs in groups for f in fs]
     if not files:
-        sys.exit(f"No parquet found under {args.data_dir}/<category>/RC_*.parquet")
+        sys.exit(f"No parquet found under {args.data_dir}/<category>/ALL_*.parquet")
     total = sum(os.path.getsize(f) for f in files)
 
     print(f"repo        : {args.repo}  ({'private' if args.private else 'public + gated'})")
@@ -57,7 +58,7 @@ def main() -> int:
 
     if not args.execute:
         print("\nDRY RUN — nothing uploaded. Re-run with --execute and a token to publish.")
-        print("Example: HF_TOKEN=hf_xxx python upload_to_hf.py --repo ISAAC-corpus/reddit --execute")
+        print("Example: HF_TOKEN=hf_xxx python upload_to_hf.py --repo BabakScrapes/isaac-reddit --execute")
         return 0
 
     if not Path(args.card).exists():
@@ -84,7 +85,7 @@ def main() -> int:
         print("Uploading all parquet (resumable upload_large_folder)...")
         api.upload_large_folder(
             repo_id=args.repo, repo_type="dataset", folder_path=args.data_dir,
-            allow_patterns=[f"{c}/RC_*.parquet" for c in CATEGORIES],
+            allow_patterns=[f"{c}/ALL_*.parquet" for c in CATEGORIES],
         )
 
     print(f"\nDone: https://huggingface.co/datasets/{args.repo}")

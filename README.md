@@ -89,6 +89,8 @@ distributed here. The following are governed by the
 | --- | --- |
 | `data/data_relevance_ratings/**` | Human relevance ratings of sampled Reddit posts |
 | `data/data_relevance_QAratings/**` | Post-filter QA ratings of sampled Reddit posts |
+| `models/train_relevance_data_split/**` | Train/validation/test splits for the relevance classifiers |
+| `models/train_moralization_data_split/**` | Split for the moralization classifier (third-party MFRC; cite MFRC too) |
 | the released corpus | Distributed via the routes in [Access](#access), not from this repository |
 
 Trained model weights are not stored in this repository; they are distributed
@@ -144,6 +146,23 @@ hf auth login
 Use ```python get_models.py --skip-location``` to fetch everything else without
 it. Set ```ISAAC_MODELS_DIR``` to read the weights from somewhere other than
 ```models/``` -- useful if you keep them on a shared or larger volume.
+
+The train/validation/test splits behind the released classifiers ship with this
+repository, under ```models/train_relevance_data_split/``` (where
+`train_relevance` reads them) and ```models/train_moralization_data_split/```.
+They are versioned here rather than downloaded because reproducing the published
+held-out performance depends on having exactly those partitions:
+`train_relevance` will happily create a fresh 80/10/10 split when the files are
+absent, but it will not match the published one -- the ordering it partitions
+comes from unsorted iteration over a set of integer document identifiers, which
+is stable within one Python build and not across versions.
+
+Both split sets contain post text and are **not** covered by the MIT License:
+the relevance splits are ISAAC's own rated Reddit samples, governed by the
+[Data Use Agreement](./Data_Use_Agreement.md), and the moralization split is a
+partition of the third-party
+[Moral Foundations Reddit Corpus](https://huggingface.co/datasets/USC-MOLA-Lab/MFRC),
+which should be cited alongside ISAAC if you use it.
 
 ### Commands
 You can now use command line arguments to make use of the resources. Use ```python ./code/cli.py --help``` to receive more information about the available options. 

@@ -40,7 +40,21 @@ data/data_relevance_QAratings_keys/
 data/data_relevance_QAratings_ORIGINAL_BACKUP/
 
 # trained models #
-models/
+# NOTE: `models/*` rather than `models/` so the two training-split directories
+# below can be re-included. Git cannot re-include anything under a directory
+# that is itself excluded, so the wildcard form is required here.
+models/*
+
+# Ship the train/validation/test splits behind the released classifiers, so the
+# reported held-out performance can be reproduced. These are NOT regenerable:
+# train_relevance.py recreates a split when they are absent, but its ordering
+# comes from unsorted iteration over a set of integer doc ids, which is stable
+# within one CPython build and not across versions. Both contain post text and
+# are covered by the licensing note in README.md, not by the MIT License.
+!models/train_relevance_data_split/
+!models/train_relevance_data_split/**
+!models/train_moralization_data_split/
+!models/train_moralization_data_split/**
 
 # pycache #
 code/__pycache__

@@ -11,6 +11,11 @@ in the directory layout the pipeline resources expect.
 About 9 GB in total. Downloads resume, so it is safe to re-run after an
 interruption; files already present are not fetched again.
 
+The train/validation/test splits behind the released classifiers are NOT fetched
+here -- they ship in the repository itself, under models/, because they are small
+and because reproducing the published metrics depends on having exactly those
+partitions.
+
 The location model is gated. Before running, accept the ISAAC Model Use
 Agreement at https://huggingface.co/ISAAC-corpus/isaac-location, then
 authenticate once with a token from https://huggingface.co/settings/tokens:
@@ -45,6 +50,7 @@ ISAAC_MODELS = {
 }
 
 LOCATION_MODEL = {"ISAAC-corpus/isaac-location": "label_location"}
+
 
 # Off-the-shelf emotion models, fetched from their authors' own repositories.
 THIRD_PARTY = {

@@ -83,3 +83,111 @@ if __name__ == "__main__":
     df = isaac.load("ability", "2007-01", "2007-01", columns=["text", "score"])
     print("load ok:", df.shape, "| accepted:", isaac.is_accepted())
     print("all smoke checks passed")
+
+
+# --------------------------------------------------------------------------- #
+# Server-side consent record
+# --------------------------------------------------------------------------- #
+# The POST at acceptance time is best-effort and never blocks data access, so a
+# user who accepts while offline (or during a server outage) ends up with a
+# valid local acceptance the project never heard about. Nothing else re-posts
+# it, so without a retry that record would stay local forever -- which would
+# make "acceptance is recorded server-side" untrue in exactly the case it
+# matters.
+import json
+import time
+
+import pytest
+
+
+@pytest.fixture
+def isolated_record(tmp_path, monkeypatch):
+    monkeypatch.setattr(isaac_data_agreement, "_record_file",
+                        lambda: tmp_path / "accepted.json")
+    return tmp_path / "accepted.json"
+
+
+def _unacked(**over):
+    rec = {"accepted": True, "email": "pytest@example.invalid",
+           "client_id": "pypi:test", "accepted_at_utc": "2026-09-22T00:00:00Z",
+           "server_ack": False}
+    rec.update(over)
+    return rec
+
+
+def test_unacknowledged_consent_is_reposted(isolated_record, monkeypatch):
+    seen = []
+    monkeypatch.setattr(isaac_data_agreement, "_post_consent",
+                        lambda rec, timeout=10: (seen.append(timeout), True)[1])
+    rec = _unacked()
+    isolated_record.write_text(json.dumps(rec))
+
+    isaac_data_agreement._retry_unacknowledged_consent(rec)
+
+    assert len(seen) == 1, "the unacknowledged acceptance was never re-posted"
+    assert seen[0] <= 5, "retry must use a short timeout; it gates data access"
+    assert rec["server_ack"] is True
+    assert json.loads(isolated_record.read_text())["server_ack"] is True
+
+
+def test_repost_is_rate_limited(isolated_record, monkeypatch):
+    seen = []
+    monkeypatch.setattr(isaac_data_agreement, "_post_consent",
+                        lambda rec, timeout=10: (seen.append(1), False)[1])
+    recent = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    rec = _unacked(last_consent_post_utc=recent)
+    isolated_record.write_text(json.dumps(rec))
+
+    isaac_data_agreement._retry_unacknowledged_consent(rec)
+
+    assert seen == [], "a just-attempted post must not be retried immediately"
+
+
+def test_repost_resumes_after_the_retry_window(isolated_record, monkeypatch):
+    seen = []
+    monkeypatch.setattr(isaac_data_agreement, "_post_consent",
+                        lambda rec, timeout=10: (seen.append(1), True)[1])
+    stale = time.strftime(
+        "%Y-%m-%dT%H:%M:%SZ",
+        time.gmtime(time.time() - isaac_data_agreement._CONSENT_RETRY_TTL_SECONDS - 60),
+    )
+    rec = _unacked(last_consent_post_utc=stale)
+    isolated_record.write_text(json.dumps(rec))
+
+    isaac_data_agreement._retry_unacknowledged_consent(rec)
+
+    assert len(seen) == 1
+    assert rec["server_ack"] is True
+
+
+def test_repost_failure_never_raises(isolated_record, monkeypatch):
+    def boom(rec, timeout=10):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(isaac_data_agreement, "_post_consent",
+                        lambda rec, timeout=10: False)
+    rec = _unacked()
+    isolated_record.write_text(json.dumps(rec))
+
+    isaac_data_agreement._retry_unacknowledged_consent(rec)  # must not raise
+
+    assert rec["server_ack"] is False
+    assert "last_consent_post_utc" in rec, "a failed attempt must still be stamped"
+
+
+def test_acknowledged_record_is_not_reposted(isolated_record, monkeypatch):
+    seen = []
+    monkeypatch.setattr(isaac_data_agreement, "_post_consent",
+                        lambda rec, timeout=10: (seen.append(1), True)[1])
+    rec = _unacked(server_ack=True)
+    isaac_data_agreement._retry_unacknowledged_consent(rec)
+    assert seen == []
+
+
+def test_acceptance_message_names_both_copies():
+    acked = isaac_data_agreement._where_recorded({"server_ack": True})
+    assert "ISAAC project" in acked and "cached locally" in acked
+
+    local_only = isaac_data_agreement._where_recorded({"server_ack": False})
+    assert "not been recorded there yet" in local_only
+    assert "retried automatically" in local_only

@@ -57,6 +57,10 @@ EMAIL_PURPOSE = (
 # How often to re-verify that the accepted agreement is still the current one.
 # Matches the manifest cache policy in core.py; a miss costs one small GET.
 _VERSION_CHECK_TTL_SECONDS = 24 * 3600
+# How long to wait before re-posting an acceptance the server never
+# acknowledged. Bounded so a user who accepted offline is not stuck with a
+# local-only record forever, and so an unreachable server is not hammered.
+_CONSENT_RETRY_TTL_SECONDS = 6 * 3600
 
 # Deliberately permissive: this is a typo guard, not identity verification.
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -184,6 +188,20 @@ def _client_id() -> str:
     return prev.get("client_id") or f"pypi:{uuid.uuid4()}"
 
 
+def _where_recorded(rec: dict) -> str:
+    """One line naming both copies of the acceptance, and their real status.
+
+    The local file is a cache and a receipt; the server record is the one the
+    project keeps. Saying only the local path reads as if nothing was sent.
+    """
+    if rec.get("server_ack"):
+        return (f"Acceptance recorded with the ISAAC project and cached locally "
+                f"at {_record_file()}.")
+    return (f"Acceptance cached locally at {_record_file()}. The ISAAC project "
+            "server could not be reached, so it has not been recorded there yet; "
+            "this will be retried automatically next time you use the package.")
+
+
 def _post_consent(rec: dict, timeout: int = 10) -> bool:
     """Best-effort POST of the acceptance to the ISAAC server. Never raises."""
     if not rec.get("email"):
@@ -297,7 +315,7 @@ def accept_agreement(assume_yes: bool = False, email: Optional[str] = None) -> d
     if assume_yes or _env_opt_in():
         rec = _write_record(agreement, _require_email(email or _env_email()),
                             via="assume_yes" if assume_yes else "env")
-        print(f"Agreement accepted (recorded at {_record_file()}).", file=out)
+        print("Agreement accepted. " + _where_recorded(rec), file=out)
         return rec
 
     if not (sys.stdin and sys.stdin.isatty()):
@@ -314,7 +332,7 @@ def accept_agreement(assume_yes: bool = False, email: Optional[str] = None) -> d
         email = _env_email() or _prompt_email(out)
 
     rec = _write_record(agreement, email, via="prompt")
-    print(f"Thank you. Acceptance recorded at {_record_file()}.", file=out)
+    print("Thank you. " + _where_recorded(rec), file=out)
     return rec
 
 
@@ -339,13 +357,45 @@ def _touch_version_check(rec: dict) -> None:
         pass
 
 
+def _retry_unacknowledged_consent(rec: dict) -> None:
+    """Re-post an acceptance the server never acknowledged. Best-effort.
+
+    The POST at acceptance time is deliberately non-blocking, so a user who
+    accepts while offline (or while the server is down) ends up with a valid
+    local acceptance that the project never heard about. Without this, that
+    record would stay local forever: nothing else re-posts it. Retried at most
+    once per `_CONSENT_RETRY_TTL_SECONDS`, with a short timeout, because this
+    sits in front of every data access.
+    """
+    if rec.get("server_ack") or not rec.get("email"):
+        return
+    last = rec.get("last_consent_post_utc")
+    if last:
+        try:
+            import calendar
+            elapsed = time.time() - calendar.timegm(time.strptime(last, "%Y-%m-%dT%H:%M:%SZ"))
+            if elapsed < _CONSENT_RETRY_TTL_SECONDS:
+                return
+        except Exception:
+            pass
+    rec["last_consent_post_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    rec["server_ack"] = _post_consent(rec, timeout=5)
+    try:
+        _record_file().write_text(json.dumps(rec, indent=2) + "\n")
+    except Exception:
+        pass
+
+
 def require_acceptance() -> None:
     """Gate called before data access. Cheap once accepted and up to date.
 
     Re-prompts if the agreement text has changed since it was accepted, checking
     at most once per `_VERSION_CHECK_TTL_SECONDS`. If the check cannot reach the
-    network it proceeds on the existing acceptance — being offline must not
+    network it proceeds on the existing acceptance -- being offline must not
     block a user who has already agreed.
+
+    Also re-posts an acceptance the server never acknowledged; see
+    `_retry_unacknowledged_consent`.
     """
     rec = _read_record()
     if rec is None:
@@ -354,6 +404,8 @@ def require_acceptance() -> None:
             return
         accept_agreement()
         return
+
+    _retry_unacknowledged_consent(rec)
 
     accepted_sha = rec.get("agreement_sha256")
     if not accepted_sha or not _needs_version_recheck(rec):

@@ -6,7 +6,7 @@
 
 This repository contains tools for the development and evaluation of the publicly available [**Illinois Social Attitudes Aggregate Corpus (ISAAC)**](https://isaac.psychology.illinois.edu), a comprehensive dataset of Reddit discourse from 2007 to 2023 about social groups defined by distinctions based on sexuality, race, age, ability, weight and skin-tone. Submissions and comments in ISAAC are labeled using the scripts in this folder for **a variety of social-psychological variables** of interest, including moralization, generalization, sentiment, emotions and US-state-level user location mapping. The resources are designed to be easily adapted for developing similar datasets targeting other distinctions (see [Adaptations](#adaptations)). 
 
-**ATTENTION:** By using this repository or the associated data and tools you agree to the [Data Use Agreement](./Data_Use_Agreement.md). 
+**ATTENTION:** By using this repository or the associated data and tools you agree to the [Data Use Agreement](./Data_Use_Agreement.md). Questions and concerns should be addressed to [isaac.corpus.support@gmail.com](mailto:isaac.corpus.support@gmail.com).
 
 **Corpus size (comments): 462,479,309 posts**
 
@@ -218,7 +218,7 @@ If the social-psychological labels provided alongside ISAAC work well for your u
 
 ### Training Location Model
 The ```train_location``` resources can be used to train a weighted mixture of logistic regressions for estimating user location from Reddit history (word usage, subreddits and timestamps). We found this modeling approach to be the most robust on Reddit data.
-1. Run ```train_location_preprocess``` twice, once with ```Feature_Set``` set to ```words```, and a second time to ```struct```, assigning ```TASK``` based on your training goal (```top```:US vs. non-US, ```state```: US states, ```region```: Europe, Asia_Oceania, Americas and Africa). This resource requires ```jsonl``` feature frequency files for users, as well a user label ```csv```. Due to data security considerations, we do not provide our training data. To learn more about dataset development and formatting per this resource, write [us](mailto:babak.hemmatian@gmail.com). 
+1. Run ```train_location_preprocess``` twice, once with ```Feature_Set``` set to ```words```, and a second time to ```struct```, assigning ```TASK``` based on your training goal (```top```:US vs. non-US, ```state```: US states, ```region```: Europe, Asia_Oceania, Americas and Africa). This resource requires ```jsonl``` feature frequency files for users, as well a user label ```csv```. Due to data security considerations, we do not provide our training data. To learn more about dataset development and formatting per this resource, write [us](mailto:isaac.corpus.support@gmail.com). 
 2. Train your ```TASK``` model on preprocessed ```words``` and ```struct``` feature sets using ```train_location_training```. 
 3. Run ```train_location_weighting``` to find the best mixture model for generalizable classification. This script reports performance on both regular and masked dataset variants to help researchers ensure model generalizability.
 

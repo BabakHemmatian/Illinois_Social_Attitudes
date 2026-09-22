@@ -23,7 +23,7 @@ model-index:
       name: Situation-entity classification (18-way)
     dataset:
       type: disco
-      name: "DiSCo gold corpus — held-out 10%"
+      name: "DiSCo gold corpus: held-out 10%"
       split: test
     metrics:
     - type: accuracy
@@ -37,7 +37,7 @@ model-index:
       name: Collapsed generalization features
     dataset:
       type: disco
-      name: "DiSCo gold corpus — held-out 10%"
+      name: "DiSCo gold corpus: held-out 10%"
       split: test
     metrics:
     - type: f1
@@ -60,7 +60,7 @@ model-index:
       value: 0.850
 ---
 
-# ISAAC generalization — situation-entity classifier
+# ISAAC generalization: situation-entity classifier
 
 > **Same weights as the public DiSCo release.** This repository is the
 > ISAAC-facing copy of [`BabakScrapes/disco-se-classifier`](https://huggingface.co/BabakScrapes/disco-se-classifier); the checkpoints are
@@ -75,11 +75,11 @@ boundedness distinctions. In the [Illinois Social Attitudes Aggregate Corpus
 (ISAAC)](https://github.com/BabakHemmatian/Illinois_Social_Attitudes) the 18 types are collapsed into three linguistic features
 that together capture **how generalized a statement is**:
 
-* **Genericity** — is the main referent a generic category (*gay people*) or a
+* **Genericity**: is the main referent a generic category (*gay people*) or a
   specific individual (*my neighbor*)?
-* **Eventivity** — a stable state (*God is benevolent*) or a transient event
+* **Eventivity**: a stable state (*God is benevolent*) or a transient event
   (*I went to Nebraska*)?
-* **Boundedness / habituality** — for eventive clauses, temporally bounded
+* **Boundedness / habituality**: for eventive clauses, temporally bounded
   (*I ate this morning*), unbounded (*God loves us*), or habitually recurring
   (*I went there for years*)?
 
@@ -143,8 +143,8 @@ for clause, idx in zip(clauses, pred_ids):
     print(model.config.id2label[idx], "|", clause)
 ```
 
-For the full text-to-features pipeline — segmentation, batching, long-text
-splitting, and per-text aggregation — see `code/label_generalization.py` in the
+For the full text-to-features pipeline (segmentation, batching, long-text
+splitting, and per-text aggregation), see `code/label_generalization.py` in the
 [project repository](https://github.com/BabakHemmatian/Illinois_Social_Attitudes) or `generalization.py` in the
 [Space](https://huggingface.co/spaces/BabakScrapes/isaac-classifiers).
 
@@ -158,7 +158,7 @@ opinionated, mixed-register English text (Hemmatian, 2022). See the
 
 Two `FacebookAI/roberta-base` models run in sequence: a clause segmenter, then a
 18-way situation-entity classifier. Both are the same weights as
-the public DiSCo release — see the
+the public DiSCo release; see the
 [clause segmenter](https://huggingface.co/BabakScrapes/disco-clause-segmenter) and
 [situation-entity classifier](https://huggingface.co/BabakScrapes/disco-se-classifier) cards for the full model
 description and the corpus they were trained on.
@@ -181,7 +181,7 @@ features are what ISAAC actually reports, and they are the numbers to rely on.
 ## Intended use
 
 Clause-level annotation of English text for genericity, eventivity, and
-boundedness/habituality, in aggregate research designs — the role it plays in
+boundedness/habituality, in aggregate research designs, the role it plays in
 ISAAC, where it labels clauses across 527M posts.
 
 ## Out-of-scope use
@@ -219,7 +219,7 @@ ISAAC, where it labels clauses across 527M posts.
 
 ## Citation
 
-Please cite the ISAAC paper. **One citation covers the whole project** — the
+Please cite the ISAAC paper. **One citation covers the whole project**: the
 corpus, the pipeline, and every model. Please do not cite this model repository
 separately; keeping references in one place is what allows the project's
 citations to be found together.
@@ -237,7 +237,7 @@ citations to be found together.
 
 Released under a [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/).
 You may use, share, and adapt these weights, including commercially, provided
-you give appropriate credit — see Citation above.
+you give appropriate credit; see Citation above.
 
 The ISAAC corpus itself is governed separately by the project
 [Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md).

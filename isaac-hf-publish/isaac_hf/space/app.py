@@ -18,10 +18,10 @@ Coding-free demos for the classifiers built for the **Illinois Social Attitudes
 (ISAAC)** project. Pick a task below; each one loads its fine-tuned model on
 demand and offers a single-text tab and a bulk file tab.
 
-* **Relevance** — is a text about a given social distinction (ability, age, race,
+* **Relevance**: is a text about a given social distinction (ability, age, race,
   sexuality, skin tone, weight)?
-* **Moralization** — does a text frame its subject in moral terms?
-* **Generalization** — how generalized vs. anecdotal is the language, clause by clause?
+* **Moralization**: does a text frame its subject in moral terms?
+* **Generalization**: how generalized vs. anecdotal is the language, clause by clause?
 
 Held-out performance for every model is reported under
 **Performance & citation**, and each task tab repeats the figures for the model

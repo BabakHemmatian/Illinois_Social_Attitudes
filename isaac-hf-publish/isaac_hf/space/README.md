@@ -35,13 +35,13 @@ A coding-free demo for all three in-house classifier families from [the Illinois
 Social Attitudes Aggregate Corpus (ISAAC)](https://github.com/BabakHemmatian/Illinois_Social_Attitudes).
 Use is subject to [terms](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md).
 
-- **Relevance** — is a text relevant to a given social group distinction (ability, age,
+- **Relevance**: is a text relevant to a given social group distinction (ability, age,
   race, sexuality, skin tone, weight)? Six fine-tuned RoBERTa classifiers behind a
   distinction dropdown (`roberta-large` for five distinctions; `roberta-base` for
   skin tone).
-- **Moralization** — does a text frame its subject in moral terms? Fine-tuned binary
+- **Moralization**: does a text frame its subject in moral terms? Fine-tuned binary
   `bert-base-uncased` classifier.
-- **Generalization** — clause segmentation plus per-clause labels for linguistic
+- **Generalization**: clause segmentation plus per-clause labels for linguistic
   features that make for more, or less, generalized statements
   (genericity, eventivity, boundedness/habituality; 18 combinations).
   The released weights are the DiSCo RoBERTa models (see
@@ -59,24 +59,24 @@ For **race** and **skin tone** relevance, a 0.6 confidence threshold is applied 
 ## Performance
 
 Reported in full in the app's **Performance & citation** tab, which is rendered
-from `performance.py` — the single source of truth for every metric this project
+from `performance.py`, the single source of truth for every metric this project
 publishes, including the nine model cards. Summary:
 
 | Model | Base | Eval *k* | Headline | Residual irrelevance | Decision rule |
 | --- | --- | --- | --- | --- | --- |
-| Relevance — ability | `roberta-large` | 148 | .846 | 6.0% | argmax |
-| Relevance — age | `roberta-large` | 149 | .886 | 3.0% | argmax |
-| Relevance — race | `roberta-large` | 150 | .862 | 8.0% | P(rel) > 0.6 |
-| Relevance — sexuality | `roberta-large` | 150 | .955 | 5.0% | argmax |
-| Relevance — skin tone | `roberta-base` | 189 | .788 | 9.3% | P(rel) > 0.6 |
-| Relevance — body weight | `roberta-large` | 148 | .987 | 4.0% | argmax |
-| Moralization | `bert-base-uncased` | 2,682 | macro F1 .755 | — | argmax |
-| Generalization (18-way) | `roberta-base` | 2,357 | acc. .737, macro F1 .514 | — | argmax |
-| Generalization (segmenter) | `roberta-base` | — | 95.5% clause-span coverage | — | argmax |
+| Relevance: ability | `roberta-large` | 148 | .846 | 6.0% | argmax |
+| Relevance: age | `roberta-large` | 149 | .886 | 3.0% | argmax |
+| Relevance: race | `roberta-large` | 150 | .862 | 8.0% | P(rel) > 0.6 |
+| Relevance: sexuality | `roberta-large` | 150 | .955 | 5.0% | argmax |
+| Relevance: skin tone | `roberta-base` | 189 | .788 | 9.3% | P(rel) > 0.6 |
+| Relevance: body weight | `roberta-large` | 148 | .987 | 4.0% | argmax |
+| Moralization | `bert-base-uncased` | 2,682 | macro F1 .755 | - | argmax |
+| Generalization (18-way) | `roberta-base` | 2,357 | acc. .737, macro F1 .514 | - | argmax |
+| Generalization (segmenter) | `roberta-base` | - | 95.5% clause-span coverage | - | argmax |
 
 "Headline" is held-out F1 for the relevance models. "Residual irrelevance" is the
 stringent-rule rate in the finished corpus after all four filtering stages, from
-the double-rated human audit — the figure to quote for corpus quality. The
+the double-rated human audit, the figure to quote for corpus quality. The
 collapsed generalization features (genericity .852, eventivity .879,
 boundedness/habituality .804 macro F1) are what ISAAC reports and are stronger
 than the 18-way figure.
@@ -125,7 +125,7 @@ The **Performance & citation** tab is static markdown and holds no GPU.
 
 Every model is loaded lazily and cached, so only the task(s) actually used are
 pulled into memory. Relevance keeps at most two of its six distinction models
-resident (`functools.lru_cache`, capacity 2) — roughly 1.4 GB rather than the
+resident (`functools.lru_cache`, capacity 2), roughly 1.4 GB rather than the
 ~7.6 GB the full set would need. Moralization and generalization each cache their
 own models at capacity 1.
 
@@ -134,8 +134,8 @@ own models at capacity 1.
 Each model resolves local-first with a Hugging Face Hub fallback
 (`common.resolve_source`):
 
-1. `$ISAAC_MODELS_DIR/<relative path>` — explicit local override.
-2. `<repo_root>/models/<relative path>` — in-repo local run.
+1. `$ISAAC_MODELS_DIR/<relative path>`: explicit local override.
+2. `<repo_root>/models/<relative path>`: in-repo local run.
 3. The released Hugging Face model repo.
 
 | Task | Local path under `models/` | Hub default | Env override |

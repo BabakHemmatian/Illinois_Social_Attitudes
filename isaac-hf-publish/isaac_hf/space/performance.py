@@ -190,16 +190,16 @@ DISCO_CLF_URL = "https://huggingface.co/BabakScrapes/disco-se-classifier"
 
 
 def m(value: float | None) -> str:
-    """Format a 0-1 metric as the manuscript does: .846, 1.000, or an em dash."""
+    """Format a 0-1 metric as the manuscript does: .846, 1.000, or a dash."""
     if value is None:
-        return "—"
+        return "-"
     text = f"{value:.3f}"
     return text[1:] if text.startswith("0.") else text
 
 
 def pct(value: float | None) -> str:
     if value is None:
-        return "—"
+        return "-"
     return f"{value * 100:.1f}%"
 
 
@@ -229,7 +229,7 @@ def relevance_summary_md(group: str, heading: bool = True) -> str:
             "not reproduce the ISAAC corpus.\n"
         )
 
-    title = f"**{GROUP_LABELS[group]}** — b" if heading else "B"
+    title = f"**{GROUP_LABELS[group]}**: b" if heading else "B"
 
     return f"""
 {title}ase model `{spec['base_model']}`.
@@ -288,7 +288,7 @@ def generalization_summary_md() -> str:
     return f"""
 Two `{d['base_model']}` models run in sequence: a clause segmenter, then a
 {se['n_classes']}-way situation-entity classifier. Both are the same weights as
-the public DiSCo release — see the
+the public DiSCo release; see the
 [clause segmenter]({DISCO_SEG_URL}) and
 [situation-entity classifier]({DISCO_CLF_URL}) cards for the full model
 description and the corpus they were trained on.
@@ -339,7 +339,7 @@ CITATION_MD = f"""
 ## Citation
 
 If you use these classifiers, please cite the ISAAC paper. **One citation covers
-the whole project** — the corpus, the pipeline, and every model. Please do not
+the whole project**: the corpus, the pipeline, and every model. Please do not
 cite the models or the repository separately.
 
 **APA**
@@ -397,7 +397,7 @@ random samples (*k* = {RESIDUAL_POOLED['k']} comments pooled) confirmed it.
     p = RESIDUAL_POOLED
     parts.append(
         f"| **Pooled** | **{p['k']}** | **{pct(p['stringent'])}** | "
-        f"**{pct(p['lenient'])}** | — | — | **{pct(p['submissions'])}** |\n"
+        f"**{pct(p['lenient'])}** | - | - | **{pct(p['submissions'])}** |\n"
     )
     parts.append(
         "\nThe stringent rule counts a post as irrelevant if *either* annotator "
@@ -447,7 +447,7 @@ def readme_section_md() -> str:
         best = max(spec["heldout"], key=lambda row: row["k"])
         thr = "P(rel) > 0.6" if spec["threshold"] else "argmax"
         rows.append(
-            f"| Relevance — {GROUP_LABELS[group].split(' (')[0].lower()} | "
+            f"| Relevance: {GROUP_LABELS[group].split(' (')[0].lower()} | "
             f"`{spec['base_model'].split('/')[-1]}` | {best['k']} | "
             f"{m(best['f1'])} | {pct(spec['residual']['stringent'])} | {thr} |"
         )
@@ -455,19 +455,19 @@ def readme_section_md() -> str:
     return f"""## Performance
 
 Reported in full in the app's **Performance & citation** tab, which is rendered
-from `performance.py` — the single source of truth for every metric this project
+from `performance.py`, the single source of truth for every metric this project
 publishes, including the nine model cards. Summary:
 
 | Model | Base | Eval *k* | Headline | Residual irrelevance | Decision rule |
 | --- | --- | --- | --- | --- | --- |
 {chr(10).join(rows)}
-| Moralization | `{d['base_model'].split('/')[-1]}` | {d['k']:,} | macro F1 {m(d['macro_f1'])} | — | argmax |
-| Generalization (18-way) | `{GENERALIZATION['base_model'].split('/')[-1]}` | {GENERALIZATION['k']:,} | acc. {m(se['accuracy'])}, macro F1 {m(se['macro_f1'])} | — | argmax |
-| Generalization (segmenter) | `{SEGMENTATION['base_model'].split('/')[-1]}` | — | {pct(SEGMENTATION['coverage'])} clause-span coverage | — | argmax |
+| Moralization | `{d['base_model'].split('/')[-1]}` | {d['k']:,} | macro F1 {m(d['macro_f1'])} | - | argmax |
+| Generalization (18-way) | `{GENERALIZATION['base_model'].split('/')[-1]}` | {GENERALIZATION['k']:,} | acc. {m(se['accuracy'])}, macro F1 {m(se['macro_f1'])} | - | argmax |
+| Generalization (segmenter) | `{SEGMENTATION['base_model'].split('/')[-1]}` | - | {pct(SEGMENTATION['coverage'])} clause-span coverage | - | argmax |
 
 "Headline" is held-out F1 for the relevance models. "Residual irrelevance" is the
 stringent-rule rate in the finished corpus after all four filtering stages, from
-the double-rated human audit — the figure to quote for corpus quality. The
+the double-rated human audit, the figure to quote for corpus quality. The
 collapsed generalization features (genericity {m(GENERALIZATION['features'][0]['macro_f1'])},
 eventivity {m(GENERALIZATION['features'][1]['macro_f1'])},
 boundedness/habituality {m(GENERALIZATION['features'][2]['macro_f1'])} macro F1)

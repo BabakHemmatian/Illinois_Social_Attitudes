@@ -3,21 +3,21 @@
 Everything below is generated from `space/performance.py`, the single source of
 truth for every metric this project publishes. No number is written by hand twice.
 
-## 1. The Space — `BabakScrapes/isaac-classifiers`
+## 1. The Space: `BabakScrapes/isaac-classifiers`
 
 Copy into `hf_spaces/isaac/` in the GitHub repo, then push the same files to the
 Space repo:
 
 | File | Change |
 | --- | --- |
-| `space/performance.py` | **new** — all metrics as data, plus renderers |
+| `space/performance.py` | **new**; all metrics as data, plus renderers |
 | `space/app.py` | adds a 4th tab, "Performance & citation" |
 | `space/relevance.py` | adds a collapsed per-distinction performance accordion that updates with the dropdown |
 | `space/moralization.py` | adds a collapsed performance accordion |
 | `space/generalization.py` | adds a collapsed performance accordion |
 | `space/README.md` | adds a Performance section, `license`/`models`/`tags` frontmatter, corrects the base-model descriptions |
 
-`common.py` and `requirements.txt` are unchanged — keep the ones you have.
+`common.py` and `requirements.txt` are unchanged; keep the ones you have.
 
 Regenerate the README table after any edit to `performance.py`:
 
@@ -28,7 +28,7 @@ cd hf_spaces/isaac && python performance.py --readme
 ## 2. The nine model repos
 
 Each `model_cards/<repo>/README.md` goes to the root of
-`ISAAC-corpus/<repo>` on the Hub — the models moved to the org; only the Space
+`ISAAC-corpus/<repo>` on the Hub. The models moved to the org; only the Space
 stayed personal, for ZeroGPU. Either drag it into the web UI, or:
 
 ```bash
@@ -75,8 +75,8 @@ mappings instead of `LABEL_0 … LABEL_17`. Upload them to
 `ISAAC-corpus/isaac-generalization-segmentation` (and the DiSCo repos, if you
 want them to match).
 
-Nothing in the ISAAC pipeline reads `config.id2label` — `label_generalization.py`
-and the Space both use their own `labels2attrs` dict — so this is cosmetic for
+Nothing in the ISAAC pipeline reads `config.id2label`: `label_generalization.py`
+and the Space both use their own `labels2attrs` dict, so this is cosmetic for
 you and a real improvement for anyone loading the weights directly.
 
 To regenerate, or to apply in place:

@@ -61,7 +61,7 @@ LINKS = f"""## Links
 
 CITATION = f"""## Citation
 
-Please cite the ISAAC paper. **One citation covers the whole project** — the
+Please cite the ISAAC paper. **One citation covers the whole project**: the
 corpus, the pipeline, and every model. Please do not cite this model repository
 separately; keeping references in one place is what allows the project's
 citations to be found together.
@@ -79,7 +79,7 @@ citations to be found together.
 
 Released under a [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/).
 You may use, share, and adapt these weights, including commercially, provided
-you give appropriate credit — see Citation above.
+you give appropriate credit; see Citation above.
 
 The ISAAC corpus itself is governed separately by the project
 [Data Use Agreement]({P.DUA_URL}).
@@ -120,10 +120,10 @@ tags:
 {results}
 ---
 
-# ISAAC relevance classifier — {group_label}
+# ISAAC relevance classifier: {group_label}
 
 Binary classifier that decides whether an English text is **relevant to the
-{group_label_lower} social group distinction** — that is, whether it actually
+{group_label_lower} social group distinction**, that is, whether it actually
 discusses people in terms of that attribute, as opposed to merely containing a
 keyword that can also mean something else.
 
@@ -138,7 +138,7 @@ Reddit posts (2007–2023) covering six social group distinctions.
 Keyword filters for social-group discourse are notoriously imprecise: "black" in
 a chess match, "disabled" in a software changelog, "gay" as a Filipino or French
 word. Such posts carry no signal about social groups, so they inflate standard
-errors, depress reliability, and suppress real effects — and most published work
+errors, depress reliability, and suppress real effects, and most published work
 never reports how many of them survive. Because this model reads each keyword in
 the context of the full post, it separates the intended sense from the unintended
 one in a way a static list cannot.
@@ -175,7 +175,7 @@ The annotated validation data are released alongside the corpus.
 ## Intended use
 
 Screening English social-media text for relevance to the {group_label_lower}
-distinction, as a preprocessing step before substantive analysis — the role it
+distinction, as a preprocessing step before substantive analysis, the role it
 plays in ISAAC. It is a **topical relevance** filter.
 
 ## Out-of-scope use
@@ -285,7 +285,7 @@ def build_relevance_card(group: str) -> tuple[str, str]:
             f"      name: Social-group relevance classification\n"
             f"    dataset:\n"
             f"      type: isaac-relevance-annotations\n"
-            f"      name: \"ISAAC relevance annotations ({group}) — {row['slice']}\"\n"
+            f"      name: \"ISAAC relevance annotations ({group}): {row['slice']}\"\n"
             f"      split: test\n"
             f"    metrics:\n"
             + yaml_metrics([
@@ -364,7 +364,7 @@ tags:
       name: Binary moralization detection
     dataset:
       type: USC-MOLA-Lab/MFRC
-      name: "Moral Foundations Reddit Corpus — held-out 10%"
+      name: "Moral Foundations Reddit Corpus: held-out 10%"
       split: test
     metrics:
 {metrics}
@@ -373,8 +373,8 @@ tags:
 # ISAAC moralization classifier
 
 Binary classifier that decides whether an English text **frames its subject in
-moral terms** — judgments of right and wrong, harm, fairness, loyalty, authority,
-purity — as opposed to describing it non-morally.
+moral terms** (judgments of right and wrong, harm, fairness, loyalty, authority,
+purity), as opposed to describing it non-morally.
 
 This is the document-level moralization labeler used to annotate all 527,060,919
 posts in the [Illinois Social Attitudes Aggregate Corpus (ISAAC)]({repo_url}).
@@ -442,9 +442,9 @@ contested domains moralize more than less contested ones (race 68.1%, ability
 
 Note that 49–74% moralized is far above the 2–5% reported for unselected everyday
 speech and donated personal social media (Atari et al., 2023). That gap is
-expected — ISAAC is pre-filtered for relevance to social distinctions that attract
+expected, because ISAAC is pre-filtered for relevance to social distinctions that attract
 intense normative scrutiny, and a binary operationalization is more inclusive than
-foundation-specific coding — but it means the base rate here should not be read as
+foundation-specific coding, but it means the base rate here should not be read as
 a population estimate.
 
 ## Intended use
@@ -571,7 +571,7 @@ model-index:
       name: Situation-entity classification (18-way)
     dataset:
       type: disco
-      name: "DiSCo gold corpus — held-out 10%"
+      name: "DiSCo gold corpus: held-out 10%"
       split: test
     metrics:
 {metrics_se}
@@ -580,13 +580,13 @@ model-index:
       name: Collapsed generalization features
     dataset:
       type: disco
-      name: "DiSCo gold corpus — held-out 10%"
+      name: "DiSCo gold corpus: held-out 10%"
       split: test
     metrics:
 {metrics_features}
 ---
 
-# ISAAC generalization — situation-entity classifier
+# ISAAC generalization: situation-entity classifier
 
 {mirror_note}
 Clause-level classifier that assigns one of **18 situation-entity types** to an
@@ -595,11 +595,11 @@ boundedness distinctions. In the [Illinois Social Attitudes Aggregate Corpus
 (ISAAC)]({repo_url}) the 18 types are collapsed into three linguistic features
 that together capture **how generalized a statement is**:
 
-* **Genericity** — is the main referent a generic category (*gay people*) or a
+* **Genericity**: is the main referent a generic category (*gay people*) or a
   specific individual (*my neighbor*)?
-* **Eventivity** — a stable state (*God is benevolent*) or a transient event
+* **Eventivity**: a stable state (*God is benevolent*) or a transient event
   (*I went to Nebraska*)?
-* **Boundedness / habituality** — for eventive clauses, temporally bounded
+* **Boundedness / habituality**: for eventive clauses, temporally bounded
   (*I ate this morning*), unbounded (*God loves us*), or habitually recurring
   (*I went there for years*)?
 
@@ -646,8 +646,8 @@ for clause, idx in zip(clauses, pred_ids):
     print(model.config.id2label[idx], "|", clause)
 ```
 
-For the full text-to-features pipeline — segmentation, batching, long-text
-splitting, and per-text aggregation — see `code/label_generalization.py` in the
+For the full text-to-features pipeline (segmentation, batching, long-text
+splitting, and per-text aggregation), see `code/label_generalization.py` in the
 [project repository]({repo_url}) or `generalization.py` in the
 [Space]({space_url}).
 
@@ -664,7 +664,7 @@ opinionated, mixed-register English text (Hemmatian, 2022). See the
 ## Intended use
 
 Clause-level annotation of English text for genericity, eventivity, and
-boundedness/habituality, in aggregate research designs — the role it plays in
+boundedness/habituality, in aggregate research designs, the role it plays in
 ISAAC, where it labels clauses across 527M posts.
 
 ## Out-of-scope use
@@ -727,7 +727,7 @@ model-index:
       value: {coverage}
 ---
 
-# ISAAC generalization — clause segmenter
+# ISAAC generalization: clause segmenter
 
 {mirror_note}
 Token classifier that splits English text into **clauses**, the unit the
@@ -740,7 +740,7 @@ Aggregate Corpus (ISAAC)]({repo_url}).
 The model emits one tag per word (majority-voted across sub-word tokens). The
 decoder in `code/label_generalization.py` reads them as follows:
 
-* tag `2` marks a **clause-final** word — it closes the clause it appears in;
+* tag `2` marks a **clause-final** word; it closes the clause it appears in;
 * tags `0` and `1` mark clause-internal words;
 * a new clause opens on the word after a `2`;
 * when a word receives no aligned prediction, it defaults to `1`.
@@ -816,7 +816,7 @@ requires, which does not always coincide with a syntactic clause. English only.
 * Segmentation errors propagate into every downstream generalization label.
 * Long inputs are truncated at 512 sub-word tokens, which is why the ISAAC
   pipeline pre-splits at ~200 words.
-* Reddit text is noisy — missing punctuation, run-on constructions, markup — and
+* Reddit text is noisy (missing punctuation, run-on constructions, markup), and
   segmentation quality degrades accordingly.
 
 {links}

@@ -450,9 +450,9 @@ DESCRIPTION = """
 Segments text into **clauses** and labels each clause along three discourse
 dimensions, revealing how generalized vs. anecdotal the language is:
 
-* **Genericity** — generic category (e.g., *humanity*) vs. specific instance (e.g., *my cousin*).
-* **Eventivity** — a state (*God is benevolent*) vs. an event (*I went to Nebraska*).
-* **Boundedness / Habituality** — bounded (*I ate this morning*) vs. unbounded (*God loves us*) vs. repeated (*I went there for years*).
+* **Genericity**: generic category (e.g., *humanity*) vs. specific instance (e.g., *my cousin*).
+* **Eventivity**: a state (*God is benevolent*) vs. an event (*I went to Nebraska*).
+* **Boundedness / Habituality**: bounded (*I ate this morning*) vs. unbounded (*God loves us*) vs. repeated (*I went there for years*).
 
 The most anecdotal content involves specific entities in bounded, non-habitual events.
 """

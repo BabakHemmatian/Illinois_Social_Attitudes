@@ -208,7 +208,7 @@ class DataHostUnavailable(RuntimeError):
 def _missing_message(url: str, detail: str = "") -> str:
     return (
         f"{url} is listed in the ISAAC manifest but the data host does not have it. "
-        "This is a server-side gap rather than a problem with your query — please "
+        "This is a server-side gap rather than a problem with your query; please "
         "report it at https://isaac.psychology.illinois.edu/direct-download/."
         + (f" Host said: {detail}" if detail else "")
     )

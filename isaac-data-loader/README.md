@@ -2,9 +2,9 @@
 
 A thin Python loader for the **ISAAC** Reddit corpus (Illinois Social Attitudes
 Aggregate Corpus). It reads the public
-[Direct Download catalog](https://isaac.psychology.illinois.edu/direct-download/)
-— using the published `manifest.json` as the catalog, with the data files served
-directly from the project's public Globus collection on NCSA Taiga — so you don't
+[Direct Download catalog](https://isaac.psychology.illinois.edu/direct-download/),
+using the published `manifest.json` as the catalog, with the data files served
+directly from the project's public Globus collection on NCSA Taiga, so you don't
 have to hand-build URLs or stitch months together.
 
 - **Catalog-driven**: enumerate what exists; never hard-code filenames.
@@ -54,12 +54,12 @@ isaac-data accept-agreement                        # interactive review + accept
 isaac-data accept-agreement --yes --email you@x.edu # accept non-interactively
 isaac-data accept-agreement --status               # show / --withdraw to revoke
 ```
-…or set `ISAAC_ACCEPT_AGREEMENT=1` **together with** `ISAAC_AGREEMENT_EMAIL` —
+…or set `ISAAC_ACCEPT_AGREEMENT=1` **together with** `ISAAC_AGREEMENT_EMAIL`:
 there is no prompt to fall back on in a non-interactive session, so opting in
 without an address raises `AgreementNotAccepted` rather than recording an
 anonymous acceptance.
 
-> **Renamed in 0.1.2** — this document was previously the "Terms of Use". The old
+> **Renamed in 0.1.2.** This document was previously the "Terms of Use". The old
 > names still work: `isaac-data accept-terms`, `ISAAC_ACCEPT_TERMS`,
 > `TermsNotAccepted`, `isaac_data.accept_terms`, and `import isaac_data.terms`.
 > Existing local acceptance records remain valid; no need to re-accept.
@@ -73,7 +73,7 @@ import isaac_data as isaac
 cat = isaac.catalog()                       # full manifest as a DataFrame
 race = isaac.files("race", "2018-01", "2018-12")   # filter by category + months
 
-# 2) Load a slice — only the columns you need (pushed down over HTTP)
+# 2) Load a slice: only the columns you need (pushed down over HTTP)
 df = isaac.load("race", "2018-03", "2018-03", columns=["text", "score"])
 
 # 3) Stratified sample: 1000 rows TOTAL, spread equally across the 12 months
@@ -89,7 +89,7 @@ Categories: `ability, age, race, sexuality, skin_tone, weight`
 
 ## How it works
 
-The package is three layers — **discover → read/fetch → configure**:
+The package is three layers: **discover → read/fetch → configure**:
 
 1. **Discover.** `catalog()` downloads the published `manifest.json` (the
    authoritative list of every file) and returns it as a DataFrame, cached for
@@ -98,16 +98,16 @@ The package is three layers — **discover → read/fetch → configure**:
    before pulling anything.
 2. **Read or fetch.**
    - `load(...)` is the main entry point. It selects files, then for **parquet**
-     streams *only the columns you ask for* over HTTP — it reads the file footer,
+     streams *only the columns you ask for* over HTTP: it reads the file footer,
      then just those column chunks, so `columns=["text","score"]` from a 285 MB
-     file moves a few MB, not 285. `n=` draws a **stratified total** — spread
+     file moves a few MB, not 285. `n=` draws a **stratified total**, spread
      equally across the selected months, uniform within each (matching the web
-     app) — reading only the selected columns of the row groups that contain
+     app), reading only the selected columns of the row groups that contain
      sampled rows. Each row is tagged with `_category`/`_month`; a `max_bytes`
      guard prevents accidental hundred-GB full loads.
    - `read_parquet(url, columns=...)` is the single-file primitive `load` uses.
    - `download(...)` fetches whole files to disk (resumable, skips complete ones)
-     without loading them into memory — for offline work or other tools
+     without loading them into memory, for offline work or other tools
      (DuckDB, Spark).
 3. **Configure.** Reads and downloads are cached under an OS-native directory
    (`cache_dir()` / `set_cache_dir()` / `$ISAAC_DATA_CACHE`), and the first data
@@ -119,7 +119,7 @@ the columns you need (or download grabs whole files) → the cache avoids repeat
 transfers.*
 
 > Full per-argument reference lives in the function docstrings (`help(isaac.load)`,
-> IDE tooltips) and the generated [API docs](#documentation) — the table below is
+> IDE tooltips) and the generated [API docs](#documentation); the table below is
 > a summary.
 
 ## API
@@ -171,7 +171,7 @@ pdoc -d google isaac_data                # or a live preview server
 
 ## Citation
 
-Please cite the ISAAC paper. **One citation covers the whole project** — the
+Please cite the ISAAC paper. **One citation covers the whole project**: the
 corpus, the pipeline, the models, and this package. Please do not cite the
 package separately.
 
@@ -195,7 +195,7 @@ which the package presents for acceptance before any data access.
 
 - **Parquet is recommended** for scripting (column projection, smaller transfers).
   The final labeled ISAAC release will add many per-post fields (moralization,
-  sentiment, generalization, emotion, location) — column pushdown makes those
+  sentiment, generalization, emotion, location), and column pushdown makes those
   cheap to query.
 - For SQL-style predicate pushdown without Python, query the parquet directly
   with DuckDB (reads only the columns/row groups your query needs):
@@ -204,6 +204,6 @@ which the package presents for acceptance before any data access.
   read_parquet('https://isaac.psychology.illinois.edu/data/race/RC_2018-03.parquet')
   WHERE score > 100;
   ```
-  HTTP has no directory listing, so wildcard globs don't work — for multiple
+  HTTP has no directory listing, so wildcard globs don't work; for multiple
   months pass an explicit URL list, e.g. from the loader:
   `duckdb.sql("... read_parquet($u) ...", params={"u": isaac.files("race","2018-01","2018-12").url.tolist()})`.

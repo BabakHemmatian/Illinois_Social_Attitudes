@@ -30,7 +30,7 @@ model-index:
       value: 0.955
 ---
 
-# ISAAC generalization — clause segmenter
+# ISAAC generalization: clause segmenter
 
 > **Same weights as the public DiSCo release.** This repository is the
 > ISAAC-facing copy of [`BabakScrapes/disco-clause-segmenter`](https://huggingface.co/BabakScrapes/disco-clause-segmenter); the checkpoints are
@@ -49,7 +49,7 @@ Aggregate Corpus (ISAAC)](https://github.com/BabakHemmatian/Illinois_Social_Atti
 The model emits one tag per word (majority-voted across sub-word tokens). The
 decoder in `code/label_generalization.py` reads them as follows:
 
-* tag `2` marks a **clause-final** word — it closes the clause it appears in;
+* tag `2` marks a **clause-final** word; it closes the clause it appears in;
 * tags `0` and `1` mark clause-internal words;
 * a new clause opens on the word after a `2`;
 * when a word receives no aligned prediction, it defaults to `1`.
@@ -107,7 +107,7 @@ with human-verified clause boundaries. See the
 
 Two `FacebookAI/roberta-base` models run in sequence: a clause segmenter, then a
 18-way situation-entity classifier. Both are the same weights as
-the public DiSCo release — see the
+the public DiSCo release; see the
 [clause segmenter](https://huggingface.co/BabakScrapes/disco-clause-segmenter) and
 [situation-entity classifier](https://huggingface.co/BabakScrapes/disco-se-classifier) cards for the full model
 description and the corpus they were trained on.
@@ -145,7 +145,7 @@ requires, which does not always coincide with a syntactic clause. English only.
 * Segmentation errors propagate into every downstream generalization label.
 * Long inputs are truncated at 512 sub-word tokens, which is why the ISAAC
   pipeline pre-splits at ~200 words.
-* Reddit text is noisy — missing punctuation, run-on constructions, markup — and
+* Reddit text is noisy (missing punctuation, run-on constructions, markup), and
   segmentation quality degrades accordingly.
 
 ## Links
@@ -159,7 +159,7 @@ requires, which does not always coincide with a syntactic clause. English only.
 
 ## Citation
 
-Please cite the ISAAC paper. **One citation covers the whole project** — the
+Please cite the ISAAC paper. **One citation covers the whole project**: the
 corpus, the pipeline, and every model. Please do not cite this model repository
 separately; keeping references in one place is what allows the project's
 citations to be found together.
@@ -177,7 +177,7 @@ citations to be found together.
 
 Released under a [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/).
 You may use, share, and adapt these weights, including commercially, provided
-you give appropriate credit — see Citation above.
+you give appropriate credit; see Citation above.
 
 The ISAAC corpus itself is governed separately by the project
 [Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md).

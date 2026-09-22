@@ -1,7 +1,7 @@
 cff-version: 1.2.0
 message: >-
-  If you use ISAAC in your work — the corpus, the pipeline, the models, or any
-  of the access tools — please cite the paper listed under `preferred-citation`
+  If you use ISAAC in your work (the corpus, the pipeline, the models, or any
+  of the access tools), please cite the paper listed under `preferred-citation`
   below. A single citation covers every surface of the project; please do not
   cite this repository separately. The `authors` field records who built this
   particular piece of software, which is a different question from what to cite.

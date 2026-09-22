@@ -211,7 +211,7 @@ def _post_consent(rec: dict, timeout: int = 10) -> bool:
 
 
 def _prompt_email(out) -> str:
-    """Ask for an email address. Required — raises if one is not supplied.
+    """Ask for an email address. Required; raises if one is not supplied.
 
     An address is part of accepting the agreement (it is how we reach you about
     changes and errata), so there is no skip option here. Ctrl-C still aborts.
@@ -226,7 +226,7 @@ def _prompt_email(out) -> str:
         if _EMAIL_RE.match(resp):
             return resp
         if resp:
-            print("That doesn't look like an email address — please try again.", file=out)
+            print("That doesn't look like an email address; please try again.", file=out)
         else:
             print("An email address is required to accept the agreement.", file=out)
     raise AgreementNotAccepted(
@@ -268,7 +268,7 @@ def _write_record(agreement: Optional[dict], email: Optional[str], via: str) -> 
 
 def _print_agreement(agreement: Optional[dict], out) -> None:
     print("\n" + "=" * 72, file=out)
-    print("ISAAC dataset — Data Use Agreement", file=out)
+    print("ISAAC dataset: Data Use Agreement", file=out)
     print("=" * 72, file=out)
     if agreement and agreement.get("text"):
         print(agreement["text"].strip(), file=out)
@@ -314,7 +314,7 @@ def accept_agreement(assume_yes: bool = False, email: Optional[str] = None) -> d
         email = _env_email() or _prompt_email(out)
 
     rec = _write_record(agreement, email, via="prompt")
-    print(f"Thank you — acceptance recorded at {_record_file()}.", file=out)
+    print(f"Thank you. Acceptance recorded at {_record_file()}.", file=out)
     return rec
 
 

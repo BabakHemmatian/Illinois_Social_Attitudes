@@ -1,4 +1,4 @@
-# Runbook — publish ISAAC as a gated Hugging Face dataset
+# Runbook: publish ISAAC as a gated Hugging Face dataset
 
 **Posture A** (soft gate): the HF dataset is gated for consent + an audit trail;
 the UIUC `/data/` endpoint stays open.
@@ -22,7 +22,7 @@ the UIUC `/data/` endpoint stays open.
 ## 1. Recompress the parquet (SNAPPY -> ZSTD)
 
 The corpus as served from Globus is SNAPPY-compressed. The HF mirror ships
-**ZSTD-9**, which is ~41% smaller for identical data — the same schema, the same
+**ZSTD-9**, which is ~41% smaller for identical data: the same schema, the same
 row-group boundaries, the same values. Local read speed is unchanged (measured:
 within noise across full reads, column projections and row-group reads), but
 every download and every `streaming=True` session moves ~40% fewer bytes.
@@ -31,8 +31,8 @@ every download and every `streaming=True` session moves ~40% fewer bytes.
 python recompress_zstd.py --src /path/to/parquet-snappy --dst /path/to/parquet-zstd --workers 8
 ```
 
-Write the output to a **different physical drive** from the source if you can —
-the source lives on a USB HDD here, and reading and writing the same spindle
+Write the output to a **different physical drive** from the source if you can.
+The source lives on a USB HDD here, and reading and writing the same spindle
 halves throughput. Every output file is verified row group by row group against
 its source (`pyarrow.Table.equals`) before it is marked done, and progress is
 journalled to `recompress_journal.jsonl`, so the run is resumable and re-running
@@ -44,7 +44,7 @@ it skips completed files.
   and what requesters see. Adjust fields/wording as desired. (The Data Use Agreement
   text itself lives at the linked GitHub file.)
 - The `configs:` blocks must match the on-disk filenames, which are
-  `<category>/ALL_<YYYY>-<MM>.parquet` — the same convention the
+  `<category>/ALL_<YYYY>-<MM>.parquet`, the same convention the
   direct-download manifest uses.
 
 ## 3. Dry run (no upload)
@@ -72,7 +72,7 @@ works after you accept the gate. Delete the sample repo when satisfied.
 HF_TOKEN=hf_xxx python upload_to_hf.py --repo BabakScrapes/isaac-reddit \
     --data-dir /path/to/parquet-zstd --execute
 ```
-`upload_large_folder` is resumable — safe to re-run if the connection drops; it
+`upload_large_folder` is resumable and safe to re-run if the connection drops; it
 re-scans the folder and skips what is already on the Hub.
 
 Note this is a large transfer. The dataset **cannot be uploaded private**: 100 GB

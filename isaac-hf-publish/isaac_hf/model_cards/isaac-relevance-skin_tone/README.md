@@ -22,7 +22,7 @@ model-index:
       name: Social-group relevance classification
     dataset:
       type: isaac-relevance-annotations
-      name: "ISAAC relevance annotations (skin_tone) — Held-out 10% of the retraining sample"
+      name: "ISAAC relevance annotations (skin_tone): Held-out 10% of the retraining sample"
       split: test
     metrics:
     - type: precision
@@ -39,7 +39,7 @@ model-index:
       name: Social-group relevance classification
     dataset:
       type: isaac-relevance-annotations
-      name: "ISAAC relevance annotations (skin_tone) — Held-out 10% of the initial training sample"
+      name: "ISAAC relevance annotations (skin_tone): Held-out 10% of the initial training sample"
       split: test
     metrics:
     - type: precision
@@ -53,10 +53,10 @@ model-index:
       value: 0.788
 ---
 
-# ISAAC relevance classifier — Skin tone (light vs. dark)
+# ISAAC relevance classifier: Skin tone (light vs. dark)
 
 Binary classifier that decides whether an English text is **relevant to the
-skin tone social group distinction** — that is, whether it actually
+skin tone social group distinction**, that is, whether it actually
 discusses people in terms of that attribute, as opposed to merely containing a
 keyword that can also mean something else.
 
@@ -71,7 +71,7 @@ Reddit posts (2007–2023) covering six social group distinctions.
 Keyword filters for social-group discourse are notoriously imprecise: "black" in
 a chess match, "disabled" in a software changelog, "gay" as a Filipino or French
 word. Such posts carry no signal about social groups, so they inflate standard
-errors, depress reliability, and suppress real effects — and most published work
+errors, depress reliability, and suppress real effects, and most published work
 never reports how many of them survive. Because this model reads each keyword in
 the context of the full post, it separates the intended sense from the unintended
 one in a way a static list cannot.
@@ -159,7 +159,7 @@ the F1 above, is the number to quote when describing corpus quality.
 ## Intended use
 
 Screening English social-media text for relevance to the skin tone
-distinction, as a preprocessing step before substantive analysis — the role it
+distinction, as a preprocessing step before substantive analysis, the role it
 plays in ISAAC. It is a **topical relevance** filter.
 
 ## Out-of-scope use
@@ -200,7 +200,7 @@ input.
 
 ## Citation
 
-Please cite the ISAAC paper. **One citation covers the whole project** — the
+Please cite the ISAAC paper. **One citation covers the whole project**: the
 corpus, the pipeline, and every model. Please do not cite this model repository
 separately; keeping references in one place is what allows the project's
 citations to be found together.
@@ -218,7 +218,7 @@ citations to be found together.
 
 Released under a [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/).
 You may use, share, and adapt these weights, including commercially, provided
-you give appropriate credit — see Citation above.
+you give appropriate credit; see Citation above.
 
 The ISAAC corpus itself is governed separately by the project
 [Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md).

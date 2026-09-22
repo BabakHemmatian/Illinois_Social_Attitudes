@@ -104,7 +104,7 @@ Each row is a Reddit submission or comment, in 59 columns:
 
 - **Core**: `id`, `parent id`, `text`, `author` (a pseudonymous numeric id),
   `time` (GMT), `subreddit`, `score`, `type` (`comment` or `submission`), and
-  `matched patterns` — the keywords that flagged the post as potentially
+  `matched patterns`: the keywords that flagged the post as potentially
   relevant to the group before AI-based pruning.
 - **Moralization**: `Moralization`, a binary AI estimate.
 - **Sentiment**: sentence counts from Stanza (`Sentiment_Stanza_pos/neu/neg`),
@@ -121,7 +121,7 @@ Each row is a Reddit submission or comment, in 59 columns:
   categories; model 2 scores are independent per-category probabilities and
   need not sum to one.
 - **Location**: `location`, `location_prob`, `contender_location`,
-  `contender_location_prob` — a *user-level* estimate, so every post by the same
+  `contender_location_prob`: a *user-level* estimate, so every post by the same
   account carries the same label.
 
 Two column names are easy to mistype: **`matched patterns` and `parent id`
@@ -135,8 +135,8 @@ in the project repository.
 
 Parquet, ZSTD-compressed, with ~100,000 rows per row group. These files decode to
 tables identical to the SNAPPY-compressed copies served from the
-[direct-download endpoint](https://isaac.psychology.illinois.edu/direct-download/) —
-same schema, same row groups, same values — but they are about 40% smaller on
+[direct-download endpoint](https://isaac.psychology.illinois.edu/direct-download/):
+same schema, same row groups, same values, but they are about 40% smaller on
 the wire, so the bytes themselves are not interchangeable with those copies.
 
 ## Provenance & related access
@@ -147,7 +147,7 @@ the wire, so the bytes themselves are not interchangeable with those copies.
 
 ## Citation
 
-Please cite the ISAAC paper. **One citation covers the whole project** — the
+Please cite the ISAAC paper. **One citation covers the whole project**: the
 corpus, the pipeline, and every model. Please do not cite this dataset
 repository separately; keeping references in one place is what allows the
 project's citations to be found together.

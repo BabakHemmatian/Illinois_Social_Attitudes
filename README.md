@@ -40,7 +40,7 @@ The scripts were designed to be easily adapted for developing other corpora. See
 
 ## Citation
 
-Please cite the ISAAC paper. **One citation covers the whole project** — the
+Please cite the ISAAC paper. **One citation covers the whole project**: the
 corpus, the pipeline, the models, the website, and every access route. Please do
 not cite this repository separately; keeping references in one place is what
 allows the project's citations to be found together.
@@ -71,14 +71,14 @@ Group Discourse at Scale [Manuscript submitted for publication].
 ### Software authorship
 
 Who wrote the code in this repository is recorded in
-[`CITATION.cff`](./CITATION.cff) — a separate question from what to cite.
+[`CITATION.cff`](./CITATION.cff), which is a separate question from what to cite.
 People who contributed in other ways are listed under
 [Acknowledgments](#acknowledgments).
 
 ## License
 
-The **code** in this repository — the pipeline scripts, keyword lists, regular
-expression pattern sets, and default configurations — is released under the
+The **code** in this repository (the pipeline scripts, keyword lists, regular
+expression pattern sets, and default configurations) is released under the
 [MIT License](./LICENSE).
 
 The MIT License does **not** cover the corpus or the Reddit-derived data files
@@ -99,7 +99,7 @@ through HuggingFace:
 | Models | License | Access |
 | --- | --- | --- |
 | 6 relevance classifiers, moralization, generalization suite | CC-BY-4.0 | Open |
-| Location model | ISAAC Model Use Agreement | Gated — prohibits re-identification and surveillance uses |
+| Location model | ISAAC Model Use Agreement | Gated; prohibits re-identification and surveillance uses |
 
 Third-party models used by the pipeline keep their own upstream licenses.
 
@@ -108,7 +108,7 @@ Third-party models used by the pipeline keep their own upstream licenses.
 ### Repository Setup
 Install [Git](https://git-scm.com/book/en/v2/Getting-Started-Installing-Git) on your computer. When finished, open a command line terminal, navigate to where you would like to place the repository, then enter ```git clone https://github.com/BabakHemmatian/Illinois_Social_Attitudes.git```. Note that raw and processed Reddit data files for the full 2007-2023 take several terabytes of space. Choose the repository location according to your use case's storage needs.
 
-The ```filter_keywords``` resource expects raw monthly Reddit dumps in the Pushshift format: ```.zst```-compressed newline-delimited JSON, one object per post. Place the relevant files for a given timeframe in ```data/data_reddit_raw/comments/``` or ```data/data_reddit_raw/submissions/``` depending on the type of Reddit post you are targeting with your command. These dumps are no longer distributed through a stable public bulk endpoint, so this step assumes you already hold a copy. If your raw data is in a different shape, adapt the two resources that read it directly -- ```filter_keywords```, which selects posts, and ```label_location```, which scans authors' posting histories. The remaining resources consume curated CSVs and are unaffected by the raw format. 
+The ```filter_keywords``` resource expects raw monthly Reddit dumps in the Pushshift format: ```.zst```-compressed newline-delimited JSON, one object per post. Place the relevant files for a given timeframe in ```data/data_reddit_raw/comments/``` or ```data/data_reddit_raw/submissions/``` depending on the type of Reddit post you are targeting with your command. These dumps are no longer distributed through a stable public bulk endpoint, so this step assumes you already hold a copy. If your raw data is in a different shape, adapt the two resources that read it directly: ```filter_keywords```, which selects posts, and ```label_location```, which scans authors' posting histories. The remaining resources consume curated CSVs and are unaffected by the raw format. 
 
 ### Virtual Environment Setup
 Follow the steps [here](https://docs.conda.io/projects/conda/en/latest/user-guide/install/index.html) to install the desired version of Anaconda. 
@@ -129,7 +129,7 @@ This downloads roughly 9 GB: ISAAC's six relevance classifiers, the moralization
 classifier, the generalization suite, and the location model, plus the
 off-the-shelf emotion models and fastText's language identifier from their own
 sources. Each is placed in the directory the resources expect. Downloads resume,
-so it is safe to re-run after an interruption -- files already present are
+so it is safe to re-run after an interruption; files already present are
 skipped.
 
 The location model is released under the ISAAC Model Use Agreement rather than
@@ -145,7 +145,7 @@ hf auth login
 
 Use ```python get_models.py --skip-location``` to fetch everything else without
 it. Set ```ISAAC_MODELS_DIR``` to read the weights from somewhere other than
-```models/``` -- useful if you keep them on a shared or larger volume.
+```models/```, which is useful if you keep them on a shared or larger volume.
 
 The train/validation/test splits behind the released classifiers ship with this
 repository, under ```models/train_relevance_data_split/``` (where
@@ -153,7 +153,7 @@ repository, under ```models/train_relevance_data_split/``` (where
 They are versioned here rather than downloaded because reproducing the published
 held-out performance depends on having exactly those partitions:
 `train_relevance` will happily create a fresh 80/10/10 split when the files are
-absent, but it will not match the published one -- the ordering it partitions
+absent, but it will not match the published one: the ordering it partitions
 comes from unsorted iteration over a set of integer document identifiers, which
 is stable within one Python build and not across versions.
 

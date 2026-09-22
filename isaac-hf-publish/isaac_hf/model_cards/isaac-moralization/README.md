@@ -24,7 +24,7 @@ model-index:
       name: Binary moralization detection
     dataset:
       type: USC-MOLA-Lab/MFRC
-      name: "Moral Foundations Reddit Corpus — held-out 10%"
+      name: "Moral Foundations Reddit Corpus: held-out 10%"
       split: test
     metrics:
     - type: precision
@@ -47,8 +47,8 @@ model-index:
 # ISAAC moralization classifier
 
 Binary classifier that decides whether an English text **frames its subject in
-moral terms** — judgments of right and wrong, harm, fairness, loyalty, authority,
-purity — as opposed to describing it non-morally.
+moral terms** (judgments of right and wrong, harm, fairness, loyalty, authority,
+purity), as opposed to describing it non-morally.
 
 This is the document-level moralization labeler used to annotate all 527,060,919
 posts in the [Illinois Social Attitudes Aggregate Corpus (ISAAC)](https://github.com/BabakHemmatian/Illinois_Social_Attitudes).
@@ -134,9 +134,9 @@ contested domains moralize more than less contested ones (race 68.1%, ability
 
 Note that 49–74% moralized is far above the 2–5% reported for unselected everyday
 speech and donated personal social media (Atari et al., 2023). That gap is
-expected — ISAAC is pre-filtered for relevance to social distinctions that attract
+expected, because ISAAC is pre-filtered for relevance to social distinctions that attract
 intense normative scrutiny, and a binary operationalization is more inclusive than
-foundation-specific coding — but it means the base rate here should not be read as
+foundation-specific coding, but it means the base rate here should not be read as
 a population estimate.
 
 ## Intended use
@@ -176,7 +176,7 @@ framing, at scale, in aggregate research designs.
 
 ## Citation
 
-Please cite the ISAAC paper. **One citation covers the whole project** — the
+Please cite the ISAAC paper. **One citation covers the whole project**: the
 corpus, the pipeline, and every model. Please do not cite this model repository
 separately; keeping references in one place is what allows the project's
 citations to be found together.
@@ -194,7 +194,7 @@ citations to be found together.
 
 Released under a [Creative Commons Attribution 4.0 International License](https://creativecommons.org/licenses/by/4.0/).
 You may use, share, and adapt these weights, including commercially, provided
-you give appropriate credit — see Citation above.
+you give appropriate credit; see Citation above.
 
 The ISAAC corpus itself is governed separately by the project
 [Data Use Agreement](https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/Data_Use_Agreement.md).

@@ -6,9 +6,9 @@ This page documents the operational details of the `label_location` resource: it
 
 For each author appearing in the curated input month, `label_location`:
 
-1. **Pass 1 — Curated scan.** Reads the month's curated CSV once to identify the set of authors whose rows still need writing, plus a per-author "local activity" count.
-2. **Pass 2 — Curated seed.** Re-reads the curated CSV and accumulates per-author feature counts (`word:tok`, `subreddit:name`, `hour:HH`) from the group-relevant posts. Also collects the post IDs that contributed, for later deduplication.
-3. **Pass 3 — Raw spiral scan.** Opens the raw `.zst` files for a spiral of months centered on the target month (see [Scan-spiral knobs](#scan-spiral-knobs-and-year-band-defaults)) and accumulates the author's broader Reddit activity from `data/data_reddit_raw/{type}/`. The raw scan reads `comments` regardless of the input type, as comments made up more than 90% of the training data.
+1. **Pass 1: Curated scan.** Reads the month's curated CSV once to identify the set of authors whose rows still need writing, plus a per-author "local activity" count.
+2. **Pass 2: Curated seed.** Re-reads the curated CSV and accumulates per-author feature counts (`word:tok`, `subreddit:name`, `hour:HH`) from the group-relevant posts. Also collects the post IDs that contributed, for later deduplication.
+3. **Pass 3: Raw spiral scan.** Opens the raw `.zst` files for a spiral of months centered on the target month (see [Scan-spiral knobs](#scan-spiral-knobs-and-year-band-defaults)) and accumulates the author's broader Reddit activity from `data/data_reddit_raw/{type}/`. The raw scan reads `comments` regardless of the input type, as comments made up more than 90% of the training data.
 4. **Inference.** A weighted mixture of logistic regressions over word, subreddit, and hour features produces tiered predictions: first US vs Non-US, then state (for US) or region (for Non-US). Authors whose top probability falls below level-specific confidence thresholds are labeled `UNK`. Defaults can be changed inside `label_location`.
 5. **Write.** Each curated row is streamed to the output CSV with `location`, `location_prob`, `contender_location`, and `contender_location_prob` appended.
 
@@ -45,7 +45,7 @@ Either way, the second pass over the same corpus much faster than the first beca
 
 ## Per-post deduplication
 
-The target month's `.zst` file is a superset of the curated CSV's content (the curated CSV is a group-keyword-filtered subset of the raw posts). Without deduplication, Pass 2 (curated seed) and Pass 3 (raw spiral) would count the same post's features twice when they both encounter it — once as a curated row, once as a raw `.zst` row.
+The target month's `.zst` file is a superset of the curated CSV's content (the curated CSV is a group-keyword-filtered subset of the raw posts). Without deduplication, Pass 2 (curated seed) and Pass 3 (raw spiral) would count the same post's features twice when they both encounter it: once as a curated row, once as a raw `.zst` row.
 The dedup pass eliminates this:
 1. Pass 2 records `(author, post_id)` for every curated row it ingests.
 2. Pass 3, while scanning the target month's `.zst`, tracks two count dicts per author: the full raw counts (cached, group-agnostic) and a side overlap counts dict for any post whose ID matches one Pass 2 recorded.
@@ -56,9 +56,9 @@ The dedup is only meaningful when the curated input type matches the raw type (t
 ## Scan-spiral knobs and year-band defaults
 
 The spiral around the target month is governed by three command-line flags:
-- `--maxitems` — Maximum raw posts per author for the whole scan, **cumulative across every raw file visited**. Matches the sampling distribution the LR model was trained on. When the scan-state cache already holds samples for an author from prior runs, the effective remaining quota for the current run is `max_items − already_cached_seen`.
-- `--maxfiles` — Hard cap on the number of raw files visited per spiral.
-- `--maxradius` — Maximum month offset (in either direction) from the target month.
+- `--maxitems`: Maximum raw posts per author for the whole scan, **cumulative across every raw file visited**. Matches the sampling distribution the LR model was trained on. When the scan-state cache already holds samples for an author from prior runs, the effective remaining quota for the current run is `max_items − already_cached_seen`.
+- `--maxfiles`: Hard cap on the number of raw files visited per spiral.
+- `--maxradius`: Maximum month offset (in either direction) from the target month.
 
 Because raw `.zst` files grow several times larger in recent years, the defaults switch on year:
 
@@ -75,7 +75,7 @@ The relaxation for 2020+ roughly halves per-author sampling cost on the largest 
 - The curated CSV row pass.
 - Per-author count dictionaries during Pass 2 and Pass 3 aggregation.
 - The bundle of pickled logistic-regression models (~few hundred MB resident).
-Measured across ISAAC development runs (`comments`), per-task `MaxRSS` had a **median of ~19 GB and a maximum of ~35 GB**; the heaviest tasks are the high-volume months from 2018 onward, while small early-corpus months use only a few GB. Size `--mem` to the months you are processing: a `--mem 16G` request is enough for the stringent-band early-corpus months but OOMs on the high-volume later months — request `--mem 24G` (or more) for tasks covering 2018 and onward.
+Measured across ISAAC development runs (`comments`), per-task `MaxRSS` had a **median of ~19 GB and a maximum of ~35 GB**; the heaviest tasks are the high-volume months from 2018 onward, while small early-corpus months use only a few GB. Size `--mem` to the months you are processing: a `--mem 16G` request is enough for the stringent-band early-corpus months but OOMs on the high-volume later months; request `--mem 24G` (or more) for tasks covering 2018 and onward.
 
 **Persistent cache disk usage** is bounded by the cumulative cap: each author has at most `--maxitems` samples across the entire corpus regardless of how many months they appear in. Combined with only persisting rows where the author was actually found:
 - ~100–300 bytes per `author_file_counts` row after zstd compression.

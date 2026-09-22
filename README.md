@@ -115,6 +115,15 @@ Follow the steps [here](https://docs.conda.io/projects/conda/en/latest/user-guid
 
 Once finished, navigate to the ```Illinois_Social_attitudes``` folder in the command line and enter ```conda create --name ISAAC python=3.11 pip```. Answer 'y' to the question. When finished, run ```conda activate ISAAC```. Once the environment is activated, run the following command to install the necessary packages: ```pip install -r requirements.txt```. 
 
+On **Windows with an NVIDIA RTX 50-series (Blackwell) GPU**, use
+```requirements-windows-cu128.txt``` instead. The pinned
+```torch==2.5.1+cu121``` cannot drive those cards: they report compute
+capability 12.0 (sm_120) and CUDA 12.1 builds stop at sm_90, so the wheel
+installs and then fails at run time with "no kernel image is available for
+execution on the device". That file pins a cu128 build and drops two Linux-
+only pins; its header explains each change. Create the environment with
+```python=3.12``` for it.
+
 ### Model Setup
 
 The pipeline reads model weights from ```models/```. They are too large to keep

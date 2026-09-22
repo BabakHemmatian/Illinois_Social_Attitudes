@@ -255,7 +255,7 @@ The ```train_location``` resources can be used to train a weighted mixture of lo
 | | |
 | --- | --- |
 | Benedek Kurdi | Supervision, funding |
-| Sarah Hadjarab, Jessica Chen, Rui Yu | Script and data development |
+| Sarah Hadjarab, Jessica Chen, Rui Yu, Urja Ujjawal Vats | Script and data development |
 | Eleanor Ruby Klein, Siyu He, Lauren Casey | Human validation ratings |
 | Ty Villaneuva | Logo and visual design |
 

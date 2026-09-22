@@ -1,0 +1,6 @@
+# Canonical identity for commits made under several git name/email variants.
+# Affects git shortlog/log; GitHub's Contributors graph maps commits to
+# accounts by email and does not read this file.
+Babak Hemmatian <babak.hemmatian@gmail.com> <bhemmatian2@unl.edu>
+Babak Hemmatian <babak.hemmatian@gmail.com> BabakHemmatian <babak.hemmatian@gmail.com>
+Babak Hemmatian <babak.hemmatian@gmail.com> Babak Hemmatian Borujeni <babak.hemmatian@gmail.com>

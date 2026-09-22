@@ -139,6 +139,50 @@ tables identical to the SNAPPY-compressed copies served from the
 same schema, same row groups, same values, but they are about 40% smaller on
 the wire, so the bytes themselves are not interchangeable with those copies.
 
+## Confidence recalibration (location)
+
+`location_calibration_maps.json` in this repository recalibrates the `location_prob`
+column. The location labeler is consistently under-confident, so the raw score ranks
+users well but understates the probability that a label is correct.
+
+Six isotonic fits are provided, one per condition and geographic tier:
+
+| Map | Expected calibration error, before -> after |
+| --- | --- |
+| `standard/top` | 0.0900 -> 0.0112 |
+| `standard/region` | 0.1149 -> 0.0070 |
+| `standard/state` | 0.5221 -> 0.0116 |
+| `masked/top` | 0.1208 -> 0.0044 |
+| `masked/region` | 0.1239 -> 0.0174 |
+| `masked/state` | 0.3191 -> 0.0139 |
+
+Isotonic regression is monotone, so recalibration never reorders users or changes any
+label. It changes only the interpretation of the score. The maps are fitted on a
+validation split of held-out authors and scored on a test split, so the improvement is
+out of sample.
+
+Apply a map with linear interpolation; no ISAAC code is needed:
+
+```python
+import json, numpy as np
+
+maps = json.load(open('location_calibration_maps.json'))['maps']
+m = maps['masked/top']            # condition/tier
+calibrated = np.interp(raw_score, m['x'], m['y'])
+```
+
+Pick the tier from the label itself: a two-letter code is `state`,
+`EUROPE`/`AMERICAS`/`ASIA_OCEANIA`/`AFRICA` is `region`, `US`/`NON_US` is `top`, and
+`UNK` has no score. Use the **`masked`** maps unless you know the authors state their
+location explicitly; masked is the conservative choice and the closer analogue for
+corpus authors who never self-disclose. The file's own `method`, `how_to_apply`,
+`choosing_a_condition` and `limitations` fields document this alongside the knots.
+
+Calibration holds in aggregate on the population the maps were fitted on, namely
+authors whose location was recoverable from explicit self-disclosure. Per-state and
+per-subgroup calibration were not assessed. The location model weights themselves are
+not distributed here; see the paper's Code Availability section.
+
 ## Provenance & related access
 
 - Web app + direct download: <https://isaac.psychology.illinois.edu/>

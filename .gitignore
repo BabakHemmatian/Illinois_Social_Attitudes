@@ -56,6 +56,20 @@ models/*
 !models/train_moralization_data_split/
 !models/train_moralization_data_split/**
 
+# Ship the location confidence recalibration maps and the analysis behind them.
+# location_calibration_maps.json is the artifact Appendix D.3.7 names and is what
+# users apply to the corpus's location_prob column; it needs no ISAAC code, only
+# numpy.interp. The other three files are the provenance for the Appendix D.3.6
+# and D.3.7 numbers. The scripts that FIT the maps are deliberately not shipped:
+# they run on the held-out author splits, which are withheld for privacy, so they
+# would not be runnable by anyone outside the project.
+# Note the re-exclusion below: label_location/ also holds the checkpoints and the
+# preprocessed feature matrices, which must stay ignored.
+!models/label_location/
+models/label_location/*
+!models/label_location/calibration/
+!models/label_location/calibration/**
+
 # pycache #
 code/__pycache__
 

@@ -779,8 +779,9 @@ def align_and_blend_probabilities(
     the probabilities evaluated in this script are systematically sharper than the
     location_prob values shipped with the corpus, and the two can disagree on the
     argmax. Metrics reported here therefore describe the mixture model, not the
-    labels as released; metrics_location_calibration.py reports both paths side
-    by side.
+    labels as released. The calibration analysis reported in Appendix D.3.6 scores
+    both paths side by side; its confidence recalibration maps ship with the
+    corpus as location_calibration_maps.json.
     """
     words_weight, struct_weight = _normalize_weights(words_weight, struct_weight)
     classes_union = sorted(set(map(str, classes_words)) | set(map(str, classes_struct)))

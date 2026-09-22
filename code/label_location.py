@@ -708,8 +708,9 @@ def blend_rankings(rankings_by_name: Dict[str, List[Tuple[str, float]]], weights
     model's top-2 receives that model's weight times zero, and the sum is divided
     by the summed weights without renormalising. Scores therefore do not sum to 1.
 
-    Measured effect of the truncation on the held-out split
-    (metrics_location_calibration.py, deployed vs full blend):
+    Measured effect of the truncation on the held-out split, deployed blend vs
+    full blend. The analysis that produced these numbers is not distributed: it
+    runs on the held-out author splits, which are withheld for privacy.
 
         level    accuracy           mean confidence     ECE
         top      .9149 / .9149      .8289 / .8289       .0861 / .0861
@@ -722,7 +723,7 @@ def blend_rankings(rankings_by_name: Dict[str, List[Tuple[str, float]]], weights
     low -- the state mixture is already badly under-confident (.19 mean confidence
     against .75 accuracy) when the full distributions are blended.
 
-    metrics_location_weight_sweep.py decomposes that. At state level the words model
+    A sweep over the mixture weights decomposes that. At state level the words model
     on its own reports .34 mean confidence at .76 accuracy, so roughly three quarters
     of the deflation is inherited from the base classifier and only a quarter is added
     by mixing in the near-uniform structured model. Re-tuning the mixture weights

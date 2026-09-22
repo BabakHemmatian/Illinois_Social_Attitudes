@@ -635,8 +635,9 @@ def download(
         fmt: ``'parquet'`` (default), ``'csv'``, or None for both.
         dest: Destination directory. Defaults to the package cache
             (``cache_dir()/files``). Files are laid out as
-            ``<dest>/<category>/<prefix>YYYY-MM.<ext>`` (``ALL_`` for
-            sexuality, ``RC_`` for the other categories).
+            ``<dest>/<category>/ALL_YYYY-MM.<ext>``. (Earlier releases used
+            an ``RC_`` prefix for some categories; every published file now
+            uses ``ALL_``.)
         refresh: Force a manifest refresh first. Defaults to False.
 
     Returns:

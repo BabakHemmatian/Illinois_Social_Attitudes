@@ -201,14 +201,15 @@ which the package presents for acceptance before any data access.
 ## Notes
 
 - **Parquet is recommended** for scripting (column projection, smaller transfers).
-  The final labeled ISAAC release will add many per-post fields (moralization,
-  sentiment, generalization, emotion, location), and column pushdown makes those
-  cheap to query.
+  Each row carries 59 columns: the core post fields plus the per-post labels
+  (moralization, sentiment, generalization, emotion, location). Column
+  pushdown is what keeps those cheap to query, since asking for two of them
+  moves a few MB rather than the whole file.
 - For SQL-style predicate pushdown without Python, query the parquet directly
   with DuckDB (reads only the columns/row groups your query needs):
   ```sql
   SELECT author, score FROM
-  read_parquet('https://isaac.psychology.illinois.edu/data/race/RC_2018-03.parquet')
+  read_parquet('https://isaac.psychology.illinois.edu/data/race/ALL_2018-03.parquet')
   WHERE score > 100;
   ```
   HTTP has no directory listing, so wildcard globs don't work; for multiple

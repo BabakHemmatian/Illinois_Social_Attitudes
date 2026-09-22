@@ -225,6 +225,60 @@ def test_check_response_separates_transient_from_permanent():
         core._check_response(_Resp(503, "Service Unavailable"), URL)
 
 
+# The current GCS backend returns this for BOTH a genuinely absent path and an
+# existing file during an outage -- verified against the live collection, where
+# a file that had just served bytes returned 20/20 of these minutes later. The
+# body therefore settles nothing and the manifest has to decide.
+_GCS_AMBIGUOUS = (
+    "Mapping collection to specified ID failed.\n"
+    "GlobusError: v=1 c=ENDPOINT_ERROR\n"
+    "GCS Manager Internal Error\n"
+)
+
+
+def test_gcs_ambiguous_404_uses_the_manifest_not_the_body(monkeypatch):
+    """The same body must resolve both ways, decided by manifest membership."""
+    listed = "https://example.invalid/race/ALL_2007-01.parquet"
+    unlisted = "https://example.invalid/race/ALL_1999-13.parquet"
+    monkeypatch.setattr(core, "_manifest_urls", lambda: frozenset({listed}))
+
+    # Listed: it exists, so the host is at fault and the caller may retry.
+    with pytest.raises(DataHostUnavailable, match="listed in the ISAAC manifest"):
+        core._check_response(_Resp(404, _GCS_AMBIGUOUS), listed)
+
+    # Not listed: genuinely absent, and the user is pointed at catalog().
+    with pytest.raises(FileNotFoundError, match="not listed in the ISAAC manifest"):
+        core._check_response(_Resp(404, _GCS_AMBIGUOUS), unlisted)
+
+
+def test_gcs_ambiguous_404_prefers_retry_when_no_manifest_is_cached(monkeypatch):
+    """With nothing to check against, never claim a server-side data gap."""
+    monkeypatch.setattr(core, "_manifest_urls", lambda: None)
+    with pytest.raises(DataHostUnavailable):
+        core._check_response(_Resp(404, _GCS_AMBIGUOUS), URL)
+
+
+def test_unambiguous_bodies_outrank_the_manifest(monkeypatch):
+    """A body that names the cause settles it, whatever the manifest says."""
+    monkeypatch.setattr(core, "_manifest_urls", lambda: frozenset())  # nothing listed
+    # PATH_NOT_FOUND is a real miss even though the manifest lookup is empty.
+    with pytest.raises(FileNotFoundError):
+        core._check_response(_Resp(404, _PATH_NOT_FOUND), URL)
+    # INTERNAL_ERROR is a backend failure even though URL is not listed.
+    with pytest.raises(DataHostUnavailable):
+        core._check_response(_Resp(404, _INTERNAL_ERROR), URL)
+
+
+def test_unavailable_carries_a_terse_detail_for_outer_loops():
+    """So a retry loop can quote the host without nesting a paragraph."""
+    try:
+        core._check_response(_Resp(503, "Service Unavailable"), URL)
+    except DataHostUnavailable as e:
+        assert getattr(e, "detail", "") == "HTTP 503: Service Unavailable"
+    else:
+        pytest.fail("expected DataHostUnavailable")
+
+
 def test_download_retries_transient_404_then_succeeds(monkeypatch, tmp_path, parquet_file):
     """_download_one must not give up on the backend's 404-flavoured error."""
     monkeypatch.setattr(core, "_HTTP_BACKOFF", 0)

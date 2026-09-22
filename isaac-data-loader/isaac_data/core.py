@@ -190,8 +190,18 @@ def files(
 #   * fsspec turns the failed size probe into an unknown-length, non-seekable
 #     stream instead of raising; pyarrow then dies with the opaque
 #     "Cannot seek streaming HTTP file" when it reaches for the parquet footer.
-# A real 404 (GridFTP-Errno 2, PATH_NOT_FOUND) is permanent and must not be
-# retried, so the two are told apart by the error body, not the status code.
+# The error body CANNOT tell the two apart. Measured against the live
+# collection: a genuinely absent path and an existing file during a backend
+# outage both return HTTP 404 with the byte-identical body
+#     Mapping collection to specified ID failed.
+#     GlobusError: v=1 c=ENDPOINT_ERROR
+#     GCS Manager Internal Error
+# (Outages are episodic and total: 20/20 requests for a file that had served
+# real bytes minutes earlier failed, then recovered.) So the manifest, not the
+# body, decides: it is the authoritative list of what exists, we already hold
+# it, and a URL listed there cannot be permanently missing just because the
+# host is down. The body is consulted only when no cached manifest is available,
+# and then it is read conservatively -- see _looks_permanently_missing.
 _HTTP_ATTEMPTS = int(os.environ.get("ISAAC_HTTP_ATTEMPTS", "5"))
 _HTTP_BACKOFF = 0.3  # seconds, multiplied by the attempt number
 
@@ -202,21 +212,129 @@ class DataHostUnavailable(RuntimeError):
     Raised only after `ISAAC_HTTP_ATTEMPTS` fresh connections have all failed,
     which points at the data host rather than at your query. Retrying later
     normally succeeds.
+
+    `detail` carries the terse host response ("HTTP 404: <body>") so that an
+    outer retry loop can quote it without nesting this whole message inside its
+    own.
     """
+
+    detail = ""
 
 
 def _missing_message(url: str, detail: str = "") -> str:
     return (
-        f"{url} is listed in the ISAAC manifest but the data host does not have it. "
-        "This is a server-side gap rather than a problem with your query; please "
-        "report it at https://isaac.psychology.illinois.edu/direct-download/."
+        f"{url} is not listed in the ISAAC manifest and the data host does not "
+        "have it. Check the category, month and format against `catalog()`; if "
+        "you believe the file should exist, report it at "
+        "https://isaac.psychology.illinois.edu/direct-download/."
         + (f" Host said: {detail}" if detail else "")
     )
 
 
+def _unavailable_message(url: str, detail: str = "") -> str:
+    return (
+        f"{url} is listed in the ISAAC manifest, so it exists, but the data host "
+        "is not serving it right now. These outages are episodic and usually "
+        "brief; retry shortly. This is a problem with the host, not with your "
+        "query, and does not need reporting unless it persists."
+        + (f" Host said: {detail}" if detail else "")
+    )
+
+
+# Globus error vocabulary, matched case-insensitively and substring-wise
+# because the wording varies across GCS versions. Note that "GlobusError" alone
+# is NOT a marker: it prefixes both kinds, which is precisely the ambiguity.
+#
+# PERMANENT wins over BACKEND when both appear: PATH_NOT_FOUND is unambiguous,
+# and the old GridFTP backend did report it for real misses.
+_PERMANENT_MARKERS = (
+    "path_not_found",
+    "no such file or directory",
+)
+# Definitive backend failures: the legacy GridFTP path said so outright, so the
+# body alone settles it and the manifest need not be consulted.
+_BACKEND_DEFINITE_MARKERS = (
+    "internal_error",
+    "gridftp-errno: 108",
+    "transport endpoint shutdown",
+)
+# Ambiguous: the current GCS backend returns these for BOTH a real miss and an
+# outage, so they settle nothing and the manifest has to decide.
+_BACKEND_AMBIGUOUS_MARKERS = (
+    "endpoint_error",
+    "gcs manager",
+    "mapping collection",
+)
+_BACKEND_MARKERS = _BACKEND_DEFINITE_MARKERS + _BACKEND_AMBIGUOUS_MARKERS
+
+
+def _is_permanent_body(body: str) -> bool:
+    """True if the body names a miss outright (legacy GridFTP PATH_NOT_FOUND)."""
+    return any(m in (body or "").lower() for m in _PERMANENT_MARKERS)
+
+
 def _is_transient_body(body: str) -> bool:
-    """True if a 404 body is the Globus backend error rather than a real miss."""
-    return "INTERNAL_ERROR" in body
+    """True if a 404 body looks like a Globus backend failure, not a real miss.
+
+    The current GCS backend returns the same body for both cases (see the note
+    above), so a match means "cannot rule out an outage" rather than "definitely
+    an outage". Callers should prefer `_looks_permanently_missing`, which asks
+    the manifest first.
+    """
+    low = (body or "").lower()
+    if _is_permanent_body(low):
+        return False
+    return any(m in low for m in _BACKEND_MARKERS)
+
+
+def _manifest_urls() -> Optional[frozenset]:
+    """URLs in the locally cached manifest, or None if we cannot tell.
+
+    Deliberately never fetches: this runs while the network is already
+    misbehaving, and a failed classification lookup must not mask the original
+    error. `catalog()`, `files()` and `load()` all populate this cache first, so
+    in practice it is present whenever one of these errors can be raised.
+    """
+    mf = _manifest_file()
+    try:
+        stamp = mf.stat().st_mtime_ns
+    except OSError:
+        return None
+    cached = getattr(_manifest_urls, "_cache", None)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    try:
+        urls = frozenset(
+            rec["url"] for rec in json.loads(mf.read_text()) if rec.get("url")
+        )
+    except Exception:
+        return None
+    _manifest_urls._cache = (stamp, urls)
+    return urls
+
+
+def _looks_permanently_missing(url: str, body: str) -> bool:
+    """Decide whether a 404 means the file is really absent.
+
+    Order matters:
+      1. The body names a miss outright (PATH_NOT_FOUND) -> missing.
+      2. The body names a backend failure outright (INTERNAL_ERROR, errno 108)
+         -> not missing, whatever the manifest says.
+      3. Otherwise the body is the ambiguous GCS wording, or unrecognized, so
+         the manifest decides: listed means it exists and the host is at fault.
+      4. With no cached manifest, prefer "unavailable": telling someone to retry
+         a file that is genuinely gone is a small annoyance, while telling them
+         to report a server-side data gap that does not exist is misleading.
+    """
+    low = (body or "").lower()
+    if _is_permanent_body(low):
+        return True
+    if any(m in low for m in _BACKEND_DEFINITE_MARKERS):
+        return False
+    known = _manifest_urls()
+    if known is not None:
+        return url not in known
+    return not _is_transient_body(low)
 
 
 def _check_response(r, url: str) -> None:
@@ -224,9 +342,16 @@ def _check_response(r, url: str) -> None:
     if r.status_code < 400:
         return
     body = " ".join((r.text or "")[:300].split())
-    if r.status_code == 404 and not _is_transient_body(body):
-        raise FileNotFoundError(_missing_message(url, body))
-    raise DataHostUnavailable(f"{url}: HTTP {r.status_code}: {body}")
+    terse = f"HTTP {r.status_code}: {body}"
+    if r.status_code == 404:
+        if _looks_permanently_missing(url, body):
+            raise FileNotFoundError(_missing_message(url, body))
+        exc = DataHostUnavailable(_unavailable_message(url, body))
+        exc.detail = terse
+        raise exc
+    exc = DataHostUnavailable(f"{url}: {terse}")
+    exc.detail = terse
+    raise exc
 
 
 def _probe_url(url: str) -> Tuple[bool, bool, str]:
@@ -242,7 +367,8 @@ def _probe_url(url: str) -> Tuple[bool, bool, str]:
     if r.status_code < 400:
         return True, False, ""
     body = " ".join((r.text or "")[:300].split())
-    return False, r.status_code == 404 and not _is_transient_body(body), f"HTTP {r.status_code}: {body}"
+    missing = r.status_code == 404 and _looks_permanently_missing(url, body)
+    return False, missing, f"HTTP {r.status_code}: {body}"
 
 
 def _open_remote_parquet(url: str):
@@ -279,8 +405,11 @@ def _open_remote_parquet(url: str):
             time.sleep(_HTTP_BACKOFF * attempt)
     raise DataHostUnavailable(
         f"{url}: {_HTTP_ATTEMPTS} attempts on new connections all failed ({detail}). "
-        "This is a transient failure of the ISAAC data host, not of your query; "
-        "retry shortly, or pass cache=True to download the file instead."
+        "This is a failure of the ISAAC data host, not of your query. Outages "
+        "here are episodic and usually brief, so retry shortly. Note that "
+        "cache=True will not help while the host is down -- the whole-file "
+        "download uses the same host -- but it does help when only the "
+        "streaming/range path is misbehaving."
     )
 
 
@@ -324,14 +453,14 @@ def _download_one(url: str, dest: Path, chunk: int = 1 << 20) -> Path:
         try:
             return _download_attempt(url, dest, chunk)
         except DataHostUnavailable as e:
-            detail = str(e)
+            detail = getattr(e, "detail", "") or str(e)
         except requests.RequestException as e:  # dropped connection mid-transfer
             detail = f"{type(e).__name__}: {e}"
         if attempt < _HTTP_ATTEMPTS:
             time.sleep(_HTTP_BACKOFF * attempt)
     raise DataHostUnavailable(
         f"{url}: download failed on {_HTTP_ATTEMPTS} attempts ({detail}). "
-        "This is a transient failure of the ISAAC data host; retry shortly."
+        "Outages on this host are episodic and usually brief; retry shortly."
     )
 
 

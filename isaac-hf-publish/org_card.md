@@ -44,10 +44,15 @@ every access route. Please do not cite the repositories separately.
 
 ```bibtex
 @article{hemmatian2026isaac,
-  author = {Hemmatian, Babak and Hadjarab, Sarah and Chen, Jessica and Kurdi, Benedek},
-  title  = {The {Illinois} Social Attitudes Aggregate Corpus ({ISAAC}): An Open Tool and Reproducible Pipeline for Analyzing Social Group Discourse at Scale},
-  year   = {2026},
-  note   = {Manuscript submitted for publication}
+  author  = {Hemmatian, Babak and Hadjarab, Sarah and Chen, Jessica and Kurdi, Benedek},
+  title   = {The {Illinois} Social Attitudes Aggregate Corpus ({ISAAC}): An Open Tool and Reproducible Pipeline for Analyzing Social Group Discourse at Scale},
+  year    = {2026},
+  journal = {arXiv},
+  eprint  = {2609.27059},
+  archivePrefix = {arXiv},
+  primaryClass  = {cs.CL},
+  doi     = {10.48550/arXiv.2609.27059},
+  url     = {https://arxiv.org/abs/2609.27059}
 }
 ```
 

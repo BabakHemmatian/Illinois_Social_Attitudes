@@ -23,15 +23,12 @@ repository-code: "https://github.com/BabakHemmatian/Illinois_Social_Attitudes"
 url: "https://isaac.psychology.illinois.edu/"
 license: MIT
 preferred-citation:
-  # TODO(release): on arXiv announcement, change `type` to `article`, add
-  #   journal: arXiv
-  #   url: "https://arxiv.org/abs/XXXX.XXXXX"
-  #   doi: "10.48550/arXiv.XXXX.XXXXX"
-  # and drop the `notes` line. See RELEASE_TODO.md.
-  type: unpublished
+  type: article
   title: "The Illinois Social Attitudes Aggregate Corpus (ISAAC): An Open Tool and Reproducible Pipeline for Analyzing Social Group Discourse at Scale"
   year: 2026
-  notes: "Manuscript submitted for publication."
+  journal: arXiv
+  doi: "10.48550/arXiv.2609.27059"
+  url: "https://arxiv.org/abs/2609.27059"
   authors:
     - family-names: Hemmatian
       given-names: Babak

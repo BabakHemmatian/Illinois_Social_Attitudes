@@ -53,8 +53,7 @@ Homepage = "https://isaac.psychology.illinois.edu/"
 Documentation = "https://isaac.psychology.illinois.edu/direct-download/"
 Source = "https://github.com/BabakHemmatian/Illinois_Social_Attitudes/tree/main/isaac-data-loader"
 Issues = "https://github.com/BabakHemmatian/Illinois_Social_Attitudes/issues"
-# TODO(release): repoint at the arXiv record once announced (RELEASE_TODO 5.2).
-Citation = "https://github.com/BabakHemmatian/Illinois_Social_Attitudes/blob/main/CITATION.cff"
+Citation = "https://arxiv.org/abs/2609.27059"
 
 [tool.setuptools.packages.find]
 where = ["."]

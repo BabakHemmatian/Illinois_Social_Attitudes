@@ -69,9 +69,7 @@ Group Discourse at Scale [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2609.
 }
 ```
 
-> This reference is updated when the preprint is announced. GitHub's
-> **Cite this repository** button reads [`CITATION.cff`](./CITATION.cff) and shows
-> the same reference.
+> The paper is under review at *Behavior Research Methods*.
 
 ### Software authorship
 

@@ -24,6 +24,7 @@ url: "https://isaac.psychology.illinois.edu/"
 license: MIT
 preferred-citation:
   type: article
+  status: preprint
   title: "The Illinois Social Attitudes Aggregate Corpus (ISAAC): An Open Tool and Reproducible Pipeline for Analyzing Social Group Discourse at Scale"
   year: 2026
   journal: arXiv
